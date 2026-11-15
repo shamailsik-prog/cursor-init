@@ -2,8 +2,47 @@ import { randomBytes } from "node:crypto"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { writeFileSync, rmSync } from "node:fs"
 import path from "node:path"
+import { StringDecoder } from "node:string_decoder"
 import { drillScratchDir } from "../drill/target"
 import { withManifestPsqlEnv } from "../postgres/psqlEnv"
+
+/** Docker client environment. PATH is fixed so a caller PATH cannot select the binary. DOCKER_* is never copied. */
+export const DOCKER_CLIENT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+const DOCKER_ENV_KEYS = ["HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TERM"] as const
+
+let psqlQueryTimeoutMs = 120_000
+
+/** Tests shrink this so a hung statement fails without waiting for the drill timeout. */
+export function setPsqlQueryTimeoutForTests(ms: number): void {
+  psqlQueryTimeoutMs = ms
+}
+
+export function commandChildEnv(argv0: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (argv0 !== "docker" && argv0 !== "docker-compose") return env
+  const next: NodeJS.ProcessEnv = { PATH: DOCKER_CLIENT_PATH, NODE_ENV: env.NODE_ENV ?? "production" }
+  for (const key of DOCKER_ENV_KEYS) {
+    if (env[key]) next[key] = env[key]
+  }
+  return next
+}
+
+class Utf8Capture {
+  private readonly decoder = new StringDecoder("utf8")
+  private text = ""
+
+  push(chunk: Buffer | string): void {
+    this.text += typeof chunk === "string" ? chunk : this.decoder.write(chunk)
+  }
+
+  peek(): string {
+    return this.text
+  }
+
+  end(): string {
+    this.text += this.decoder.end()
+    return this.text
+  }
+}
 
 export type CommandResult = { code: number; stdout: string; stderr: string; stdoutBytes?: Buffer }
 
@@ -28,27 +67,28 @@ function prefixArgv(pgPrefix: string[] | undefined, argv: string[]): string[] {
 /** Run a subprocess; rejects when the executable cannot be started. */
 export async function runCommand(argv: string[], options: RunCommandOptions = {}): Promise<CommandResult> {
   const full = prefixArgv(options.pgPrefix, argv)
-  const env: NodeJS.ProcessEnv = options.exactEnv
+  const merged: NodeJS.ProcessEnv = options.exactEnv
     ? ({ ...options.env } as NodeJS.ProcessEnv)
     : { ...process.env, ...options.env }
+  const env = commandChildEnv(full[0], merged)
   return await new Promise((resolve, reject) => {
     const child = spawn(full[0], full.slice(1), { env, cwd: options.cwd })
-    let stdout = ""
-    let stderr = ""
+    const stdoutText = new Utf8Capture()
+    const stderrText = new Utf8Capture()
     const chunks: Buffer[] = []
     child.stdout.on("data", (c: Buffer | string) => {
       if (options.binaryStdout) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c))
-      else stdout += String(c)
+      else stdoutText.push(c)
     })
-    child.stderr.on("data", (c) => {
-      stderr += String(c)
+    child.stderr.on("data", (c: Buffer | string) => {
+      stderrText.push(c)
     })
     child.on("error", reject)
     child.on("close", (code) =>
       resolve({
         code: code ?? 1,
-        stdout,
-        stderr,
+        stdout: stdoutText.end(),
+        stderr: stderrText.end(),
         stdoutBytes: options.binaryStdout ? Buffer.concat(chunks) : undefined,
       })
     )
@@ -81,6 +121,8 @@ export class PersistentPsqlSession implements PsqlQueryable {
   private stderr = ""
   private waiters: SyncWaiter[] = []
   private closed = false
+  private readonly stdoutText = new Utf8Capture()
+  private readonly stderrText = new Utf8Capture()
 
   private constructor(
     private readonly pgPrefix: string[] | undefined,
@@ -90,23 +132,29 @@ export class PersistentPsqlSession implements PsqlQueryable {
     exactEnv: boolean
   ) {
     const argv = prefixArgv(pgPrefix, psqlArgv(conninfo ?? database, ["-t", "-A"]))
-    const childEnv: NodeJS.ProcessEnv = exactEnv ? { ...env } : { ...process.env, ...env }
+    const merged: NodeJS.ProcessEnv = exactEnv ? { ...env } : { ...process.env, ...env }
     this.proc = spawn(argv[0], argv.slice(1), {
-      env: childEnv,
+      env: commandChildEnv(argv[0], merged),
       stdio: ["pipe", "pipe", "pipe"],
     })
-    this.proc.stdout.on("data", (chunk) => {
-      this.buffer += String(chunk)
+    this.proc.stdout.on("data", (chunk: Buffer | string) => {
+      this.stdoutText.push(chunk)
+      this.buffer = this.stdoutText.peek()
       this.drain()
     })
-    this.proc.stderr.on("data", (chunk) => {
-      this.stderr += String(chunk)
+    this.proc.stderr.on("data", (chunk: Buffer | string) => {
+      this.stderrText.push(chunk)
+      this.stderr = this.stderrText.peek()
     })
-    this.proc.on("error", (err) => this.failAll(err))
+    this.proc.stdin.on("error", (err) => this.markClosed(err))
+    this.proc.on("error", (err) => this.markClosed(err))
     this.proc.on("close", (code) => {
-      if (!this.closed && code !== 0) {
-        this.failAll(new Error(this.stderr || `psql exited ${code ?? 1}`))
-      }
+      this.buffer = this.stdoutText.end()
+      this.stderr = this.stderrText.end()
+      this.drain()
+      this.closed = true
+      if (code !== 0) this.failAll(new Error(this.stderr || `psql exited ${code ?? 1}`))
+      else if (this.waiters.length) this.failAll(new Error("psql session closed"))
     })
   }
 
@@ -117,6 +165,12 @@ export class PersistentPsqlSession implements PsqlQueryable {
     opts?: { conninfo?: string; exactEnv?: boolean }
   ): Promise<PersistentPsqlSession> {
     return new PersistentPsqlSession(pgPrefix, env, database, opts?.conninfo, opts?.exactEnv === true)
+  }
+
+  private markClosed(err: Error): void {
+    if (this.closed) return
+    this.closed = true
+    this.failAll(err)
   }
 
   private failAll(err: Error): void {
@@ -135,15 +189,47 @@ export class PersistentPsqlSession implements PsqlQueryable {
     }
   }
 
-  private sync(sql: string): Promise<string> {
+  private sync(sql: string, wholeScript = false): Promise<string> {
     if (this.closed) return Promise.reject(new Error("psql session closed"))
     const marker = `__F33_SYNC_${randomBytes(8).toString("hex")}__`
     const start = this.buffer.length
     return new Promise((resolve, reject) => {
       this.waiters.push({ marker, start, resolve, reject })
-      const stmt = sql.trimEnd().endsWith(";") ? sql : `${sql};`
-      this.proc.stdin.write(`${stmt}\n\\echo ${marker}\n`)
+      const stmt = wholeScript || sql.trimEnd().endsWith(";") ? sql : `${sql};`
+      const body = stmt.endsWith("\n") ? stmt : `${stmt}\n`
+      const payload = `${body}\\echo ${marker}\n`
+      const waiter = this.waiters[this.waiters.length - 1]
+      const timer = setTimeout(() => {
+        const still = this.waiters.indexOf(waiter)
+        if (still >= 0) {
+          this.waiters.splice(still, 1)
+          reject(new Error("psql query timed out"))
+        }
+      }, psqlQueryTimeoutMs)
+      timer.unref?.()
+      const finish = waiter.resolve
+      const fail = waiter.reject
+      waiter.resolve = (text) => {
+        clearTimeout(timer)
+        finish(text)
+      }
+      waiter.reject = (err) => {
+        clearTimeout(timer)
+        fail(err)
+      }
+      try {
+        this.proc.stdin.write(payload, (err) => {
+          if (err) this.markClosed(err)
+        })
+      } catch (err) {
+        this.markClosed(err as Error)
+      }
     })
+  }
+
+  /** Send a psql script unchanged, including \\connect, and wait until it finishes. */
+  async runScript(sql: string): Promise<string> {
+    return await this.sync(sql, true)
   }
 
   async query(sql: string): Promise<string> {

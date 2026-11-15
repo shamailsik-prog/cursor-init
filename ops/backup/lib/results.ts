@@ -22,6 +22,8 @@ export type DrillResult = {
   idempotent?: boolean
   problems?: string[]
   target?: DrillTargetClaim
+  /** Operator prefix actually prepended to client programs. Empty when the programs ran directly. */
+  commandPrefix?: string[]
 }
 
 const CONTENT_SHA256 = /^[0-9a-f]{64}$/
@@ -75,6 +77,7 @@ export function recordDrillResult(result: DrillResult, env: NodeJS.ProcessEnv = 
     measuredAt: new Date().toISOString(),
     node: process.version,
     platform: process.platform,
+    commandPrefix: result.commandPrefix ?? [],
   }
   writeFileSync(file, JSON.stringify(body, null, 2) + "\n")
   return file

@@ -1,5 +1,5 @@
 import path from "node:path"
-import type { PsqlSession } from "../lib/exec"
+import type { PsqlQueryable } from "../lib/exec"
 import { runCommand } from "../lib/exec"
 
 export class PgTargetNotCleanError extends Error {
@@ -16,7 +16,7 @@ function majorVersion(version: string): number {
 
 /** Refuse restore into a non-clean cluster (R14). */
 export async function assertPgTargetClean(
-  session: PsqlSession,
+  session: PsqlQueryable,
   db: string,
   roleNamesFromGlobals: string[],
   backupServerVersion: string

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto"
-import { chmodSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs"
+import { chmodSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -24,7 +24,7 @@ import { restoreObjects } from "../objects/restore"
 import { connectedTargetProblems, scrubLibpqEnv } from "../postgres/conn"
 import { comparePgManifests, type PgManifest, type PgTableStats } from "../postgres/manifest"
 import { preparePitrRestore } from "../postgres/pitr"
-import { restoreLogical } from "../postgres/logical"
+import { backupLogical, restoreLogical } from "../postgres/logical"
 
 const RUNBOOK = path.resolve(__dirname, "../../../docs/runbooks/backup-restore.md")
 const HEX = "ab".repeat(32)
@@ -104,10 +104,37 @@ describe("gap: a passing drill report is machine-readable content, not an exit f
       )
       const body = JSON.parse(readFileSync(file, "utf8")) as {
         schema?: string
-        content?: { units?: Array<{ name: string; count: number; digest: string; match: boolean }> }
-      }
+      content?: { units?: Array<{ name: string; count: number; digest: string; match: boolean }> }
+      commandPrefix?: string[]
+    }
       expect(body.schema).toBe("sikander-backup-drill/1")
       expect(body.content?.units).toEqual([{ name: "public.judgment", count: 2, digest: HEX, match: true }])
+      expect(body.commandPrefix).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("records the operator prefix that the drill actually used", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "f33-report-prefix-"))
+    const prefix = ["docker", "exec", "-i", "pg"]
+    try {
+      const file = recordDrillResult(
+        {
+          store: "postgres-logical",
+          rtoMs: 5,
+          idempotent: false,
+          commandPrefix: prefix,
+          target: { kind: "temp", engine: "postgres", isolated: true },
+          details: {
+            ok: true,
+            contentUnits: [{ name: "public.judgment", count: 2, digest: HEX, match: true }],
+          },
+        },
+        { ...process.env, SIKANDER_BACKUP_RESULTS_DIR: dir }
+      )
+      const body = JSON.parse(readFileSync(file, "utf8")) as { commandPrefix?: string[] }
+      expect(body.commandPrefix).toEqual(prefix)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -772,6 +799,9 @@ describe("restore guards that a one-line deletion must fail", () => {
       PGSERVICE: "prod",
       PGSERVICEFILE: "/tmp/pg_service.conf",
       PGPASSFILE: "/tmp/pgpass",
+      PGSSLMODE: "require",
+      PGCHANNELBINDING: "require",
+      PGPASSWORD: "secret",
     })
     expect(scrubbed.PATH).toBe("/usr/bin")
     expect(scrubbed.PGHOST).toBeUndefined()
@@ -779,6 +809,9 @@ describe("restore guards that a one-line deletion must fail", () => {
     expect(scrubbed.PGSERVICE).toBeUndefined()
     expect(scrubbed.PGSERVICEFILE).toBeUndefined()
     expect(scrubbed.PGPASSFILE).toBeUndefined()
+    expect(scrubbed.PGSSLMODE).toBeUndefined()
+    expect(scrubbed.PGCHANNELBINDING).toBeUndefined()
+    expect(scrubbed.PGPASSWORD).toBeUndefined()
   })
 
   it("F25 and F26 keep exactEnv from inheriting PGHOSTADDR", async () => {
@@ -826,6 +859,16 @@ describe("restore guards that a one-line deletion must fail", () => {
       expect(lstatSync(dir).mode & 0o777).toBe(0o777)
     } finally {
       rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("R4-L4 refuses a drill root whose parent directory is not sticky", () => {
+    const parent = mkdtempSync(path.join(os.tmpdir(), "f33-nosticky-"))
+    chmodSync(parent, 0o700)
+    try {
+      expect(() => ensureDrillTempRoot(path.join(parent, "root"))).toThrow(/sticky/)
+    } finally {
+      rmSync(parent, { recursive: true, force: true })
     }
   })
 
@@ -934,6 +977,37 @@ describe("restore guards that a one-line deletion must fail", () => {
     expect(problems).toEqual(["public.t: count 2 -> 9"])
   })
 
+  it("R4-L3 refuses a record count that is missing, fractional, or negative", () => {
+    const artefacts = [
+      { name: "globals.sql", plaintextBytes: 4 },
+      { name: "database.dump", plaintextBytes: 4 },
+    ]
+    const missing = backupPayloadProblems({
+      store: "postgres-logical",
+      storeManifest: { tables: { "public.t": { digest: HEX } } },
+      artefacts,
+    })
+    const fractional = backupPayloadProblems({
+      store: "postgres-logical",
+      storeManifest: { tables: { "public.t": { rows: 1.5, digest: HEX } } },
+      artefacts,
+    })
+    const negative = backupPayloadProblems({
+      store: "postgres-logical",
+      storeManifest: { tables: { "public.t": { rows: -1, digest: HEX } } },
+      artefacts,
+    })
+    expect(missing.join("\n")).toMatch(/public\.t/)
+    expect(fractional.join("\n")).toMatch(/public\.t/)
+    expect(negative.join("\n")).toMatch(/public\.t/)
+    const zero = backupPayloadProblems({
+      store: "postgres-logical",
+      storeManifest: { tables: { "public.t": { rows: 0, digest: HEX } } },
+      artefacts,
+    })
+    expect(zero).toEqual([])
+  })
+
   it("M23 refuses a logical backup with no globals.sql", () => {
     const problems = backupPayloadProblems({
       store: "postgres-logical",
@@ -959,6 +1033,85 @@ describe("gap: runbook states the local drill contract", () => {
     expect(text).toMatch(/FA-F33-R3-001/)
     expect(text).toMatch(/sikander-backup-drill\/1/)
     expect(text).toMatch(/fail closed/)
+    expect(text).toMatch(/operator-only/)
+    expect(text).toMatch(/allowlisted docker exec/)
     expect(text).not.toMatch(/Shamail/)
+  })
+})
+
+describe("R4 operator prefix and plaintext", () => {
+  it("accepts only an allowlisted docker exec prefix", async () => {
+    const mod = await import("../postgres/prefix")
+    expect(mod.operatorPrefixProblems(undefined)).toEqual([])
+    expect(mod.operatorPrefixProblems([])).toEqual([])
+    expect(mod.operatorPrefixProblems(["docker", "exec", "-i", "pg"])).toEqual([])
+    expect(
+      mod.operatorPrefixProblems([
+        "docker",
+        "compose",
+        "-f",
+        "corpus_service/docker-compose.yml",
+        "exec",
+        "-T",
+        "postgres",
+        "gosu",
+        "postgres",
+      ])
+    ).toEqual([])
+    expect(mod.operatorPrefixProblems(["bash", "tee.sh"]).join("\n")).toMatch(/allowlisted docker exec/)
+    expect(mod.operatorPrefixProblems(["env", "X=1"]).join("\n")).toMatch(/allowlisted docker exec/)
+    expect(mod.operatorPrefixProblems(["/usr/bin/docker", "exec", "-i", "pg"]).join("\n")).toMatch(/allowlisted docker exec/)
+    expect(mod.operatorPrefixProblems(["docker", "exec", "-e", "PGHOST=127.0.0.1", "pg"]).join("\n")).toMatch(
+      /allowlisted docker exec/
+    )
+    expect(mod.operatorPrefixProblems(["docker", "exec", "-i", "pg", "bash", "-c"]).join("\n")).toMatch(
+      /allowlisted docker exec/
+    )
+  })
+
+  it("backup refuses a non-docker prefix before it opens a session", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "f33-prefix-backup-"))
+    try {
+      await expect(
+        backupLogical({
+          db: "legal_scraper",
+          outRoot: dir,
+          key: randomBytes(32),
+          pgPrefix: ["false"],
+          env: {
+            NODE_ENV: "test",
+            PATH: process.env.PATH,
+            PGHOST: "/tmp/sikander-backup-drill/nope",
+            PGPORT: "1",
+            PGUSER: "postgres",
+          },
+        })
+      ).rejects.toThrow(/allowlisted docker exec/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("R4-L4 writes plaintext with O_EXCL and O_NOFOLLOW", async () => {
+    const mod = await import("../lib/plaintext")
+    const dir = mkdtempSync(path.join(os.tmpdir(), "f33-plain-"))
+    try {
+      const real = path.join(dir, "real")
+      writeFileSync(real, "keep")
+      const link = path.join(dir, "link")
+      symlinkSync(real, link)
+      await expect(mod.writePlaintextExclusive(link, Buffer.from("new"))).rejects.toThrow()
+      expect(readFileSync(real, "utf8")).toBe("keep")
+      const existing = path.join(dir, "exists")
+      writeFileSync(existing, "keep")
+      await expect(mod.writePlaintextExclusive(existing, Buffer.from("new"))).rejects.toThrow()
+      expect(readFileSync(existing, "utf8")).toBe("keep")
+      const created = path.join(dir, "created")
+      await mod.writePlaintextExclusive(created, Buffer.from("body"))
+      expect(readFileSync(created, "utf8")).toBe("body")
+      expect(lstatSync(created).mode & 0o777).toBe(0o600)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
