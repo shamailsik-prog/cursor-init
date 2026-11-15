@@ -192,6 +192,25 @@ function checkSeriesRefs(
   }
 }
 
+function labelForms(token: string): string[] {
+  const forms = [token]
+  const letter = /^Annex(?:ure)?[\s-]+([A-Za-z])$/i.exec(token)
+  if (letter?.[1]) forms.push(letter[1].toUpperCase())
+  const enclosure = /^Enclosures?\s+([1-9][0-9]*)$/i.exec(token)
+  if (enclosure?.[1]) forms.push(enclosure[1])
+  return forms
+}
+
+function checkAmbiguousRefs(draft: string, annexures: readonly ResolvedAnnexure[], queue: AmbiguityItem[]): void {
+  const forms = new Set(annexures.flatMap((annexure) => labelForms(annexure.token)))
+  const hits = distinctInOrder([...letterHits(draft), ...enclosureHits(draft), ...alternateMarks(draft)])
+  for (const hit of hits) {
+    if (!forms.has(hit)) {
+      queue.push(item("ref_unresolved", null, `body cites ${hit}, which is not an annexure in this filing set`))
+    }
+  }
+}
+
 function checkManualRefs(
   draft: string,
   annexures: readonly ResolvedAnnexure[],
@@ -317,6 +336,8 @@ export function resolveFilingSet(input: DocketFilingSet): ResolveResult {
     )
   } else if (scheme.kind === "manual") {
     checkManualRefs(draft, annexures, scheme.requireReferenceOrder, queue)
+  } else if (scheme.kind === "ambiguous") {
+    checkAmbiguousRefs(draft, annexures, queue)
   }
 
   if (queue.length > 0 || !spec) return { ok: false, queue }

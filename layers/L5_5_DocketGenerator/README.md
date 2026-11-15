@@ -35,7 +35,9 @@ Output, only when the flag is on and nothing is queued:
 
 ## Ambiguity queue
 
-Order, label, or reference that the rule and the filing set do not settle is queued (`order_unresolved`, `label_unresolved`, `ref_unresolved`). The generator does not reorder, pick between `A, B, C` and `P/1`, or invent a page size. Final PDF and DOCX are refused.
+Order, label, or reference that the rule and the filing set do not settle is queued (`order_unresolved`, `label_unresolved`, `ref_unresolved`). The generator does not reorder, pick between `A, B, C` and `P/1`, or invent a page size. An assigned label on a two-scheme rule is the human's choice of series; a body citation that is not one of those labels is still queued. Final PDF and DOCX are refused.
+
+DOCX created and modified stamps, and zip entry times, are fixed. Text in the draft and the annexures is left as written.
 
 `migration.sql` is not applied and creates nothing.
 
