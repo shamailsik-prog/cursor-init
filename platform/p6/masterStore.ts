@@ -260,8 +260,10 @@ export class InMemoryMasterStore implements MasterStore {
 
   async saveProposal(row: PersistedProposal): Promise<void> {
     this.assertRole()
+    if (row.status !== "pending") throw new Error("save refuses a status other than pending")
     const current = this.state.proposals.get(row.id)
     if (!current) throw new Error("proposal not found")
+    if (current.status !== "pending") throw new Error("save refuses a status other than pending")
     assertPayloadFrozen(current, row)
     const next = structuredClone(row)
     next.payload = structuredClone(current.payload)
@@ -472,6 +474,7 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
     },
 
     async saveProposal(row) {
+      if (row.status !== "pending") throw new Error("save refuses a status other than pending")
       const updated = await withRole(async (client) => {
         const found = await client.query<ProposalQueryRow>(
           `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
@@ -479,6 +482,7 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
         )
         const current = found.rows[0]
         if (!current) return 0
+        if (current.status !== "pending") throw new Error("save refuses a status other than pending")
         assertPayloadFrozen(proposalFromRow(current), row)
         const result = await client.query(
           `UPDATE change_proposals

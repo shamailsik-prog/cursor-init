@@ -75,6 +75,35 @@ suite("G3 master grants on local Postgres", () => {
     await admin.connect()
     await admin.query(DDL)
     await admin.query(DDL)
+
+    const writerTriggers = await admin.query<{ table_name: string; tgname: string }>(
+      `SELECT c.relname AS table_name, t.tgname
+         FROM pg_catalog.pg_trigger t
+         JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND NOT t.tgisinternal
+          AND t.tgenabled = 'O'
+          AND t.tgname IN ('master_versions_p6_writer', 'master_knowledge_p6_writer')
+        ORDER BY t.tgname`,
+    )
+    expect(writerTriggers.rows).toEqual([
+      { table_name: "master_knowledge", tgname: "master_knowledge_p6_writer" },
+      { table_name: "master_versions", tgname: "master_versions_p6_writer" },
+    ])
+    await expect(
+      admin.query(
+        `INSERT INTO master_versions
+           (id, firm_id, version_no, action, diff, snapshot, author_id, author_kind)
+         VALUES (gen_random_uuid(), 'firmZ', 1, 'apply', '{}', '{}', 'owner', 'system')`,
+      ),
+    ).rejects.toThrow(/non-P6 writer refused/)
+    await expect(
+      admin.query(
+        `INSERT INTO master_knowledge (firm_id, snapshot, classification, version_id)
+         VALUES ('firmZ', '{}', 'internal', gen_random_uuid())`,
+      ),
+    ).rejects.toThrow(/non-P6 writer refused/)
     await admin.query(
       `CREATE ROLE ${quoteIdent(writerUser)} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${writerPassword}'`,
     )

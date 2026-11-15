@@ -49,19 +49,25 @@ export function masterDdlFindings(sql: string): string[] {
   }
   if (!/master_versions_one_proposal/.test(sql)) findings.push("one proposal")
   if (!/approved proposal payload is frozen/.test(sql)) findings.push("frozen payload")
-  const blocks = sql.split(/CREATE TRIGGER/i).slice(1)
-  const writerCovers = (table: string, verb: string) =>
-    blocks.some(
-      (block) =>
-        new RegExp(`\\b${verb}\\b`, "i").test(block) &&
-        new RegExp(`ON\\s+public\\.${table}\\b`, "i").test(block) &&
-        /p6_refuse_non_p6_writer/.test(block),
-    )
-  for (const table of ["change_proposals", "master_knowledge"]) {
-    if (!writerCovers(table, "INSERT")) findings.push(`${table} insert writer`)
-    if (!writerCovers(table, "UPDATE")) findings.push(`${table} update writer`)
+  // One statement ends at its own semicolon. A later DROP TRIGGER must not count as this trigger.
+  const statements = [...sql.matchAll(/CREATE\s+TRIGGER\b[\s\S]*?;/gi)].map((hit) => hit[0])
+  const writers = [
+    { name: "change_proposals_p6_writer", table: "change_proposals", verbs: ["INSERT", "UPDATE"] },
+    { name: "master_knowledge_p6_writer", table: "master_knowledge", verbs: ["INSERT", "UPDATE"] },
+    { name: "master_versions_p6_writer", table: "master_versions", verbs: ["INSERT"] },
+  ]
+  for (const writer of writers) {
+    const statement = statements.find((item) => new RegExp(`CREATE\\s+TRIGGER\\s+${writer.name}\\b`, "i").test(item))
+    const onOwnTable = statement !== undefined && new RegExp(`\\bON\\s+public\\.${writer.table}\\b`, "i").test(statement)
+    const callsWriter = statement !== undefined && /p6_refuse_non_p6_writer\s*\(/.test(statement)
+    if (!statement || !onOwnTable || !callsWriter) {
+      findings.push(writer.name)
+      continue
+    }
+    for (const verb of writer.verbs) {
+      if (!new RegExp(`\\b${verb}\\b`, "i").test(statement)) findings.push(`${writer.name} ${verb}`)
+    }
   }
-  if (!writerCovers("master_versions", "INSERT")) findings.push("master_versions insert writer")
   return findings
 }
 
@@ -360,6 +366,33 @@ describe("G3 master owned (Layer 18 §10)", () => {
     expect((await store.getProposal(pending.id))?.status).toBe("pending")
   })
 
+  it("FA-Q07-R2-006: spacing or case does not make the proposer a different approver", async () => {
+    const store = p6Store()
+    const pending = await proposeChange({ ...substantive(), proposedBy: "partner_a" }, store)
+    await expect(
+      approveProposal(pending.id, { actorId: "partner_a ", kind: "partner", role: "partner" }, store),
+    ).rejects.toThrow(/differ from proposer/)
+    await expect(
+      approveProposal(pending.id, { actorId: "PARTNER_A", kind: "partner", role: "partner" }, store),
+    ).rejects.toThrow(/differ from proposer/)
+    expect((await store.getProposal(pending.id))?.status).toBe("pending")
+  })
+
+  it("FA-Q07-R2-006: saveProposal cannot mark a pending proposal approved", async () => {
+    const store = p6Store()
+    const pending = await proposeChange(substantive("clause.save"), store)
+    await expect(
+      store.saveProposal({
+        ...pending,
+        status: "approved",
+        decidedBy: "partner_a",
+        decidedKind: "partner",
+        decidedRole: "partner",
+      }),
+    ).rejects.toThrow(/pending/)
+    expect((await store.getProposal(pending.id))?.status).toBe("pending")
+  })
+
   it("FA-Q07-DDL-008: LEARNERS_ENABLED is seeded in its own file, not in 002", () => {
     expect(readFileSync("postgres/ddl/002_platform.sql", "utf8")).not.toMatch(/LEARNERS_ENABLED/)
     expect(readFileSync("postgres/ddl/010_p6_learners_flag.sql", "utf8")).toMatch(
@@ -472,6 +505,19 @@ describe("G3 master owned (Layer 18 §10)", () => {
     expect(masterDdlFindings(writerStripped).length).toBeGreaterThan(0)
     expect(masterDdlFindings(sql)).toEqual([])
     expect(sql).toMatch(/disable or drop/i)
+    const dropNamed = (source: string, name: string) => {
+      const next = source.replace(new RegExp(`CREATE\\s+TRIGGER\\s+${name}\\b[\\s\\S]*?;`, "i"), "")
+      expect(next).not.toBe(source)
+      return next
+    }
+    const versionsGone = dropNamed(sql, "master_versions_p6_writer")
+    expect(masterDdlFindings(versionsGone)).toContain("master_versions_p6_writer")
+    const knowledgeGone = dropNamed(sql, "master_knowledge_p6_writer")
+    expect(masterDdlFindings(knowledgeGone)).toContain("master_knowledge_p6_writer")
+    const bothGone = dropNamed(versionsGone, "master_knowledge_p6_writer")
+    const bothFindings = masterDdlFindings(bothGone)
+    expect(bothFindings).toContain("master_versions_p6_writer")
+    expect(bothFindings).toContain("master_knowledge_p6_writer")
   })
 
   it("proposeChange still refuses an unknown classification before any write", async () => {

@@ -75,6 +75,10 @@ function effectiveClass(
   return derived
 }
 
+function actorKey(value: string): string {
+  return value.trim().toLowerCase()
+}
+
 function assertApprovalBound(row: PersistedProposal): void {
   if (payloadDigest(row.payload) !== row.payloadHash) {
     throw new Error("approval is bound to a different payload hash")
@@ -184,7 +188,7 @@ export async function approveProposal(
     const row = await tx.getProposal(proposalId)
     if (!row) throw new Error("proposal not found")
     assertApprovalBound(row)
-    if (actor.actorId === row.proposedBy) throw new Error("approver must differ from proposer")
+    if (actorKey(actor.actorId) === actorKey(row.proposedBy)) throw new Error("approver must differ from proposer")
     if (row.changeClass !== "substantive") throw new Error("cosmetic proposals are not partner-approved")
     if (row.status !== "pending") throw new Error("proposal is not pending")
     const next: PersistedProposal = {
