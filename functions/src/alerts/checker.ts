@@ -23,9 +23,9 @@ import { queueAgeSpec, reservationUnresolvedSpec, sagaAgeSpec } from "./specs"
  * reservations order by `leaseUntil` (the durable time the gateway writes and quarantine keeps; no new field), not by
  * document id. A row with no `leaseUntil` is outside that index and is dropped from the rows alerted (FA-F43-R1-004-002);
  * `createdAt` is the documented creation time and is not a second query. A stored null stays: the index returns it.
- * The drop does not end the query. The end is a raw page shorter than `CHECK_PAGE_SIZE`, before that drop: the cursor
- * is cleared and the next run starts again from the oldest row (the wrap). A full raw page keeps its cursor on the
- * last raw row, so one absent field does not clear the cursor or starve the rows after it (FA-260-001). An id-only
+ * That drop does not end the query: the end is a raw page shorter than 100 (FA-260-001). The cursor is then cleared
+ * and the next run starts again from the oldest row (the wrap). A full raw page continues from its last raw row.
+ * An absent order field on the row a run would save is not stored: the pass logs ops_alert.pass_failed with code checker_cursor_absent_order and does not restart in silence (FA-260-R2-001). An id-only
  * cursor (`at: null`) cannot resume a time order and is ignored once.
  *
  * Passes rotate (`passIndex` on the same document): run N starts at `CHECK_PASSES[N mod 3]`. A jobs pass that spends
@@ -48,6 +48,11 @@ export const CHECK_PAGE_SIZE = 100
 export const CHECK_MAX_PAGES = 5
 /** One run's wall-clock budget, inside the function's 60 s timeout. */
 export const CHECKER_BUDGET_MS = 40_000
+/**
+ * `ops_alert.pass_failed` code when the row a run would save has no order-field value. The cursor is not written
+ * (FA-260-R2-001). A stored null is a value and uses the id-only cursor instead.
+ */
+export const CHECKER_CURSOR_ABSENT_ORDER = "checker_cursor_absent_order"
 
 /**
  * Runs within which one reservations query is read when the budget fits only the leading query.
@@ -128,19 +133,18 @@ async function readOrderedPage(name: CheckQuery, base: Query | null, field: stri
 
 /**
  * Reads up to `CHECK_MAX_PAGES` pages of `base` ordered by `field` (null: by document id alone) and the id, starting
- * after `cursor`. Returns the rows and the cursor to save: the last raw row of a full page, or null once a raw page
- * came back shorter than `CHECK_PAGE_SIZE` (the end of the query: the next run wraps to the start). Stops early,
- * keeping the cursor, when the run's budget is spent.
+ * after `cursor`. Returns the rows and the cursor to save. A raw page shorter than `CHECK_PAGE_SIZE` is the end of
+ * the query: the cursor is cleared and the next run wraps to the start. That drop does not end the query: the end is
+ * a raw page shorter than 100 (FA-260-001). A full raw page continues from its last raw row, including inside this
+ * run when that row's order field is absent. Stops early when the budget is spent.
  *
- * A time-ordered page drops a row whose order field is absent from the rows it returns. Firestore's `orderBy`
- * already excludes that row; the drop keeps the seam on the same rule (FA-F43-R1-004-002). End of query is the raw
- * page length, taken before that drop. A full raw page keeps its cursor on the last raw row, so one absent field
- * does not clear the cursor or starve the rows after it (FA-260-001). A stored null is a value the index returns,
- * so it stays.
+ * The cursor returned for the next run is that last raw row only when its order field is a Timestamp or null. An absent order field on the row a run would save is not stored: the pass logs ops_alert.pass_failed with code checker_cursor_absent_order and does not restart in silence (FA-260-R2-001). The previous cursor stays. A stored
+ * null is a value the index returns, so the row stays in the page and the saved cursor is id-only.
  */
 async function scan(name: CheckQuery, base: Query | null, field: string | null, cursor: CheckCursor | null, spent: () => boolean): Promise<Scan> {
   const docs: QueryDocumentSnapshot[] = []
-  let after = cursor
+  let after: CheckCursor | null = cursor
+  let anchor: { at: Timestamp | null | undefined; id: string } | null = null
   for (let page = 0; page < CHECK_MAX_PAGES; page++) {
     if (spent()) break
     const pageDocs = await readOrderedPage(name, base, field, after)
@@ -148,9 +152,29 @@ async function scan(name: CheckQuery, base: Query | null, field: string | null, 
     docs.push(...indexed)
     if (pageDocs.length < CHECK_PAGE_SIZE) return { docs, next: null }
     const last = pageDocs[pageDocs.length - 1]!
-    after = { at: field === null ? null : (last.get(field) as Timestamp), id: last.id }
+    anchor = rawAnchor(field, last)
+    after = { at: anchor.at as Timestamp | null, id: anchor.id }
   }
-  return { docs, next: after }
+  if (anchor === null) return { docs, next: after }
+  return { docs, next: cursorToSave(anchor) }
+}
+
+/** The last raw row. `at` is undefined only when a time-ordered field is absent (not a stored null). */
+function rawAnchor(field: string | null, last: QueryDocumentSnapshot): { at: Timestamp | null | undefined; id: string } {
+  if (field === null) return { at: null, id: last.id }
+  const value = last.get(field)
+  if (value instanceof Timestamp || value === null) return { at: value, id: last.id }
+  return { at: undefined, id: last.id }
+}
+
+/** A cursor that may be written. An absent order field is never written. */
+function cursorToSave(anchor: { at: Timestamp | null | undefined; id: string }): CheckCursor {
+  if (anchor.at === undefined) {
+    const err = new Error(CHECKER_CURSOR_ABSENT_ORDER)
+    ;(err as unknown as { code: string }).code = CHECKER_CURSOR_ABSENT_ORDER
+    throw err
+  }
+  return { at: anchor.at, id: anchor.id }
 }
 
 /** One run's cursors: read once at the start, each saved as soon as its query is done. `passIndex` rotates the next run. */

@@ -5,11 +5,16 @@ import { Timestamp } from "firebase-admin/firestore"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { CHECK_MAX_PAGES, CHECK_PAGE_SIZE, CHECK_PASSES, CHECKER_BUDGET_MS, checkerTestSeam, reservationQueryRunBound, runAlertChecker, type CheckCursor, type CheckQuery, type CheckerPageRow } from "../src/alerts/checker"
 import { raiseAlertBestEffort } from "../src/alerts/raise"
+import { spyRegisteredErrors } from "./registeredErrorLog"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 
 const BOUND_SENTENCE = "each of held and quarantined is read within 6·ceil(N / 500) runs when the budget fits only the leading query"
 const OVERSTATED_BOUND = "rotation then reads a row within 3·ceil"
+const FA_260_001_SENTENCE = "That drop does not end the query: the end is a raw page shorter than 100 (FA-260-001)."
+const FA_260_R2_001_SENTENCE = "An absent order field on the row a run would save is not stored: the pass logs ops_alert.pass_failed with code checker_cursor_absent_order and does not restart in silence (FA-260-R2-001)."
+const ABSENT_ORDER_CODE = "checker_cursor_absent_order"
+const OVERCLAIMED_STARVE = "starve the rows after it"
 
 /**
  * FA-F43-R1-004. Two defects in the checker, pinned without the emulator:
@@ -303,5 +308,145 @@ describe("FA-F43-R1-004-002: a quarantined row with no leaseUntil stays outside 
     expect(quarantined[1]?.cursor?.id).toBe(absent.id)
     expect(raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)).toContain("firm-late")
     expect(raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)).not.toContain("firm-absent")
+  })
+
+  it("a raw page one row short of CHECK_PAGE_SIZE is the end, so a later row is not read", async () => {
+    const calls: Call[] = []
+    const leased = Array.from({ length: CHECK_PAGE_SIZE - 1 }, (_, i) => ({
+      id: `leased-${String(i).padStart(3, "0")}`,
+      data: { firmId: "firm-leased", state: "reconcile_failed", leaseUntil: Timestamp.fromMillis(T + i) },
+    }))
+    const phantom = {
+      id: "phantom-late",
+      data: { firmId: "firm-phantom", state: "reconcile_failed", leaseUntil: Timestamp.fromMillis(T + 1_000_000) },
+    }
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, field, cursor) => {
+      calls.push({ name, field, cursor })
+      if (name !== "reservationsQuarantined") return []
+      return cursor === null ? leased : [phantom]
+    }
+
+    await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+
+    expect(leased).toHaveLength(CHECK_PAGE_SIZE - 1)
+    expect(calls.filter((c) => c.name === "reservationsQuarantined")).toHaveLength(1)
+    expect(checkerTestSeam.memory?.cursors.reservationsQuarantined).toBeNull()
+    const firms = raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)
+    expect(firms).toContain("firm-leased")
+    expect(firms).not.toContain("firm-phantom")
+  })
+})
+
+function leasedRow(id: string, firmId: string, ms: number): CheckerPageRow {
+  return { id, data: { firmId, state: "reconcile_failed", leaseUntil: Timestamp.fromMillis(ms) } }
+}
+
+function absentRow(id: string): CheckerPageRow {
+  return { id, data: { firmId: "firm-absent", state: "reconcile_failed" } }
+}
+
+/** Pages in the given order, after the cursor id. The seam does not re-sort an absent field to the end. */
+function pageInOrder(rows: readonly CheckerPageRow[], cursor: CheckCursor | null): CheckerPageRow[] {
+  const start = cursor === null ? 0 : rows.findIndex((row) => row.id === cursor.id) + 1
+  return rows.slice(Math.max(0, start), Math.max(0, start) + CHECK_PAGE_SIZE)
+}
+
+function savedCursorPersistable(): boolean {
+  const saved = checkerTestSeam.memory?.cursors.reservationsQuarantined
+  if (saved == null) return true
+  return saved.at === null || saved.at instanceof Timestamp
+}
+
+describe("FA-260-R2-001: a window that ends on an absent order field fails closed", () => {
+  const T = Date.parse("1970-01-06T00:00:00.000Z")
+  const window = CHECK_PAGE_SIZE * CHECK_MAX_PAGES
+
+  it("A3: 499 leased rows, an absent lease at row 500, then firm-late — alerted or pass_failed, never a silent restart", async () => {
+    const errors = spyRegisteredErrors()
+    const rows = [
+      ...Array.from({ length: window - 1 }, (_, i) => leasedRow(`leased-${String(i).padStart(4, "0")}`, "firm-leased", T + i)),
+      absentRow("absent-500"),
+      leasedRow("firm-late", "firm-late", T + 9_000_000),
+    ]
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, _field, cursor) => (name === "reservationsQuarantined" ? pageInOrder(rows, cursor) : [])
+    try {
+      for (let run = 0; run < 2; run++) {
+        raise.mockClear()
+        errors.calls.length = 0
+        await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+        const firms = raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)
+        const coded = errors.fieldsOf("ops_alert.pass_failed").some((fields) => fields.pass === "reservations" && fields.code === ABSENT_ORDER_CODE)
+        expect(firms.includes("firm-late") || coded, `run ${run}`).toBe(true)
+        expect(firms).not.toContain("firm-absent")
+      }
+      expect(savedCursorPersistable()).toBe(true)
+    } finally {
+      errors.restore()
+    }
+  })
+
+  it("A2: 500 absent rows then 10 leased — the leased rows are alerted or the pass fails closed, and no undefined cursor is stored", async () => {
+    const errors = spyRegisteredErrors()
+    const rows = [
+      ...Array.from({ length: window }, (_, i) => absentRow(`absent-${String(i).padStart(4, "0")}`)),
+      ...Array.from({ length: 10 }, (_, i) => leasedRow(`leased-${String(i).padStart(2, "0")}`, "firm-leased", T + i)),
+    ]
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, _field, cursor) => (name === "reservationsQuarantined" ? pageInOrder(rows, cursor) : [])
+    try {
+      for (let run = 0; run < 2; run++) {
+        raise.mockClear()
+        errors.calls.length = 0
+        await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+        const firms = raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)
+        const coded = errors.fieldsOf("ops_alert.pass_failed").some((fields) => fields.pass === "reservations" && fields.code === ABSENT_ORDER_CODE)
+        expect(firms.includes("firm-leased") || coded, `run ${run}`).toBe(true)
+        expect(firms).not.toContain("firm-absent")
+      }
+      expect(savedCursorPersistable()).toBe(true)
+    } finally {
+      errors.restore()
+    }
+  })
+
+  it("fails closed when the budget stops on a full page whose last raw row has no leaseUntil", async () => {
+    const errors = spyRegisteredErrors()
+    const leased = Array.from({ length: CHECK_PAGE_SIZE - 1 }, (_, i) => leasedRow(`leased-${String(i).padStart(3, "0")}`, "firm-leased", T + i))
+    const firstPage = [...leased, absentRow("absent-last")]
+    const late = leasedRow("firm-late", "firm-late", T + 9_000_000)
+    let quarantinedPages = 0
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, _field, cursor) => {
+      if (name !== "reservationsQuarantined") return []
+      quarantinedPages += 1
+      return cursor === null ? firstPage : [late]
+    }
+    try {
+      await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => (quarantinedPages > 0 ? CHECKER_BUDGET_MS : 0) })
+      const firms = raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)
+      const coded = errors.fieldsOf("ops_alert.pass_failed").some((fields) => fields.pass === "reservations" && fields.code === ABSENT_ORDER_CODE)
+      expect(firms.includes("firm-late") || coded).toBe(true)
+      expect(savedCursorPersistable()).toBe(true)
+    } finally {
+      errors.restore()
+    }
+  })
+})
+
+describe("FA-260 README sentences", () => {
+  it("pins the FA-260-001 sentence and the fail-closed sentence in the README, the checker and the spec", () => {
+    const files = [
+      "functions/src/alerts/README.md",
+      "functions/src/alerts/checker.ts",
+      "docs/superpowers/specs/2026-10-24-f43-durable-alert-delivery-design.md",
+    ]
+    for (const file of files) {
+      const text = readFileSync(resolve(repoRoot, file), "utf8")
+      expect(text, file).toContain(FA_260_001_SENTENCE)
+      expect(text, file).toContain(FA_260_R2_001_SENTENCE)
+      expect(text, file).not.toContain(OVERCLAIMED_STARVE)
+    }
   })
 })
