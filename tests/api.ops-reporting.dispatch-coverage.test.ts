@@ -101,8 +101,8 @@ beforeEach(() => {
 })
 afterEach(() => {
   const crashes = onError.mock.calls
-    .map(([err]) => err)
-    .filter((err) => err instanceof TypeError || err instanceof ReferenceError)
+    .map(([err]: readonly unknown[]) => err)
+    .filter((err: unknown) => err instanceof TypeError || err instanceof ReferenceError)
   onError.mockRestore()
   expect(crashes).toEqual([])
 })
@@ -159,7 +159,7 @@ describe("POST /api/d2/ops-reporting: handler crashes reach the onError hook", (
     } finally {
       injectedCalls = injected.mock.calls.length
       injected.mockRestore()
-      reported = onError.mock.calls.map(([err]) => err)
+      reported = onError.mock.calls.map(([err]: readonly unknown[]) => err)
       onError.mockClear() // the canary is expected; don't let afterEach count it as a crash
     }
     expect(injectedCalls).toBe(1)

@@ -27,13 +27,20 @@ import { logger } from "firebase-functions"
 import pg from "pg"
 import { normaliseCitation } from "@/services/d4-2/citations"
 import type { Bench, TreatmentFact } from "@/services/d4-2/citationVerdict"
+import {
+  coveringVersion as selectCoveringVersion,
+  MIN_VERSION_CONFIDENCE,
+  SectionHistoryInconsistentError,
+  versionUsable,
+  type SectionVersionRow,
+} from "@/services/d4-2/sectionInForce"
 import type { AuthorityStore } from "./authority"
 import { AuthorityUnavailableError, type AuthorityUnavailableReason } from "./authorityErrors"
 import { PENDING_OVERRULING } from "./authorityPending"
 import type { CorpusReaderConfig } from "./corpusReaderConfig"
 
-/** A section version is usable only above this confidence (ruling 4: strictly greater than 0.5). */
-export const MIN_VERSION_CONFIDENCE = 0.5
+export { MIN_VERSION_CONFIDENCE, versionUsable, type SectionVersionRow }
+
 /** Pool and timing (D9). */
 export const POOL_MAX = 3
 export const CONNECT_TIMEOUT_MS = 3000
@@ -65,32 +72,17 @@ export function annexJurisdiction(code: string): AnnexJurisdiction | null {
   return ANNEX_A_JURISDICTIONS.find((j) => j.toUpperCase() === code) ?? null
 }
 
-/** Ruling 4, NaN-safe (D4): a finite confidence above 0.5 and at most 1. */
-export function versionUsable(confidence: number | null): boolean {
-  return typeof confidence === "number" && confidence > MIN_VERSION_CONFIDENCE && confidence <= 1
-}
-
-export type SectionVersionRow = { versionNo: number; effectiveFrom: string; effectiveTo: string | null; text: string; versionConfidence: number | null }
-
 /**
- * The one version in force on `asAtDate` (effectiveFrom <= date < effectiveTo, an open range running on), or null.
- * `rows` come ordered by effectiveFrom, then versionNo. A history that breaks the contract (a reversed or empty range,
- * an overlap, an open range that is not last, version numbers out of order, a malformed date) throws `inconsistent`
- * (D5): the gate must not pick a text from it.
+ * The one version in force on `asAtDate`. The rule lives in services/d4-2/sectionInForce.ts.
+ * A broken history is `inconsistent` (D5): the gate must not pick a text from it.
  */
 export function coveringVersion(rows: readonly SectionVersionRow[], asAtDate: string): SectionVersionRow | null {
-  for (const [i, row] of rows.entries()) {
-    if (!ISO_DATE.test(row.effectiveFrom) || (row.effectiveTo !== null && !ISO_DATE.test(row.effectiveTo))) throw unavailable("inconsistent")
-    if (row.effectiveTo !== null && row.effectiveTo <= row.effectiveFrom) throw unavailable("inconsistent")
-    const next = rows[i + 1]
-    if (next) {
-      if (row.effectiveTo === null || row.effectiveTo > next.effectiveFrom) throw unavailable("inconsistent")
-      if (next.versionNo <= row.versionNo) throw unavailable("inconsistent")
-    }
+  try {
+    return selectCoveringVersion(rows, asAtDate)
+  } catch (err) {
+    if (err instanceof SectionHistoryInconsistentError) throw unavailable("inconsistent")
+    throw err
   }
-  const covering = rows.filter((r) => r.effectiveFrom <= asAtDate && (r.effectiveTo === null || asAtDate < r.effectiveTo))
-  if (covering.length > 1) throw unavailable("inconsistent")
-  return covering[0] ?? null
 }
 
 const CITATION_SQL = "SELECT judgment_id::text AS id, bench_type FROM public.v_authority_citation WHERE citation_text = $1"

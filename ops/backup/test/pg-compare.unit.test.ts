@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
 import { comparePgManifests, type PgManifest } from "../postgres/manifest"
 
+const DIGEST_A = "11".repeat(32)
+const DIGEST_B = "22".repeat(32)
+const DIGEST_C = "33".repeat(32)
+const DIGEST_D = "44".repeat(32)
+
 function emptyManifest(): PgManifest {
   return {
     meta: {
@@ -25,15 +30,15 @@ function emptyManifest(): PgManifest {
 describe("comparePgManifests", () => {
   it("reports no differences for equal manifests", () => {
     const m = emptyManifest()
-    m.tables["public.judgment"] = { rows: 2, digest: "abc" }
+    m.tables["public.judgment"] = { rows: 2, digest: DIGEST_A }
     expect(comparePgManifests(m, { ...m })).toEqual([])
   })
 
   it("reports table row and digest changes", () => {
     const a = emptyManifest()
     const b = emptyManifest()
-    a.tables["public.judgment"] = { rows: 2, digest: "d1" }
-    b.tables["public.judgment"] = { rows: 3, digest: "d2" }
+    a.tables["public.judgment"] = { rows: 2, digest: DIGEST_A }
+    b.tables["public.judgment"] = { rows: 3, digest: DIGEST_B }
     const lines = comparePgManifests(a, b)
     expect(lines).toContain("table public.judgment: rows 2 -> 3")
     expect(lines).toContain("table public.judgment: digest differs")
@@ -42,8 +47,8 @@ describe("comparePgManifests", () => {
   it("reports missing and unexpected tables", () => {
     const a = emptyManifest()
     const b = emptyManifest()
-    a.tables["public.a"] = { rows: 0, digest: "x" }
-    b.tables["public.b"] = { rows: 0, digest: "y" }
+    a.tables["public.a"] = { rows: 0, digest: DIGEST_C }
+    b.tables["public.b"] = { rows: 0, digest: DIGEST_D }
     const lines = comparePgManifests(a, b)
     expect(lines).toContain("table public.a: missing")
     expect(lines).toContain("table public.b: unexpected")

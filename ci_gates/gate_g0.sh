@@ -56,6 +56,7 @@ python3 ci_gates/check_master_writes.py || fail=1
 
 echo "[12] idempotency-guard"
 python3 ci_gates/check_idempotency.py || fail=1
+python3 ci_gates/test_check_idempotency.py >/dev/null 2>&1 || { echo "FAIL: ci_gates/test_check_idempotency.py"; fail=1; }
 
 echo "[13] pagination-guard"
 python3 ci_gates/check_pagination.py || fail=1
