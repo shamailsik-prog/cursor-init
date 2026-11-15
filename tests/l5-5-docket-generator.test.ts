@@ -1369,11 +1369,10 @@ describe("L5.5 docx pagination", () => {
   it("keeps the same docx bytes in UTC and in New York", () => {
     const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
     const probe = path.join(root, "tests/l5-5-docx-tz-probe.ts")
-    const bin = path.join(root, "node_modules/.bin/vite-node")
-    const config = path.join(root, "vitest.config.ts")
+    const bin = path.join(root, "node_modules/.bin/tsx")
     const render = (tz: string) => {
       const out = path.join("/tmp", `q12a-docket-${tz.replace(/\//g, "_")}.docx`)
-      const run = spawnSync(bin, ["--config", config, probe], {
+      const run = spawnSync(bin, [probe], {
         cwd: root,
         encoding: "utf8",
         env: { ...process.env, TZ: tz, DOCKET_TZ_OUT: out },
@@ -1891,14 +1890,129 @@ describe("L5.5 fail-closed reference allowlist", () => {
       "See ECP.",
       "See I. Ahmed v. State.",
       "See 2010 NLR 45.",
-      "2010 KLR 45",
-      "2015 PLJ 45",
-      "2015 PLC (C.S.) 45",
-      "(2010) 5 SCC 45",
+      "See 2010 KLR 45",
+      "See 2015 PLJ 45",
+      "See 2015 PLC (C.S.) 45",
+      "See (2010) 5 SCC 45",
       "See 2010.",
     ]
     for (const sentence of sentences) {
       await expectGeneration({ ...petition, draft: { body: `${cited} ${sentence}` } }, sentence)
+    }
+  })
+
+  it("ORDER-R8-001 refuses an annexure sentence that is out of filing order", async () => {
+    const sentences = [
+      "Annexure C is the receipt. Annexure B is the deed. Annexure A is the plaint.",
+      "Annexures C, B and A are relied on.",
+      "Annexure C, Annexure B and Annexure A are filed.",
+      "Annexures B, A and C are relied on.",
+      "Annexure B is the deed. Annexure A is the plaint. Annexure C is the receipt.",
+      "Annexures C and B and A are relied on.",
+    ]
+    for (const sentence of sentences) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body: sentence } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.queue.some((entry) => entry.code === "order_unresolved"), sentence).toBe(true)
+    }
+    await expectGeneration(
+      {
+        ...petition,
+        draft: { body: "Annexure A is the plaint. Annexure B is the deed. Annexure C is the receipt." },
+      },
+      "in-order annexure sentences",
+    )
+    await expectGeneration(
+      { ...petition, draft: { body: "Annexures A, B and C are relied on." } },
+      "in-order annexure list",
+    )
+    enableFlag()
+    const partial = await generateDocket({
+      ...petition,
+      draft: { body: "LIST OF ANNEXURES: Annexure A. Annexure C is the receipt. Annexure B is the deed." },
+    })
+    expect(partial.ok).toBe(false)
+    expect(partial.queue.some((entry) => entry.code === "order_unresolved")).toBe(true)
+    expect(partial.queue.some((entry) => entry.detail === "body does not refer to A")).toBe(false)
+    const third = exhibits.annexures[1]!
+    enableFlag()
+    const manual = await generateDocket({
+      ...exhibits,
+      annexures: [
+        ...exhibits.annexures,
+        {
+          ...third,
+          assignedLabel: "P-3",
+          metadata: { ...third.metadata, artifactId: "ex-3", label: "Map", sourceRef: "doc-map" },
+        },
+      ],
+      draft: { body: "LIST OF EXHIBITS: P-1. The witness proved P-3 and then P-2." },
+    })
+    expect(manual.ok).toBe(false)
+    expect(manual.queue.some((entry) => entry.code === "order_unresolved")).toBe(true)
+  })
+
+  it("OVER-020-R generates a fresh acronym and an AIR report after see or refer", async () => {
+    const cited = "The petitioner relies on Annexures A, B and C."
+    for (const sentence of [
+      "See FIA report.",
+      "See PTA.",
+      "Refer SBP circular.",
+      "See SSP report.",
+      "See AIR 1950 SC 27.",
+      "See NAB report.",
+      "See SECP circular.",
+    ]) {
+      await expectGeneration({ ...petition, draft: { body: `${cited} ${sentence}` } }, sentence)
+    }
+  })
+
+  it("OVER-R8-002 generates prose letters and a head followed by a stopword", async () => {
+    const cited = "The petitioner relies on Annexures A, B and C."
+    for (const sentence of [
+      "Schedules D and E of the Act apply.",
+      "The parties X and Y agreed.",
+      "I and a colleague attended.",
+      "Under clauses (d) and (e) of the agreement.",
+      "See exhibits on record.",
+      "Refer annexures filed herewith.",
+    ]) {
+      await expectGeneration({ ...petition, draft: { body: `${cited} ${sentence}` } }, sentence)
+    }
+  })
+
+  it("TEST-R8 refuses an unreadable label and a mark before Street map", async () => {
+    const cited = "The petitioner relies on Annexures A, B and C."
+    for (const sentence of ["See Annexure Art. D.", "See Annexure IT.", "Annexure ab is the deed.", "Annexure Ab is the deed.", "Annexure ab/Ab is the deed."]) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body: `${cited} ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.queue.some((entry) => entry.code === "ref_unresolved"), sentence).toBe(true)
+    }
+    enableFlag()
+    const mark = await generateDocket({
+      ...marked(["P-1", "P-2"]),
+      draft: { body: "Relies on P/1 and P/2. The P-9, Street map is annexed." },
+    })
+    expect(mark.ok).toBe(false)
+    expect(mark.queue.some((entry) => entry.detail.includes("P/9"))).toBe(true)
+  })
+
+  it("LOW keeps a mark together across a bare return, a line separator, and a blank line", async () => {
+    const cited = "Relies on P/1 and P/2."
+    for (const sentence of ["The deed P-\r9 is relied on.", "The deed P-\u20289 is relied on.", "P/\n\n9", "P-\n\n9"]) {
+      enableFlag()
+      const result = await generateDocket({ ...marked(["P-1", "P-2"]), draft: { body: `${cited} ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.queue.some((entry) => entry.detail.includes("P/9")), sentence).toBe(true)
+    }
+    const letters = "The petitioner relies on Annexures A, B and C."
+    for (const sentence of ["ANNEXURE:\n\nD - Bank statement", "A and\n\nD", "A,\n\nD", "A to\n\nD", "A/\n\nD"]) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body: `${letters} ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.queue.some((entry) => entry.detail.includes("D")), sentence).toBe(true)
     }
   })
 

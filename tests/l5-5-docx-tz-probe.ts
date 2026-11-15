@@ -6,6 +6,7 @@ import petitionFixture from "@/layers/L5_5_DocketGenerator/fixtures/petition-odd
 process.env.SIKANDER_FLAG_L5_5_DOCKET_GENERATOR = "true"
 const out = process.env.DOCKET_TZ_OUT
 if (!out) throw new Error("DOCKET_TZ_OUT is required")
-const result = await generateDocket(petitionFixture as DocketFilingSet)
-if (!result.docx) throw new Error("docket probe produced no docx")
-writeFileSync(out, result.docx)
+void generateDocket(petitionFixture as DocketFilingSet).then((result) => {
+  if (!result.docx) throw new Error("docket probe produced no docx")
+  writeFileSync(out, result.docx)
+})
