@@ -3,11 +3,14 @@
  * grammar both finds citations and classifies assigned labels. see, refer, and
  * relies open a citation only for a single uppercase letter, a P, D, or R mark,
  * or an Annexure, Exhibit, Enclosure, or Mark head. A lowercase p. or pp. plus a
- * number is a page reference. A carriage return or line separator is a newline.
- * A single newline is a space. A blank line ends a sentence, except after and,
- * a comma, to, a hyphen, or a slash, and except after a citation keyword. A
- * heading is a list or index of exhibits, annexures, or documents, or a
- * keyword-only line ending in a colon. No. before a letter-dash-digits code is
+ * number is a page reference. A carriage return, line separator, or paragraph
+ * separator is a newline. A hyphen split by a newline, including a blank line,
+ * is rejoined. A single newline is a space. A blank line ends a sentence,
+ * except after and, a comma, to, a hyphen, or a slash, and except after a
+ * citation keyword. A heading ends at the line break. It is a list or index of
+ * exhibits, annexures, or documents, or a keyword-only colon line whose labels
+ * stay on that line. A bare annexure head is prose only when a stopword follows
+ * it. No. before a letter-dash-digits code is
  * a case number when of YYYY or /YYYY follows. AIR plus a year is a law report.
  */
 
@@ -55,6 +58,8 @@ const NON_LABEL_WORDS = new Set([
 
 const OPENER_HEADS = new Set(["annexure", "annexures", "exhibit", "exhibits", "enclosure", "enclosures", "mark", "marks"])
 
+const HEAD_STOPWORDS = new Set(["on", "filed", "herewith", "thereto", "above", "below", "attached", "annexed", "hereto"])
+
 const NO_PREFIXES = new Set(["house", "plot", "flat", "shop", "street", "gali", "suit", "appeal", "petition", "case", "c.p", "cr.misc"])
 
 const SPELLED_NUMBERS = new Set([
@@ -94,12 +99,39 @@ function letterCase(word: string): "upper" | "lower" | "mixed" {
   return "mixed"
 }
 
+const HEADING_LIST = /^(list|index)\s+of\s+(exhibits|annexures|documents)\b/i
+const KEYWORD_COLON = /^(?:annex(?:ure)?s?|annexe|exhibits?|enclosures?|marks?)\s*:\s*$/i
+const LABEL_CONTINUATION = /^\s*(?:annex(?:ure)?s?|annexe|exhibits?|enclosures?|marks?|[PDR]\s*[/-]\s*\d|[A-Za-z](?:\s*[-/]|\b))/i
+
+function closeHeadingLines(input: string): string {
+  const lines = input.split("\n")
+  const nextContent = (start: number): string | undefined => {
+    for (let index = start; index < lines.length; index += 1) {
+      if (lines[index]?.trim()) return lines[index]
+    }
+    return undefined
+  }
+  return lines
+    .map((line, index) => {
+      const trimmed = line.trim()
+      const following = nextContent(index + 1)
+      if (!following || /[.!?]\s*$/.test(trimmed)) return line
+      const list = HEADING_LIST.test(trimmed)
+      const colon = KEYWORD_COLON.test(trimmed)
+      if (!list && !colon) return line
+      if (colon && LABEL_CONTINUATION.test(following.trim())) return line
+      return `${line}.`
+    })
+    .join("\n")
+}
+
 function foldNewlines(input: string): string {
-  const unified = input.replace(/\r\n/g, "\n").replace(/[\r\u2028]/g, "\n")
+  const unified = input.replace(/\r\n/g, "\n").replace(/[\r\u2028\u2029]/g, "\n")
   const rejoined = unified
-    .replace(/([A-Za-z])-[ \t]*\n[ \t]*([A-Za-z])/g, "$1$2")
-    .replace(/([A-Za-z])-[ \t]*\n[ \t]*(\d)/g, "$1-$2")
-  const kept = rejoined.replace(
+    .replace(/([A-Za-z])-[ \t]*\n+[ \t]*([A-Za-z])/g, "$1$2")
+    .replace(/([A-Za-z])-[ \t]*\n+[ \t]*(\d)/g, "$1-$2")
+  const headed = closeHeadingLines(rejoined)
+  const kept = headed.replace(
     /\b(annex(?:ure)?s?|annexe|exhibits?|enclosures?|marks?)\b[ \t]*:?[ \t]*(?:\n[ \t]*){2,}(?=[A-Za-z0-9])/gi,
     "$1 ",
   )
@@ -678,13 +710,52 @@ function citationStart(tokens: readonly Token[], index: number): number {
   return next?.kind === "word" && OPENER_HEADS.has(next.value) ? index + 2 : index + 1
 }
 
+function headStopword(token: Token | undefined): boolean {
+  return token?.kind === "word" && token.caps === "lower" && HEAD_STOPWORDS.has(token.value)
+}
+
+function labelAfterStopwords(tokens: readonly Token[], index: number): number | null {
+  let cursor = index + 1
+  let skipped = false
+  while (headStopword(tokens[cursor])) {
+    skipped = true
+    cursor += 1
+  }
+  if (!skipped) return null
+  const token = tokens[cursor]
+  if (token?.kind === "word" && OPENER_HEADS.has(token.value)) return cursor
+  if (token?.kind === "word" && token.caps === "upper" && token.value.length === 1 && !isInitial(tokens, cursor)) return cursor
+  const mark = parseMark(tokens, cursor)
+  if (mark && !isPageReference(tokens, cursor, mark.next)) return cursor
+  return null
+}
+
+function bareHeadProse(tokens: readonly Token[], start: number): boolean {
+  const end = sentenceEnd(tokens, start)
+  if (start >= end) return false
+  let stop = false
+  for (let cursor = start; cursor < end; cursor += 1) {
+    const token = tokens[cursor]
+    if (!token) return false
+    if (token.kind === "punct" && ",;:".includes(token.value)) continue
+    if (headStopword(token)) {
+      stop = true
+      continue
+    }
+    if (token.kind === "word" && token.caps === "lower" && token.value.length > 1 && token.value !== "viz" && stop) continue
+    return false
+  }
+  return stop
+}
+
 function openerStarts(tokens: readonly Token[], index: number): boolean {
   const next = tokens[index + 1]
   if (!next || lawReportShape(tokens, index + 1)) return false
   if (next.kind === "word" && OPENER_HEADS.has(next.value)) return true
   const mark = parseMark(tokens, index + 1)
   if (mark && !isPageReference(tokens, index + 1, mark.next)) return true
-  return next.kind === "word" && next.caps === "upper" && next.value.length === 1 && !isInitial(tokens, index + 1)
+  if (next.kind === "word" && next.caps === "upper" && next.value.length === 1 && !isInitial(tokens, index + 1)) return true
+  return labelAfterStopwords(tokens, index) !== null
 }
 
 function spelledBeforeKeyword(tokens: readonly Token[], index: number): boolean {
@@ -731,7 +802,27 @@ function headingSentence(tokens: readonly Token[], index: number): boolean {
   const listed = words[0] === "list" || words[0] === "index"
   const kind = words[2] === "exhibits" || words[2] === "annexures" || words[2] === "documents"
   if (listed && words[1] === "of" && kind) return true
-  return colon && words.length > 0 && words.every((word) => word in KEYWORD_FAMILY)
+  if (!(colon && words.length > 0 && words.every((word) => word in KEYWORD_FAMILY))) return false
+  let colonAt = -1
+  const start = sentenceStart(tokens, index)
+  for (let cursor = start; cursor < tokens.length; cursor += 1) {
+    if (tokens[cursor]?.value === ":") {
+      colonAt = cursor
+      break
+    }
+    if (tokens[cursor]?.value === "." && tokens[cursor - 1]?.value !== "no") break
+  }
+  if (colonAt < 0) return false
+  const end = sentenceEnd(tokens, colonAt)
+  for (let cursor = colonAt + 1; cursor < end; cursor += 1) {
+    const token = tokens[cursor]
+    if (!token) return false
+    if (token.kind === "punct" && ",-/&;".includes(token.value)) continue
+    if (token.kind === "word" && (token.value === "and" || token.value === "or" || token.value === "to")) continue
+    if (token.kind === "num" || parseAtom(tokens, cursor) || parseMark(tokens, cursor)) continue
+    return false
+  }
+  return true
 }
 
 function extendedMark(tokens: readonly Token[], mark: { key: string; next: number }): { key: string; next: number } | null {
@@ -867,16 +958,20 @@ export function scanCitations(
       }
     }
     if (opener && !keyword) {
+      const delayed = labelAfterStopwords(tokens, index)
       if (!openerStarts(tokens, index)) {
         index += 1
         continue
       }
-      const start = citationStart(tokens, index)
+      const openedAt = delayed ?? index
+      const start = delayed !== null
+        ? (tokens[delayed]?.kind === "word" && OPENER_HEADS.has(tokens[delayed].value) ? delayed + 1 : delayed)
+        : citationStart(tokens, index)
       const parsed = parseExpression(tokens, start)
-      const head = tokens[index + 1]
+      const head = tokens[openedAt + 1]
       const openedHead = head?.kind === "word" && OPENER_HEADS.has(head.value)
       const startedPastHead = !tokens[start] || !OPENER_HEADS.has(tokens[start].value)
-      const prose = openedHead && startedPastHead && parsed?.labels.length === 0 && !unreadableLabel(tokens[start]) && !failedLabel(tokens, start)
+      const prose = openedHead && startedPastHead && parsed?.labels.length === 0 && bareHeadProse(tokens, start)
       if (!parsed || (parsed.labels.length === 0 && !prose)) {
         unparsed.push(`body cites ${token.value} without a label expression that can be read`)
         const end = sentenceEnd(tokens, index)
