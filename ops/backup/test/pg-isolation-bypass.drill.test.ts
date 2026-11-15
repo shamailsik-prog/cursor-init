@@ -582,7 +582,7 @@ exec "\${args[@]}"
     await expectClusterUnwritten(decoy)
   }, 180_000)
 
-  it("records an allowlisted docker exec prefix in the drill report", async () => {
+  it("ENV-003 a PATH-selected docker does not run, and the result records the allowlisted prefix", async () => {
     const bin = path.join(out, "docker-bin")
     mkdirSync(bin, { recursive: true })
     const docker = path.join(bin, "docker")
@@ -623,10 +623,8 @@ exec "$@"
     })
     expect(existsSync(sentinel)).toBe(false)
     expect(res.ok, res.differences.join("\n")).toBe(false)
-    const body = JSON.parse(readFileSync(path.resolve(__dirname, "../.results/postgres-logical-prefix.json"), "utf8")) as {
-      commandPrefix?: string[]
-    }
-    expect(body.commandPrefix).toEqual(prefix)
+    expect(res.differences.join("\n")).not.toMatch(/allowlisted docker exec/)
+    expect(res.commandPrefix).toEqual(prefix)
     await expectClusterUnwritten(decoy)
     await expectClusterUnwritten(target)
   }, 180_000)
