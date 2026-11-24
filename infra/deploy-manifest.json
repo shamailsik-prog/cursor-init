@@ -329,6 +329,20 @@
       "ingress": "ALLOW_INTERNAL_ONLY",
       "schedule": "every 15 minutes",
       "why": { "schedule": "Audit F42: raises one F43 durable alert per deletion request whose stores are not all acknowledged by the deadline" }
+    },
+    {
+      "name": "bulkUploadStagingSweep",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 120,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "every 24 hours",
+      "why": { "schedule": "W1-L91: lists upload-staging/ by object age. Idle unless SIKANDER_FLAG_D1_BULK_UPLOAD is exactly true. The one-day bucket lifecycle is config only and is not applied by this function." }
     }
   ],
   "firebase": {
@@ -356,14 +370,16 @@
       { "collectionGroup": "rate_limits", "fieldPath": "expiresAt", "writers": ["functions/src/http/rateLimit.ts"] },
       { "collectionGroup": "conflict_index_breaks", "fieldPath": "expiresAt", "writers": ["functions/src/d1/conflict/registryTriggers.ts"] },
       { "collectionGroup": "counters", "fieldPath": "expiresAt", "writers": ["functions/src/d1/dailyLimit.ts"] },
-      { "collectionGroup": "whatsapp_outbound_keys", "fieldPath": "expiresAt", "writers": ["services/d2-1/outboundKeys.ts"] }
+      { "collectionGroup": "whatsapp_outbound_keys", "fieldPath": "expiresAt", "writers": ["services/d2-1/outboundKeys.ts"] },
+      { "collectionGroup": "upload_sessions", "fieldPath": "expiresAt", "writers": ["functions/src/d1/uploadSessionRecord.ts"] }
     ],
     "ttlExemptions": [
       { "path": "functions/src/p5/mfa.ts", "reason": "MFA approval validity; retention is F42" },
       { "path": "functions/src/p2/enqueue.ts", "reason": "Nested lease field, not a collection TTL" },
       { "path": "functions/src/p2/sweeper.ts", "reason": "Nested lease field, not a collection TTL" },
       { "path": "functions/src/p2/worker.ts", "reason": "Nested lease field, not a collection TTL" },
-      { "path": "platform/http/durableIdempotency.ts", "reason": "Next durable idempotency; epoch fields not Firestore TTL" }
+      { "path": "platform/http/durableIdempotency.ts", "reason": "Next durable idempotency; epoch fields not Firestore TTL" },
+      { "path": "functions/src/d1/bulkUploadSweep.ts", "reason": "Reads expiresAtMs to delete upload_sessions rows. The TTL field expiresAt is written by services/d1-6/bulkUpload.ts." }
     ]
   },
   "alerts": {

@@ -39,16 +39,27 @@ const documentVaultSchema = z.object({
   r2LockMinAgeSeconds: z.number().int().positive(),
 })
 
+const uploadStagingLifecycleSchema = z.object({
+  id: z.string().min(1),
+  prefix: z.literal("upload-staging/"),
+  expirationDays: z.literal(1),
+  status: z.literal("Enabled"),
+  objectLock: z.literal("none"),
+  note: z.string().min(1),
+})
+
 export type BackupPolicy = z.infer<typeof policySchema>
 export type PostgresBackupConfig = z.infer<typeof postgresBackupSchema>
 export type FirestoreBackupConfig = z.infer<typeof firestoreBackupSchema>
 export type DocumentVaultConfig = z.infer<typeof documentVaultSchema>
+export type UploadStagingLifecycleConfig = z.infer<typeof uploadStagingLifecycleSchema>
 
 export type InfraBackupConfig = {
   policy: BackupPolicy
   postgres: PostgresBackupConfig
   firestore: FirestoreBackupConfig
   documentVault: DocumentVaultConfig
+  uploadStagingLifecycle: UploadStagingLifecycleConfig
 }
 
 export function loadInfraConfig(root: string): InfraBackupConfig {
@@ -59,5 +70,6 @@ export function loadInfraConfig(root: string): InfraBackupConfig {
     postgres: postgresBackupSchema.parse(read("postgres-backup.json")),
     firestore: firestoreBackupSchema.parse(read("firestore-backup.json")),
     documentVault: documentVaultSchema.parse(read("document-vault.json")),
+    uploadStagingLifecycle: uploadStagingLifecycleSchema.parse(read("upload-staging-lifecycle.json")),
   }
 }

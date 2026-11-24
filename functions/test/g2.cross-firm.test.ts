@@ -84,6 +84,7 @@ const NOT_TENANT_ENDPOINTS: Record<string, string> = {
   auditOutboxReconciler: "scheduler, no caller; publishes each staged Next audit-outbox entry into its own firm's audit log, a row of another firm to the entry firm's dead letter (audit F11)",
   retentionApplyTick: "scheduler, no caller; enqueues retention.apply for every firm, which ages out only its own firm's rows under the policy (audit F42)",
   retentionDeletionWatch: "scheduler, no caller; alerts on overdue deletion requests with ids and counts, writes only each request's alertedAt (audit F42)",
+  bulkUploadStagingSweep: "scheduler, no caller; deletes upload-staging objects by their own age and expired upload_sessions rows, and only when SIKANDER_FLAG_D1_BULK_UPLOAD is exactly true (W1-L91)",
   p1TraceExportReconciler: "scheduler, no caller; re-exports each pending P1 decision record's metadata-only trace by its own id and records the outcome on that record only (audit F34)",
   alertEscalator: "scheduler, no caller; escalates each open alert within its own firm (its partners, its founding partner) and delivers pages (audit F43)",
   alertChecker: "scheduler, no caller; derives queue, saga and AI-spend alerts from each firm's own rows, one alert per firm (audit F43)",

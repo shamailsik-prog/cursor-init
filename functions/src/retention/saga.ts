@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { FieldPath, FieldValue, Timestamp, type DocumentData, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
 import vaultConfig from "@/infra/backup/document-vault.json"
+import { UPLOAD_SESSIONS_COLLECTION, deleteStagingObjectsByPrefix, listStagingObjects, stagingMatterPrefix } from "@/platform/documents/documentObjectStore"
 import { adminDb } from "../admin"
 import { reachCourtOpsDeletion } from "./courtOpsDeletionReach"
 import { REGISTRY_SCOPE, bumpRegistryVersion } from "../d1/registryVersion"
@@ -520,6 +521,55 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
   try {
     for (let i = 0; i < stores.length; i += 1) {
       const { key, store } = stores[i]
+      if (store.id === "objects:upload-staging" && (req.plan[key] === "lock" || req.plan[key] === "purge")) {
+        await step(ctx as JobContext<unknown>, `staging-hold-${i}`, async (tx) => {
+          await assertNoHold(tx, firmId, req.matterId)
+        })
+        const prefix = stagingMatterPrefix(firmId, req.matterId)
+        const progressRef = ackRefOf(ctx.payload.requestId, key)
+        const prior = await progressRef.get()
+        const listedAlready = prior.get("stagingListed") === true && typeof prior.get("count") === "number"
+        const removed = listedAlready ? (prior.get("count") as number) : (await listStagingObjects(prefix)).length
+        if (!listedAlready) {
+          await progressRef.set(
+            {
+              firmId,
+              requestId: ctx.payload.requestId,
+              matterId: req.matterId,
+              acknowledged: false,
+              storeId: store.id,
+              storeKey: key,
+              stagingListed: true,
+              count: removed,
+              chunks: removed > 0 ? [sha256([`${firmId}/${req.matterId}`])] : [],
+            },
+            { merge: true }
+          )
+        }
+        await step(ctx as JobContext<unknown>, `staging-record-${i}`, async (tx) => {
+          await assertNoHold(tx, firmId, req.matterId)
+          await deleteStagingObjectsByPrefix(prefix)
+          const rows = await tx.get(
+            adminDb().collection(UPLOAD_SESSIONS_COLLECTION).where("firmId", "==", firmId).where("matterId", "==", req.matterId)
+          )
+          rows.docs.forEach((doc) => tx.delete(doc.ref))
+          const progressRef = ackRefOf(ctx.payload.requestId, key)
+          tx.set(
+            progressRef,
+            {
+              firmId,
+              requestId: ctx.payload.requestId,
+              matterId: req.matterId,
+              acknowledged: false,
+              storeId: store.id,
+              storeKey: key,
+              count: removed,
+              chunks: removed > 0 ? [sha256([`${firmId}/${req.matterId}`])] : [],
+            },
+            { merge: true }
+          )
+        })
+      }
       if (req.plan[key] !== "purge" && req.plan[key] !== "anonymise") continue
       // FA-F42-R1-002: before any document row goes, the legacy outputs that name the matter only through them.
       if (key === DOCUMENTS_KEY && req.plan[key] === "purge") {
@@ -1033,6 +1083,15 @@ async function acknowledge(
           count: p.count,
           idsSha256: p.count > 0 ? sha256(p.chunks) : null,
           detail: { chunks: p.chunks.length },
+        })
+      } else if (store.id === "objects:upload-staging" && treatment === "lock") {
+        acks.push({
+          key,
+          storeId: store.id,
+          outcome: "purged",
+          count: p.count,
+          idsSha256: p.count > 0 ? sha256(p.chunks) : null,
+          detail: { prefix: "upload-staging/", matterScoped: true },
         })
       } else if (treatment === "lock") {
         const lockUntil = progress[i].get("lockUntil")

@@ -318,6 +318,8 @@ service cloud.firestore {
     match /whatsapp_outbound_keys/{id} { allow read, write: if false; }
     match /idempotency_effects/{id} { allow read, write: if false; }
     match /rate_limits/{id} { allow read, write: if false; }
+    // W1-L91: upload session rows. Clients never read them. expiresAt is the TTL.
+    match /upload_sessions/{id} { allow read, write: if false; }
     match /transliteration_map/{id} { allow read, write: if false; }
     // Audit F37: the firm's packed conflict name index (names of every classification); read only by the screen.
     match /conflict_name_index/{id} { allow read, write: if false; }

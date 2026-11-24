@@ -147,6 +147,9 @@ REEXPORT_RE = re.compile(r"export\s*\{([^}]*)\}")
 OBJECT_SEGMENT_RES = (
     re.compile(r"\$\{[^}]*\b\w*[fF]irm[iI]d\b[^}]*\}/([a-z][a-z0-9_-]*)/"),
     re.compile(r"\b\w*[fF]irm[iI]d\b\s*\+\s*[\"'`]/([a-z][a-z0-9_-]*)/"),
+    # A constant key prefix in front of the firm, `upload-staging/${firmId}/`, which a bucket
+    # lifecycle rule can match. The capture is the literal prefix, not an arbitrary segment.
+    re.compile(r"(?<![A-Za-z0-9_-])(upload-staging)/\$\{[^}]*\b\w*[fF]irm[iI]d\b[^}]*\}/"),
 )
 # A rules `match` path: every literal segment of it is a collection (nested and one-line blocks alike).
 RULES_PATH_RE = re.compile(r"\bmatch\s+((?:/(?:[A-Za-z0-9_-]+|\{[^}/]+\}))+)\s*\{")
