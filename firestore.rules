@@ -345,18 +345,17 @@ service cloud.firestore {
     // Audit F34: the P1 decision records (one per attempt: template, prompt hash, model revision, anchors, verdicts,
     // phases, cost, export state; no text) are written and read by Cloud Functions and the operator CLI only.
     match /p1_decisions/{id} { allow read, write: if false; }
+    // W1-Q08B (CUST-273-001, CUST-273-002): evidence and custody are written by Cloud Functions only.
+    // A client create can forge a back-dated event, pre-create the next seq, or plant a register row, and
+    // the old update rule let that client rewrite lastHash and eventCount. Reads stay with a matter member
+    // who is cleared for the row. Custody reads require the same clearance: the note is the row.
     match /evidence_items/{id} {
       allow read: if sameFirm() && memberReader(resource.data.matterId) && cleared(resource.data.classification);
-      allow create: if sameFirmNew() && isAuthor() && clearedNew() && isMember(request.resource.data.matterId);
-      allow update: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && firmIdUnchanged() && monotonic()
-        && cleared(resource.data.classification) && clearedNew()
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'firmId']);
-      allow delete: if false;
+      allow create, update, delete: if false;
     }
     match /custody_events/{id} {
-      allow read: if sameFirm() && memberReader(resource.data.matterId);
-      allow create: if sameFirmNew() && isAuthor() && clearedNew() && isMember(request.resource.data.matterId);
-      allow update, delete: if false; // append-only
+      allow read: if sameFirm() && memberReader(resource.data.matterId) && cleared(resource.data.classification);
+      allow create, update, delete: if false;
     }
     match /propositions/{id} {
       allow read: if sameFirm() && memberReader(resource.data.matterId);
