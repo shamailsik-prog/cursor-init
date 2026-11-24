@@ -424,7 +424,9 @@ class RuntimeCheck(unittest.TestCase):
 
 # Wave-1 stores the deletion saga will read. Two already exist on 7ae1a33f with this profile and key
 # (evidence_items, custody_events); the gate forbids a duplicate, and the file lock forbids editing them.
-# The other six are pending on F42 until their writers land. `validatePolicy(policy, inventory())` in
+# Five stay pending on F42 until their writers land. draft_autosave_points landed with W1-L51, so its
+# pending flag is gone (ME I1): a pending flag on a store the tree now names is a note, and the pin
+# must not keep demanding it. `validatePolicy(policy, inventory())` in
 # functions/test/f42-retention.units.test.ts loads this same file; this pin is what makes that call see them.
 WAVE1_NEW = (
     {
@@ -441,14 +443,6 @@ WAVE1_NEW = (
         "id": "firestore:intake_messages",
         "kind": "firestore",
         "name": "intake_messages",
-        "profile": "matter_content",
-        "key": {"kind": "field", "field": "matterId"},
-        "pending": "F42",
-    },
-    {
-        "id": "firestore:draft_autosave_points",
-        "kind": "firestore",
-        "name": "draft_autosave_points",
         "profile": "matter_content",
         "key": {"kind": "field", "field": "matterId"},
         "pending": "F42",
@@ -479,6 +473,17 @@ WAVE1_NEW = (
         "pending": "F42",
     },
 )
+# Landed by W1-L51. The matter-deletion key stays matterId. A null matterId is not that query;
+# W2-DEL finds it by firmId plus createdBy (functions/src/d4/autosave.README.md).
+WAVE1_LANDED = (
+    {
+        "id": "firestore:draft_autosave_points",
+        "kind": "firestore",
+        "name": "draft_autosave_points",
+        "profile": "matter_content",
+        "key": {"kind": "field", "field": "matterId"},
+    },
+)
 WAVE1_ALREADY = ("firestore:evidence_items", "firestore:custody_events")
 
 
@@ -489,12 +494,14 @@ class Wave1Stores(unittest.TestCase):
         inventory = gate.load_json(ROOT, gate.INVENTORY)
         by_id = {s["id"]: s for s in inventory["stores"]}
         self.assertEqual(len(by_id), len(inventory["stores"]), "duplicate store id")
-        for expected in WAVE1_NEW:
+        for expected in (*WAVE1_NEW, *WAVE1_LANDED):
             store = by_id.get(expected["id"])
             self.assertIsNotNone(store, expected["id"])
             for field, value in expected.items():
                 self.assertEqual(store.get(field), value, expected["id"])
             self.assertNotIn(store["name"], {s["name"] for s in inventory["stores"] if s["id"] != store["id"]})
+        for expected in WAVE1_LANDED:
+            self.assertNotIn("pending", by_id[expected["id"]], expected["id"])
         for sid in WAVE1_ALREADY:
             store = by_id[sid]
             self.assertEqual(store["profile"], "matter_content", sid)

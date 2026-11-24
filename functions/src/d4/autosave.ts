@@ -1,5 +1,6 @@
 import { FieldPath, Timestamp, type DocumentData, type DocumentReference, type Query, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
+import { decide } from "@/platform/p5/permissionDecision"
 import { DraftCharsetError, requireSupportedDraftBody } from "@/services/d4-2/draftCharset"
 import { adminDb } from "../admin"
 import { isContentionAbort } from "../d1/contention"
@@ -7,7 +8,7 @@ import { decodeCursor, encodeCursor, type Page } from "../d1/pagination"
 import { HttpError } from "../http/errors"
 import type { Caller } from "../p5/auth"
 import { isKnownClassification, rankOf } from "../p5/classification"
-import type { CallAudit } from "../p5/common"
+import { isSafeDocId, type CallAudit } from "../p5/common"
 import { loadDraftForCaller, MAX_BODY_BYTES, raisedLabel, requireStillPermitted, sha256Hex, storeVersion, type DraftView } from "./drafts"
 
 /**
@@ -23,6 +24,13 @@ export const D4_AUTOSAVE_FLAG = "D4_AUTOSAVE"
 
 /** Newest points kept per draft. Older points of that draft are removed unless a restore referenced them. */
 export const AUTOSAVE_POINT_CAP = 200
+
+/**
+ * Owner key on every point and on the `{draftId}~head` cursor (L5). W2-DEL finds a pre-matter row,
+ * whose `matterId` is null, with `firmId` plus this field. A matter deletion does not, because the
+ * saga queries `firmId` and `matterId`.
+ */
+export const AUTOSAVE_OWNER_KEY = "createdBy"
 
 const POINT_SEQ_WIDTH = 10
 
@@ -60,8 +68,38 @@ async function loadEditableDraft(caller: Caller, draftId: string): Promise<{ ref
     return await loadDraftForCaller(caller, draftId, "draft.edit")
   } catch (err) {
     if (err instanceof HttpError && err.status === 403 && err.code === "not_member") throw notFound()
+    if (err instanceof HttpError && err.status === 404 && err.code === "not_found") {
+      const preMatter = await loadPreMatterDraft(caller, draftId)
+      if (preMatter) return preMatter
+    }
     throw err
   }
+}
+
+/** The draft owner's uid. Absent when the draft has no owner string. */
+function ownerUid(draft: DocumentData): string | null {
+  return typeof draft.createdBy === "string" && draft.createdBy !== "" ? draft.createdBy : null
+}
+
+/**
+ * A draft with `matterId: null` has no matter membership to check. The owner (`createdBy`) is the
+ * only caller who may see it. The role and clearance answer is still `draft.edit` (`decide`), against
+ * the draft's own label, because there is no matter row to name. Anyone else gets 404.
+ */
+async function loadPreMatterDraft(caller: Caller, draftId: string): Promise<{ ref: DocumentReference; draft: DocumentData } | null> {
+  if (!isSafeDocId(draftId)) return null
+  const ref = adminDb().collection("drafts").doc(draftId)
+  const draft = (await ref.get()).data()
+  if (!draft || draft.firmId !== caller.firmId || draft.matterId !== null) return null
+  if (!cleared(draft.classification, caller.clearanceLevel) || ownerUid(draft) !== caller.uid) throw notFound()
+  assertDraftEditRole(caller, draft.classification)
+  return { ref, draft }
+}
+
+/** `draft.edit`'s role and clearance, with no matter. A denial uses the same code the edit path maps. */
+function assertDraftEditRole(caller: Caller, classification: unknown): void {
+  const decision = decide(caller, "draft.edit", { firmId: caller.firmId, classification: classification as Classification }, true)
+  if (!decision.allow) throw new HttpError(403, decision.reason === "partner-only" ? "partner_only" : decision.reason.replaceAll("-", "_"))
 }
 
 async function stillPermitted(tx: Transaction, caller: Caller, matterId: string): Promise<DocumentData> {
@@ -211,10 +249,19 @@ export async function autosaveDraft(
       async (tx) => {
         const stamp = Timestamp.now()
         const draft = (await tx.get(ref)).data()
-        if (!draft || draft.firmId !== caller.firmId || typeof draft.matterId !== "string" || !cleared(draft.classification, caller.clearanceLevel)) throw notFound()
-        const matter = await stillPermitted(tx, caller, draft.matterId)
+        if (!draft || draft.firmId !== caller.firmId || !cleared(draft.classification, caller.clearanceLevel)) throw notFound()
+        const matterId = draft.matterId
+        let matter: DocumentData | null = null
+        if (matterId === null) {
+          if (ownerUid(draft) !== caller.uid) throw notFound()
+          assertDraftEditRole(caller, draft.classification)
+        } else if (typeof matterId !== "string") {
+          throw notFound()
+        } else {
+          matter = await stillPermitted(tx, caller, matterId)
+        }
         if (typeof draft.currentVersion !== "number" || base > draft.currentVersion) throw new HttpError(409, "draft_changed")
-        const classification = pointClassification(caller, draft, matter)
+        const classification = matter ? pointClassification(caller, draft, matter) : (draft.classification as Classification)
         const head = readHead((await tx.get(headRef(draftId))).data(), caller, draftId)
         if (head && seq <= head.lastClientSeq) {
           await audit.stage(tx, "allow", "ok")
@@ -251,11 +298,14 @@ export async function autosaveDraft(
         }
 
         await audit.stage(tx, "allow", "ok")
+        const owner = ownerUid(draft) ?? caller.uid
+        const storedMatterId = matterId === null ? null : matterId
         const headUpdate = {
           record: "head",
           firmId: caller.firmId,
+          [AUTOSAVE_OWNER_KEY]: owner,
           draftId,
-          matterId: draft.matterId,
+          matterId: storedMatterId,
           lastPointSeq: pointSeq,
           lastClientSeq: seq,
           lastBodyHash: bodyHash,
@@ -266,7 +316,8 @@ export async function autosaveDraft(
         else tx.create(headRef(draftId), headUpdate)
         tx.create(autosavePoints().doc(pointDocId(draftId, pointSeq)), {
           firmId: caller.firmId,
-          matterId: draft.matterId,
+          [AUTOSAVE_OWNER_KEY]: owner,
+          matterId: storedMatterId,
           draftId,
           pointSeq,
           clientSeq: seq,
@@ -359,6 +410,7 @@ export async function restorePoint(caller: Caller, audit: CallAudit, draftId: st
   audit.target = `drafts/${draftId}`
   const seq = parsePointSeq(pointSeq)
   const { ref, draft } = await loadEditableDraft(caller, draftId)
+  if (draft.matterId === null) throw new HttpError(409, "matter_required")
   refuseApprovedOrLocked(draft)
   if (typeof draft.currentVersion !== "number") throw new HttpError(409, "draft_changed")
   const pointRef = autosavePoints().doc(pointDocId(draftId, seq))

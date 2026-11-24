@@ -5,6 +5,7 @@ import type { Classification } from "@/platform/p1/types"
 import { CLASSIFICATION_RANKS } from "@/platform/p1/types"
 import { adminDb } from "../src/admin"
 import {
+  AUTOSAVE_OWNER_KEY,
   AUTOSAVE_POINT_CAP,
   autosaveDraft,
   getRecoveryTimeline,
@@ -487,5 +488,57 @@ describe.skipIf(!EMULATORS)("L5.1 autosave points", () => {
     expectErr(await refusal(restore(partner, draft.draftId, 9)), 404, "point_not_found")
     expect(await versionDoc(draft.draftId, 2)).toBeUndefined()
     expect((await draftDoc(draft.draftId))?.currentVersion).toBe(1)
+  })
+
+  it("puts firmId on every row, and finds a null matterId by firmId plus the owner key", async () => {
+    enable()
+    const { firmId, matterId, partner } = await newMatter()
+    const draft = await createDraft(partner, matterId)
+    expect((await autosave(partner, draft.draftId, "keyed", 1, 1)).written).toBe(true)
+    for (const row of await pointsOf(draft.draftId)) {
+      expect(row.data.firmId).toBe(firmId)
+      expect(row.data[AUTOSAVE_OWNER_KEY]).toBe(partner.uid)
+    }
+    const head = (await adminDb().collection("draft_autosave_points").doc(`${draft.draftId}~head`).get()).data()
+    expect(head?.firmId).toBe(firmId)
+    expect(head?.[AUTOSAVE_OWNER_KEY]).toBe(partner.uid)
+    expect(head?.matterId).toBe(matterId)
+
+    const owner = caller(firmId, "partner")
+    const preId = uniq("draft")
+    await adminDb().collection("drafts").doc(preId).set({
+      firmId,
+      matterId: null,
+      createdBy: owner.uid,
+      classification: "internal",
+      currentVersion: 1,
+      title: TITLE,
+      status: "draft",
+      locked: false,
+      documentTypeId: TYPE,
+    })
+    expectErr(await refusal(autosave(caller(uniq("firm"), "partner"), preId, "no", 1, 1)), 404, "not_found")
+    expectErr(await refusal(autosave(caller(firmId, "partner"), preId, "no", 1, 1)), 404, "not_found")
+    const intern: Caller = { ...owner, role: "intern" }
+    expectErr(await refusal(autosave(intern, preId, "no", 1, 1)), 403, "intern_channel_denied")
+
+    expect((await autosave(owner, preId, "pre-matter text", 1, 1)).written).toBe(true)
+    const preRows = await pointsOf(preId)
+    expect(preRows).toHaveLength(1)
+    expect(preRows[0].data.firmId).toBe(firmId)
+    expect(preRows[0].data[AUTOSAVE_OWNER_KEY]).toBe(owner.uid)
+    expect(preRows[0].data.matterId).toBeNull()
+    const preHead = (await adminDb().collection("draft_autosave_points").doc(`${preId}~head`).get()).data()
+    expect(preHead).toMatchObject({ firmId, [AUTOSAVE_OWNER_KEY]: owner.uid, matterId: null, draftId: preId })
+
+    const byOwner = await adminDb().collection("draft_autosave_points").where("firmId", "==", firmId).where(AUTOSAVE_OWNER_KEY, "==", owner.uid).get()
+    const preMatter = byOwner.docs.filter((d) => d.data().matterId === null)
+    expect(preMatter.map((d) => d.get("draftId")).sort()).toEqual([preId, preId])
+    const byMatter = await adminDb().collection("draft_autosave_points").where("firmId", "==", firmId).where("matterId", "==", matterId).get()
+    expect(byMatter.docs.some((d) => d.get("draftId") === preId)).toBe(false)
+
+    expect(await timeline(owner, preId)).toMatchObject({ items: [{ pointSeq: 1 }], nextCursor: null })
+    expectErr(await refusal(restore(owner, preId, 1)), 409, "matter_required")
+    expect(await versionDoc(preId, 1)).toBeUndefined()
   })
 })
