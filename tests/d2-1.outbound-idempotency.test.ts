@@ -10,7 +10,9 @@ import {
   createFirestoreOutboundKeyStore,
   createMemoryOutboundKeyStore,
   firestoreOutboundKeyWrite,
+  openWhatsAppOutboundKeyStore,
   outboundKeyHash,
+  releaseWhatsAppOutboundKey,
   sendWhatsAppOnce,
   sweepExpiredWhatsAppOutboundKeys,
   WHATSAPP_OUTBOUND_KEYS_COLLECTION,
@@ -22,6 +24,7 @@ import {
   handleWhatsAppWebhook,
   resetD2WhatsAppWebhookForTests,
   WHATSAPP_DEDUPE_TTL_MS,
+  WHATSAPP_PROCESSING_TIMEOUT_MS,
   type WebhookDeps,
 } from "@/services/d2-1/webhook"
 
@@ -93,7 +96,8 @@ describe("R3-L4 durable outbound idempotency", () => {
     const docs = await keys.listAll()
     expect(docs).toHaveLength(1)
     expect(docs[0]?.keyHash).toBe(docs[0]?.id)
-    expect(Object.keys(docs[0] ?? {}).sort()).toEqual(["createdAt", "expiresAt", "firmId", "id", "keyHash"])
+    expect(Object.keys(docs[0] ?? {}).sort()).toEqual(["createdAt", "expiresAt", "firmId", "id", "keyHash", "leaseUntil", "state"])
+    expect(docs[0]?.state).toBe("sent")
     expect(docs[0]?.firmId).toBe("unbound")
     expect(Number.isFinite(docs[0]?.expiresAt)).toBe(true)
     expect(JSON.stringify(docs[0])).not.toContain("not linked")
@@ -196,10 +200,12 @@ describe("R3-L4 durable outbound idempotency", () => {
           firmId: "firmA",
           createdAt: 1,
           expiresAt: 2,
+          state: "pending",
+          leaseUntil: 3,
           text: "secret",
         } as OutboundKeyDoc)
       })
-    ).rejects.toThrow(/keyHash, firmId, createdAt and expiresAt/)
+    ).rejects.toThrow(/state and leaseUntil/)
   })
 
   it("refuses a write that omits expiresAt or firmId, and every accepted row carries both", async () => {
@@ -222,9 +228,25 @@ describe("R3-L4 durable outbound idempotency", () => {
         } as OutboundKeyDoc)
       })
     ).rejects.toThrow(/firmId/)
-    expect(firestoreOutboundKeyWrite({ keyHash: "h", firmId: "firmA", createdAt: 10, expiresAt: 15 }).expiresAt.toMillis()).toBe(15)
+    expect(
+      firestoreOutboundKeyWrite({
+        keyHash: "h",
+        firmId: "firmA",
+        createdAt: 10,
+        expiresAt: 15,
+        state: "pending",
+        leaseUntil: 20,
+      }).expiresAt.toMillis()
+    ).toBe(15)
     expect(() =>
-      firestoreOutboundKeyWrite({ keyHash: "h", firmId: "", createdAt: 10, expiresAt: 15 })
+      firestoreOutboundKeyWrite({
+        keyHash: "h",
+        firmId: "",
+        createdAt: 10,
+        expiresAt: 15,
+        state: "pending",
+        leaseUntil: 20,
+      })
     ).toThrow(/malformed/)
     const claim = await claimWhatsAppOutboundKey(keys, { firmId: "firmA", idempotencyKey: "row", now: 10, ttlMs: 5 })
     expect(claim.status).toBe("claimed")
@@ -371,18 +393,152 @@ describe("R3-L4 durable outbound idempotency", () => {
     expect(claim.status).toBe("claimed")
     expect(createdIn).toEqual([WHATSAPP_OUTBOUND_KEYS_COLLECTION])
     const row = [...docs.values()][0]
-    expect(row && Object.keys(row).sort()).toEqual(["createdAt", "expiresAt", "firmId", "keyHash"])
+    expect(row && Object.keys(row).sort()).toEqual(["createdAt", "expiresAt", "firmId", "keyHash", "leaseUntil", "state"])
     expect(row?.firmId).toBe("firmA")
     expect(row?.expiresAt).toBeInstanceOf(Timestamp)
     expect(row?.expiresAt.toMillis()).toBe(15)
     expect(JSON.stringify(row)).not.toContain("hello")
     const again = await claimWhatsAppOutboundKey(store, { firmId: "firmA", idempotencyKey: "k", now: 11, ttlMs: 5 })
-    expect(again.status).toBe("duplicate")
+    expect(again.status).toBe("inFlight")
     expect(docs.size).toBe(1)
     const expired = await store.listExpired(20, 1)
     expect(expired).toHaveLength(1)
     expect(expired[0]?.firmId).toBe("firmA")
     expect(bounds[0]).toBeInstanceOf(Timestamp)
     expect((bounds[0] as Timestamp).toMillis()).toBe(20)
+  })
+
+  it("a pending duplicate does not call onAccepted, and a stale pending lease can be taken over", async () => {
+    const keys = createMemoryOutboundKeyStore()
+    let accepted = 0
+    let releaseHold: () => void = () => {}
+    const hold = new Promise<void>((resolve) => {
+      releaseHold = resolve
+    })
+    const transport: WhatsAppTransport = {
+      async send(_message, options) {
+        await hold
+        options?.onAccepted?.()
+        return { delivered: false, transport: "stub" }
+      },
+    }
+    const message = { toUserId: "unbound", text: "not linked" }
+    const first = sendWhatsAppOnce(transport, message, {
+      firmId: "firmA",
+      idempotencyKey: "held",
+      keys,
+      now: 1_000,
+      idempotencyTtlMs: 60_000,
+      leaseMs: 5_000,
+      onAccepted: () => {
+        accepted += 1
+      },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const inflight = await sendWhatsAppOnce(transport, message, {
+      firmId: "firmA",
+      idempotencyKey: "held",
+      keys,
+      now: 2_000,
+      idempotencyTtlMs: 60_000,
+      leaseMs: 5_000,
+      onAccepted: () => {
+        accepted += 1
+      },
+    })
+    expect(inflight.status).toBe("inFlight")
+    expect(accepted).toBe(0)
+    const blocked = await claimWhatsAppOutboundKey(keys, {
+      firmId: "firmA",
+      idempotencyKey: "held",
+      now: 2_000,
+      ttlMs: 60_000,
+      leaseMs: 5_000,
+    })
+    expect(blocked.status).toBe("inFlight")
+    const stolen = await claimWhatsAppOutboundKey(keys, {
+      firmId: "firmA",
+      idempotencyKey: "held",
+      now: 1_000 + 5_000,
+      ttlMs: 60_000,
+      leaseMs: 5_000,
+    })
+    expect(stolen.status).toBe("claimed")
+    if (stolen.status !== "claimed") return
+    await releaseWhatsAppOutboundKey(keys, { firmId: "firmA", idempotencyKey: "held", createdAt: 1_000 })
+    const left = await keys.listAll()
+    expect(left).toHaveLength(1)
+    expect(left[0]?.createdAt).toBe(stolen.createdAt)
+    expect(left[0]?.state).toBe("pending")
+    expect(left[0]?.firmId).toBe("firmA")
+    expect(Number.isFinite(left[0]?.expiresAt)).toBe(true)
+    releaseHold()
+    await first.catch(() => undefined)
+  })
+
+  it("503, then an in-flight retry, then one real send and no lost message", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const realSetTimeout = globalThis.setTimeout
+    vi.useFakeTimers()
+    try {
+      const sent: OutboundWhatsApp[] = []
+      let calls = 0
+      let finishFirst: (err: Error) => void = () => {}
+      const gate = new Promise<void>((_resolve, reject) => {
+        finishFirst = reject
+      })
+      const transport: WhatsAppTransport = {
+        async send(message, options) {
+          calls += 1
+          if (calls === 1) await gate
+          if (options?.signal?.aborted) throw new Error("aborted")
+          sent.push(message)
+          options?.onAccepted?.()
+          return { delivered: false, transport: "stub" }
+        },
+      }
+      const keys = createMemoryOutboundKeyStore()
+      const payload = { messageId: "wamid.pending", userId: "clerk1", text: "/help" }
+      const started = handleWhatsAppWebhook(signed(payload), deps(transport, { outboundKeys: keys, now: NOW }))
+      for (let i = 0; i < 20 && calls !== 1; i += 1) {
+        await new Promise((resolve) => realSetTimeout(resolve, 0))
+      }
+      expect(calls).toBe(1)
+      resetD2WhatsAppWebhookForTests()
+      vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+      const inflight = await handleWhatsAppWebhook(signed(payload), deps(transport, { outboundKeys: keys, now: NOW }))
+      expect(inflight.status).toBe(503)
+      expect(inflight.headers.get("Retry-After")).toMatch(/^[1-9][0-9]*$/)
+      expect(await inflight.json()).toEqual({ ok: false })
+      expect(calls).toBe(1)
+      expect(sent).toHaveLength(0)
+      await vi.advanceTimersByTimeAsync(WHATSAPP_PROCESSING_TIMEOUT_MS)
+      const first = await started
+      expect(first.status).toBe(503)
+      for (let i = 0; i < 10; i += 1) await new Promise((resolve) => realSetTimeout(resolve, 0))
+
+      const delivered = await handleWhatsAppWebhook(signed(payload), deps(transport, { outboundKeys: keys, now: NOW }))
+      expect(delivered.status).toBe(200)
+      expect(await delivered.json()).toEqual({ ok: false })
+      expect(sent).toHaveLength(1)
+      expect(sent[0]?.text).toBe("not linked")
+      expect(calls).toBe(2)
+
+      resetD2WhatsAppWebhookForTests()
+      vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+      const again = await handleWhatsAppWebhook(signed(payload), deps(transport, { outboundKeys: keys, now: NOW }))
+      expect(again.status).toBe(200)
+      expect(sent).toHaveLength(1)
+      expect(calls).toBe(2)
+      finishFirst(new Error("aborted"))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("refuses a memory outbound-key store when NODE_ENV is production", async () => {
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "memory")
+    await expect(openWhatsAppOutboundKeyStore()).rejects.toThrow(/memory/)
   })
 })
