@@ -9,7 +9,7 @@
  * requires a partner who is not the proposer. Each committed write is audited
  * in process. There is no new table and no new collection.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs"
+import { closeSync, constants, openSync, readdirSync, readFileSync } from "node:fs"
 import { join, relative, sep } from "node:path"
 import type { PoolClient } from "pg"
 import {
@@ -218,15 +218,38 @@ export function masterWriteViolations(files: readonly { path: string; source: st
   return files.filter((file) => isSecondWriter(file.path, file.source)).map((file) => file.path)
 }
 
+function readSourceNoFollow(absolute: string): string | undefined {
+  let fd: number
+  try {
+    fd = openSync(absolute, constants.O_RDONLY | constants.O_NOFOLLOW)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === "ELOOP" || code === "EINVAL" || code === "ENOENT" || code === "ENOTDIR" || code === "EPERM") return undefined
+    throw error
+  }
+  try {
+    return readFileSync(fd, "utf8")
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === "EISDIR") return undefined
+    throw error
+  } finally {
+    closeSync(fd)
+  }
+}
+
 function walkTs(dir: string, root: string, out: { path: string; source: string }[]): void {
-  for (const name of readdirSync(dir)) {
-    const absolute = join(dir, name)
-    if (statSync(absolute).isDirectory()) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const absolute = join(dir, entry.name)
+    if (entry.isDirectory()) {
       walkTs(absolute, root, out)
       continue
     }
-    if (!name.endsWith(".ts") && !name.endsWith(".tsx")) continue
-    out.push({ path: relative(root, absolute).split(sep).join("/"), source: readFileSync(absolute, "utf8") })
+    if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) continue
+    if (!entry.isFile() && !entry.isSymbolicLink()) continue
+    const source = readSourceNoFollow(absolute)
+    if (source === undefined) continue
+    out.push({ path: relative(root, absolute).split(sep).join("/"), source })
   }
 }
 

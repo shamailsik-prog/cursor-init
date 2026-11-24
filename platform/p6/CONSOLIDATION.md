@@ -14,7 +14,7 @@ F41 boundary: `docs/audit/2026-10-13-forensic-audit.md` L839–L853. Quarantine 
 
 ## Decisions
 
-- `platform/p6/masterWrite.ts` `writeMaster` (L126) is the only master write. `executeMasterTableWrite` (L150) holds the `master_versions` and `master_knowledge` statements. `scanP6MasterWriters` (L234) fails any other file under `platform/p6` that writes those tables, calls `.commitVersion(`, calls `executeMasterTableWrite` (except the store delegate), or names a master collection.
+- `platform/p6/masterWrite.ts` `writeMaster` (L126) is the only master write. `executeMasterTableWrite` (L150) holds the `master_versions` and `master_knowledge` statements. `scanP6MasterWriters` (L257) fails any other file under `platform/p6` that writes those tables, calls `.commitVersion(`, calls `executeMasterTableWrite` (except the store delegate), or names a master collection.
 - `change_proposals` inserts and updates stay in `platform/p6/masterStore.ts`. A proposal is not a master version. The repo-wide guard still refuses those statements outside P6.
 - The in-memory `commitVersion` (masterStore.ts L506) and the Postgres session `commitVersion` (L767, L878) are the session the canonical writer calls (masterWrite.ts L134). They are not a second decision.
 - `applyChange` (proposeChange.ts L223, delegate L273) and `rollbackMaster` (L298, delegate L314) are the old entry points. `writeVersion` (masterStore.ts L921) delegates at L923.

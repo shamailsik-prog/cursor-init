@@ -3,7 +3,9 @@
  * These tests are red on 8271124d: the canonical module does not exist, and the
  * table statements still live in platform/p6/masterStore.ts.
  */
-import { readFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { InMemoryMasterStore, type CommitVersionInput, type MasterStore, type PersistedProposal } from "@/platform/p6/masterStore"
 import { applyChange, approveProposal, proposeChange, rollbackMaster, type ApprovalActor } from "@/platform/p6/proposeChange"
@@ -245,5 +247,30 @@ describe("P6 consolidation — one master writer", () => {
       ]),
     ).toEqual([])
     expect(masterWriteViolations([{ path: "platform/p6/note.ts", source: "export const label = 'change_proposals'\n" }])).toEqual([])
+  })
+
+  it("reads a pre-existing file once and does not follow a symlink that replaces a path", () => {
+    const root = mkdtempSync(join(tmpdir(), "p6-scan-"))
+    const dir = join(root, "platform", "p6")
+    const hidden = join(root, "hidden")
+    mkdirSync(dir, { recursive: true })
+    mkdirSync(hidden)
+    const preexisting = join(dir, "already.ts")
+    const body = "export const q = `INSERT INTO master_knowledge (firm_id) VALUES ('kept')`\n"
+    writeFileSync(preexisting, body)
+    const outside = join(root, "outside.ts")
+    writeFileSync(outside, "export const q = `INSERT INTO master_versions (version_id) VALUES ('via-link')`\n")
+    symlinkSync(outside, join(dir, "linked.ts"))
+    writeFileSync(join(hidden, "secret.ts"), "export const q = `UPDATE master_knowledge SET snapshot = '{}'`\n")
+    symlinkSync(hidden, join(dir, "alias"))
+    try {
+      const first = scanP6MasterWriters(root)
+      const second = scanP6MasterWriters(root)
+      expect(first).toEqual(["platform/p6/already.ts"])
+      expect(second).toEqual(first)
+      expect(readFileSync(preexisting, "utf8")).toBe(body)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
