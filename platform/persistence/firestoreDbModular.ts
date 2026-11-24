@@ -1,5 +1,6 @@
 import {
   FieldValue as AdminFieldValue,
+  Timestamp as AdminTimestamp,
   type DocumentData as AdminDocumentData,
   type Firestore as AdminFirestore,
 } from "firebase-admin/firestore"
@@ -81,6 +82,22 @@ function isClientFirestore(db: unknown): db is ClientFirestore {
  * it). A firebase-admin instance only accepts the FieldValue of its own copy (FA-F13-012); a client instance, compat
  * or modular, takes the modular sentinel (compat unwraps to the modular SDK, FA-F13-010).
  */
+/** A Firestore Timestamp for a millisecond instant. TTL fields (expiresAt) must be this, not a number. */
+export function timestampFromMillis(millis: number): AdminTimestamp {
+  return AdminTimestamp.fromMillis(millis)
+}
+
+/** Milliseconds from a number or a Timestamp of either firebase-admin copy. */
+export function timestampToMillis(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (value instanceof AdminTimestamp) return value.toMillis()
+  if (value !== null && typeof value === "object" && "toMillis" in value && typeof value.toMillis === "function") {
+    const millis = value.toMillis()
+    return typeof millis === "number" && Number.isFinite(millis) ? millis : null
+  }
+  return null
+}
+
 export function serverTimestampFor(db: ClientFirestore | AdminFirestore): unknown {
   switch (firestoreSdkOf(db)) {
     case "admin":
@@ -217,6 +234,24 @@ export type AdminQueryRow = { id: string; data: () => AdminDocumentData; cursor?
  * Rows whose `fieldPath` (a nested path such as `row.firmId` too) equals `value`: for stored shapes that keep the firm
  * elsewhere than top-level `firmId` (F11: dead letters stored before the fix carry only `row.firmId`).
  */
+/** Admin-style range query used by TTL sweeps. The bound is a Timestamp so it matches a ttl field. */
+export function queryWhereAtMost(
+  db: ClientFirestore | AdminFirestore,
+  collectionPath: string,
+  fieldPath: string,
+  millis: number,
+  maxResults: number
+): FirmIdQuery {
+  if (!isAdminFirestore(db)) {
+    throw new Error("a Timestamp range query needs an admin-style Firestore")
+  }
+  return db
+    .collection(collectionPath)
+    .where(fieldPath, "<=", timestampFromMillis(millis))
+    .orderBy(fieldPath)
+    .limit(maxResults) as FirmIdQuery
+}
+
 export function queryByFieldEquals(
   db: ClientFirestore | AdminFirestore,
   collectionPath: string,
@@ -255,6 +290,8 @@ export type FenceTransaction = {
   set(ref: unknown, data: Record<string, unknown>): unknown
   update(ref: unknown, data: Record<string, unknown>): unknown
   delete(ref: unknown): unknown
+  /** Exclusive insert. Absent on transactions that only update; create() on the wrap throws then. */
+  create?(ref: unknown, data: Record<string, unknown>): unknown
 }
 
 /**
@@ -456,22 +493,36 @@ type TransactionWrap = {
   get: (ref: ReturnType<typeof doc>) => Promise<{ exists: () => boolean; data: () => unknown }>
   set: (ref: ReturnType<typeof doc>, data: unknown) => void
   update: (ref: ReturnType<typeof doc>, data: unknown) => void
+  delete: (ref: ReturnType<typeof doc>) => void
+  create: (ref: ReturnType<typeof doc>, data: unknown) => void
 }
 
 /** The repositories' view of an admin-style transaction; `note` sees the path of every staged write (the fence). */
 function wrapTransaction(tx: FenceTransaction, note?: (path: string) => void): TransactionWrap {
+  const pathOf = (ref: ReturnType<typeof doc>) => note?.((ref as unknown as AdminStyleRef).path)
   return {
     get: async (ref) => {
       const snap = await tx.get(ref)
       return { exists: () => snap.exists, data: () => snap.data() }
     },
     set: (ref, data) => {
-      note?.((ref as unknown as AdminStyleRef).path)
+      pathOf(ref)
       tx.set(ref, data as Record<string, unknown>)
     },
     update: (ref, data) => {
-      note?.((ref as unknown as AdminStyleRef).path)
+      pathOf(ref)
       tx.update(ref, data as Record<string, unknown>)
+    },
+    delete: (ref) => {
+      pathOf(ref)
+      tx.delete(ref)
+    },
+    create: (ref, data) => {
+      pathOf(ref)
+      if (typeof tx.create !== "function") {
+        throw new Error("audit F10: this transaction cannot create a document")
+      }
+      tx.create(ref, data as Record<string, unknown>)
     },
   }
 }

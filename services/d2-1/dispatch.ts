@@ -65,6 +65,8 @@ export const WHATSAPP_WEB_ACTION = {
   help: "list_matters",
 } as const satisfies Record<IncludedCommand, string>
 
+type WhatsAppWebAction = (typeof WHATSAPP_WEB_ACTION)[keyof typeof WHATSAPP_WEB_ACTION]
+
 const PAGE = 10
 
 export type ResearchHit = { title: string }
@@ -89,7 +91,7 @@ export type WhatsAppDispatch = {
   opened?: Numbered
 }
 
-type Thread = { action: string; items: Numbered[] }
+type Thread = { action: WhatsAppWebAction; items: Numbered[] }
 
 const threads = new Map<string, Thread>()
 
@@ -104,7 +106,21 @@ export type WhatsAppSyncRepos = {
 }
 
 export function permitWhatsApp(store: SpineStore, userId: string, action: string, matterId?: string) {
-  return checkPermission(store, userId, action, matterId)
+  switch (action) {
+    case "list_matters":
+      return checkPermission(store, userId, "list_matters", matterId)
+    case "client.read":
+      return checkPermission(store, userId, "client.read", matterId)
+    case "draft":
+      return checkPermission(store, userId, "draft", matterId)
+    case "research":
+      return checkPermission(store, userId, "research", matterId)
+    default: {
+      const decision = { allow: false, reason: "unknown-action" }
+      recordPermissionAudit(store, userId, action, decision, matterId)
+      return decision
+    }
+  }
 }
 
 /** The store itself, which is what memory-mode repositories list. */
@@ -154,12 +170,21 @@ async function syncBeforeDecision(store: SpineStore, repos: WhatsAppSyncRepos, u
 }
 
 /** decide() without an audit row. Per-item filters use this so a command writes one row. */
-function judge(store: SpineStore, userId: string, action: string, matterId?: string): PermissionDecision {
+function judge(store: SpineStore, userId: string, action: WhatsAppWebAction, matterId?: string): PermissionDecision {
   if (matterId !== undefined) recordOperationMatter(matterId)
   const user = store.users.get(userId) ?? null
   const matter = matterId ? (store.matters.get(matterId) ?? null) : undefined
   const isMember = matterId ? store.members.has(store.memberKey(matterId, userId)) : false
-  return decide(user, action, matter, isMember)
+  switch (action) {
+    case "list_matters":
+      return decide(user, "list_matters", matter, isMember)
+    case "client.read":
+      return decide(user, "client.read", matter, isMember)
+    case "draft":
+      return decide(user, "draft", matter, isMember)
+    case "research":
+      return decide(user, "research", matter, isMember)
+  }
 }
 
 /** The web checkPermission row (platform/p5/checkPermission.ts appendPermissionAudit). */
@@ -197,7 +222,7 @@ function numbered(rows: { id: string; title: string }[]): Numbered[] {
   return rows.slice(0, PAGE).map((row, index) => ({ n: index + 1, id: row.id, title: row.title }))
 }
 
-function remember(userId: string, action: string, items: Numbered[]) {
+function remember(userId: string, action: WhatsAppWebAction, items: Numbered[]) {
   if (items.length > 0) threads.set(userId, { action, items })
 }
 
@@ -208,7 +233,7 @@ function tombstoned(matter: object): boolean {
 const HIDDEN_OPEN = new Set(["cross-firm", "matter-deleted", "clearance"])
 
 /** The cached row is checked again against the store: membership, clearance, and the draft's own classification. No audit. */
-function visibleNow(store: SpineStore, userId: string, action: string, item: Numbered): PermissionDecision {
+function visibleNow(store: SpineStore, userId: string, action: WhatsAppWebAction, item: Numbered): PermissionDecision {
   const user = store.users.get(userId)
   if (!user) return { allow: false, reason: "no-user" }
 

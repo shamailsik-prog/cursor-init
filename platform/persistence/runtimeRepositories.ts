@@ -62,6 +62,16 @@ export async function getRuntimeFirestore(): Promise<unknown> {
   return firestoreDbForTests ?? (await getProductionFirestore())
 }
 
+/**
+ * Firestore handle for the WhatsApp outbound-key store. The store itself stays on the fenced helpers;
+ * this selector is the file the write-fence guard allows to obtain the handle.
+ */
+export async function openWhatsAppOutboundKeyFirestore(): Promise<unknown> {
+  const db = await getRuntimeFirestore()
+  const { createFirestoreOutboundKeyStore } = await import("@/services/d2-1/outboundKeys")
+  return createFirestoreOutboundKeyStore(db as never)
+}
+
 export async function getRuntimeRepositories(
   store: SpineStore
 ): Promise<SpineRepositories> {

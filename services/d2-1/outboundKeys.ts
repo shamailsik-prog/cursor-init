@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto"
-import { Timestamp } from "firebase-admin/firestore"
+import {
+  doc,
+  firestoreSdkOf,
+  getDocs,
+  queryWhereAtMost,
+  runTransaction as fenceTransaction,
+  timestampFromMillis,
+  timestampToMillis,
+  type Firestore,
+} from "@/platform/persistence/firestoreDbModular"
 import { resolvePersistenceMode } from "@/platform/persistence/runtimeRepositories"
 import type { OutboundWhatsApp, WhatsAppSendOptions, WhatsAppSendResult, WhatsAppTransport } from "./transport"
 
@@ -50,7 +59,7 @@ export type OutboundKeyTx = {
 }
 
 export type OutboundKeyStore = {
-  runTransaction<T>(fn: (tx: OutboundKeyTx) => Promise<T>): Promise<T>
+  transact<T>(fn: (tx: OutboundKeyTx) => Promise<T>): Promise<T>
   /** Expired documents only, oldest expiry first, at most `limit`. */
   listExpired(now: number, limit: number): Promise<Array<{ id: string } & OutboundKeyDoc>>
   delete(id: string): Promise<void>
@@ -125,7 +134,7 @@ export function createMemoryOutboundKeyStore(): MemoryOutboundKeyStore {
   }
 
   return {
-    runTransaction(fn) {
+    transact(fn) {
       return queue(async () => {
         const staged = new Map<string, OutboundKeyDoc | null>()
         const tx: OutboundKeyTx = {
@@ -191,38 +200,13 @@ type FirestoreKeyWrite = {
   keyHash: string
   firmId: string
   createdAt: number
-  expiresAt: Timestamp
+  expiresAt: ReturnType<typeof timestampFromMillis>
   state: OutboundKeyState
   leaseUntil: number
 }
 
-type AdminTx = {
-  get(ref: unknown): Promise<{ exists: boolean; data(): Record<string, unknown> | undefined }>
-  create(ref: unknown, data: FirestoreKeyWrite): void
-  set(ref: unknown, data: FirestoreKeyWrite): void
-  delete(ref: unknown): void
-}
-
-type AdminDb = {
-  collection(name: string): {
-    doc(id: string): unknown
-    where(
-      field: string,
-      op: "<=",
-      value: Timestamp
-    ): {
-      orderBy(field: string): {
-        limit(n: number): { get(): Promise<{ docs: Array<{ id: string; data(): Record<string, unknown> | undefined }> }> }
-      }
-    }
-  }
-  runTransaction<T>(fn: (tx: AdminTx) => Promise<T>): Promise<T>
-}
-
 function expiresAtMillis(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value
-  if (value instanceof Timestamp) return value.toMillis()
-  return null
+  return timestampToMillis(value)
 }
 
 function readDoc(id: string, data: Record<string, unknown> | undefined): ({ id: string } & OutboundKeyDoc) | null {
@@ -250,23 +234,27 @@ export function firestoreOutboundKeyWrite(data: OutboundKeyDoc): FirestoreKeyWri
     keyHash: row.keyHash,
     firmId: row.firmId,
     createdAt: row.createdAt,
-    expiresAt: Timestamp.fromMillis(row.expiresAt),
+    expiresAt: timestampFromMillis(row.expiresAt),
     state: row.state,
     leaseUntil: row.leaseUntil,
   }
 }
 
-/** Firestore adapter. `tx.create` is the insert fence. Tests use the memory store. */
-export function createFirestoreOutboundKeyStore(db: AdminDb): OutboundKeyStore {
-  const col = () => db.collection(WHATSAPP_OUTBOUND_KEYS_COLLECTION)
+/** Firestore adapter. Writes go through the fenced helpers. `tx.create` is the insert fence. */
+export function createFirestoreOutboundKeyStore(db: Firestore): OutboundKeyStore {
+  const sdk = firestoreSdkOf(db)
+  if (sdk !== "admin" && sdk !== "client-compat" && sdk !== "namespaced") {
+    throw new Error("whatsapp outbound keys need an admin-style Firestore")
+  }
+  const refOf = (id: string) => doc(db, WHATSAPP_OUTBOUND_KEYS_COLLECTION, id)
   return {
-    runTransaction(fn) {
-      return db.runTransaction(async (tx) =>
+    transact(fn) {
+      return fenceTransaction(db, async (tx) =>
         fn({
           async get(_collection, id) {
-            const snap = await tx.get(col().doc(id))
-            if (!snap.exists) return null
-            const row = readDoc(id, snap.data())
+            const snap = await tx.get(refOf(id))
+            if (!snap.exists()) return null
+            const row = readDoc(id, snap.data() as Record<string, unknown> | undefined)
             return row
               ? {
                   keyHash: row.keyHash,
@@ -280,15 +268,15 @@ export function createFirestoreOutboundKeyStore(db: AdminDb): OutboundKeyStore {
           },
           create(collection, id, data) {
             assertCollection(collection)
-            tx.create(col().doc(id), firestoreOutboundKeyWrite(data))
+            tx.create(refOf(id), firestoreOutboundKeyWrite(data))
           },
           set(collection, id, data) {
             assertCollection(collection)
-            tx.set(col().doc(id), firestoreOutboundKeyWrite(data))
+            tx.set(refOf(id), firestoreOutboundKeyWrite(data))
           },
           delete(collection, id) {
             assertCollection(collection)
-            tx.delete(col().doc(id))
+            tx.delete(refOf(id))
           },
         })
       )
@@ -296,15 +284,15 @@ export function createFirestoreOutboundKeyStore(db: AdminDb): OutboundKeyStore {
     async listExpired(now, limit) {
       const cap = Math.max(0, Math.floor(limit))
       if (cap === 0) return []
-      const snap = await col().where("expiresAt", "<=", Timestamp.fromMillis(now)).orderBy("expiresAt").limit(cap).get()
-      return snap.docs.flatMap((doc) => {
-        const row = readDoc(doc.id, doc.data())
-        return row ? [row] : []
+      const snap = await getDocs(queryWhereAtMost(db, WHATSAPP_OUTBOUND_KEYS_COLLECTION, "expiresAt", now, cap))
+      return snap.docs.flatMap((row) => {
+        const read = readDoc(row.id, row.data() as Record<string, unknown> | undefined)
+        return read ? [read] : []
       })
     },
     async delete(id) {
-      await db.runTransaction(async (tx) => {
-        tx.delete(col().doc(id))
+      await fenceTransaction(db, async (tx) => {
+        tx.delete(refOf(id))
       })
     },
   }
@@ -317,8 +305,8 @@ export function createFirestoreOutboundKeyStore(db: AdminDb): OutboundKeyStore {
 export async function openWhatsAppOutboundKeyStore(): Promise<OutboundKeyStore> {
   const mode = resolvePersistenceMode()
   if (mode === "firestore") {
-    const { getRuntimeFirestore } = await import("@/platform/persistence/runtimeRepositories")
-    return createFirestoreOutboundKeyStore((await getRuntimeFirestore()) as AdminDb)
+    const { openWhatsAppOutboundKeyFirestore } = await import("@/platform/persistence/runtimeRepositories")
+    return openWhatsAppOutboundKeyFirestore() as Promise<OutboundKeyStore>
   }
   return defaultWhatsAppOutboundKeyStore()
 }
@@ -359,7 +347,7 @@ export async function claimWhatsAppOutboundKey(
   for (let attempt = 0; attempt < 2; attempt++) {
     const doc = fresh()
     try {
-      const outcome = await store.runTransaction(async (tx) => {
+      const outcome = await store.transact(async (tx) => {
         const existing = await tx.get(WHATSAPP_OUTBOUND_KEYS_COLLECTION, keyHash)
         if (!existing) {
           tx.create(WHATSAPP_OUTBOUND_KEYS_COLLECTION, keyHash, doc)
@@ -396,7 +384,7 @@ export async function releaseWhatsAppOutboundKey(
   input: { firmId: string; idempotencyKey: string; createdAt: number }
 ): Promise<void> {
   const keyHash = outboundKeyHash(input.firmId, input.idempotencyKey)
-  await store.runTransaction(async (tx) => {
+  await store.transact(async (tx) => {
     const existing = await tx.get(WHATSAPP_OUTBOUND_KEYS_COLLECTION, keyHash)
     if (existing && existing.state === "pending" && existing.createdAt === input.createdAt) {
       tx.delete(WHATSAPP_OUTBOUND_KEYS_COLLECTION, keyHash)
@@ -419,7 +407,7 @@ export async function sweepExpiredWhatsAppOutboundKeys(
   const expired = await store.listExpired(now, cap)
   let pruned = 0
   for (const doc of expired) {
-    const removed = await store.runTransaction(async (tx) => {
+    const removed = await store.transact(async (tx) => {
       const current = await tx.get(WHATSAPP_OUTBOUND_KEYS_COLLECTION, doc.id)
       if (!current || current.expiresAt > now) return false
       tx.delete(WHATSAPP_OUTBOUND_KEYS_COLLECTION, doc.id)
@@ -436,7 +424,7 @@ export async function markWhatsAppOutboundKeySent(
   input: { firmId: string; idempotencyKey: string; createdAt: number }
 ): Promise<void> {
   const keyHash = outboundKeyHash(input.firmId, input.idempotencyKey)
-  await store.runTransaction(async (tx) => {
+  await store.transact(async (tx) => {
     const existing = await tx.get(WHATSAPP_OUTBOUND_KEYS_COLLECTION, keyHash)
     if (!existing || existing.state !== "pending" || existing.createdAt !== input.createdAt) return
     tx.set(

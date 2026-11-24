@@ -194,7 +194,7 @@ describe("R3-L4 durable outbound idempotency", () => {
   it("refuses a key document that carries message content", async () => {
     const keys = createMemoryOutboundKeyStore()
     await expect(
-      keys.runTransaction(async (tx) => {
+      keys.transact(async (tx) => {
         tx.create(WHATSAPP_OUTBOUND_KEYS_COLLECTION, "x", {
           keyHash: "x",
           firmId: "firmA",
@@ -211,7 +211,7 @@ describe("R3-L4 durable outbound idempotency", () => {
   it("refuses a write that omits expiresAt or firmId, and every accepted row carries both", async () => {
     const keys = createMemoryOutboundKeyStore()
     await expect(
-      keys.runTransaction(async (tx) => {
+      keys.transact(async (tx) => {
         tx.create(WHATSAPP_OUTBOUND_KEYS_COLLECTION, "x", {
           keyHash: "x",
           firmId: "firmA",
@@ -220,7 +220,7 @@ describe("R3-L4 durable outbound idempotency", () => {
       })
     ).rejects.toThrow(/expiresAt/)
     await expect(
-      keys.runTransaction(async (tx) => {
+      keys.transact(async (tx) => {
         tx.create(WHATSAPP_OUTBOUND_KEYS_COLLECTION, "x", {
           keyHash: "x",
           createdAt: 1,
