@@ -4,6 +4,7 @@ import { uploadSessionRecord } from "@/platform/documents/uploadSessionRecord"
 import * as staging from "@/platform/documents/uploadStagingStore"
 import {
   deleteRuntimeDocument,
+  patchRuntimeDocument,
   readRuntimeDocument,
   resolvePersistenceMode,
   writeRuntimeDocument,
@@ -190,6 +191,11 @@ const sessionMutationTails = new WeakMap<object, Map<string, Promise<void>>>()
  * would drop the other chunk. The chain makes the second read happen after the
  * first remember.
  */
+/** Sessions still waiting on this process's chain. Zero once the chain has settled and nothing is queued. */
+export function pendingSessionMutations(store: object): number {
+  return sessionMutationTails.get(store)?.size ?? 0
+}
+
 async function withSessionMutation<T>(store: object, sessionId: string, run: () => Promise<T>): Promise<T> {
   let chains = sessionMutationTails.get(store)
   if (!chains) {
@@ -197,24 +203,32 @@ async function withSessionMutation<T>(store: object, sessionId: string, run: () 
     sessionMutationTails.set(store, chains)
   }
   const previous = chains.get(sessionId) ?? Promise.resolve()
-  let release: () => void = () => {}
-  const gate = new Promise<void>((resolve) => {
-    release = resolve
-  })
-  const opened = previous.catch(() => undefined).then(() => gate)
-  chains.set(
-    sessionId,
-    opened.then(
-      () => undefined,
-      () => undefined
-    )
+  const recorded = previous.catch(() => undefined).then(() => run())
+  const tail = recorded.then(
+    () => undefined,
+    () => undefined
   )
-  await previous.catch(() => undefined)
+  chains.set(sessionId, tail)
   try {
-    return await run()
+    return await recorded
   } finally {
-    release()
+    if (chains.get(sessionId) === tail) {
+      chains.delete(sessionId)
+      if (chains.size === 0) sessionMutationTails.delete(store)
+    }
   }
+}
+
+/** Writes one file. The rest of the session row is left as it is. */
+async function commitFile(store: SpineStore, session: BulkUploadSessionRow, fileIdx: number): Promise<void> {
+  const file = session.files[fileIdx]
+  if (!file) throw new PublicError("bulk upload refused", "bulk_upload_refused")
+  const cached = uploadSessionsOf(store).get(session.id)
+  if (cached) cached.files[fileIdx] = file
+  if (resolvePersistenceMode() !== "firestore") return
+  await patchRuntimeDocument(staging.UPLOAD_SESSIONS_COLLECTION, session.id, {
+    [`files.${fileIdx}`]: { ...file },
+  })
 }
 
 async function remember(store: SpineStore, session: BulkUploadSessionRow): Promise<void> {
@@ -270,13 +284,21 @@ export async function sweepExpiredBulkUploads(
     throw new PublicError("bulk upload refused", "bulk_upload_refused")
   }
   const prefix = firmId === undefined ? staging.UPLOAD_STAGING_OBJECT_PREFIX : `upload-staging/${firmId}/`
-  const removed = await staging.sweepExpiredStagingObjects(now, BULK_UPLOAD_STAGING_TTL_MS, prefix)
+  const swept = await staging.sweepExpiredStagingObjects(now, BULK_UPLOAD_STAGING_TTL_MS, prefix)
+  const failures = [...swept.failures]
   for (const session of [...uploadSessionsOf(store).values()]) {
     if (!session.firmId || session.expiresAtMs > now) continue
     if (firmId !== undefined && session.firmId !== firmId) continue
-    await forget(store, session)
+    try {
+      await forget(store, session)
+    } catch (err) {
+      failures.push(err instanceof Error ? err.message : "session delete failed")
+    }
   }
-  return removed
+  if (failures.length > 0) {
+    throw new Error(`staging sweep failed for ${failures.length} failure(s): ${failures.join("; ")}`)
+  }
+  return swept.removed
 }
 
 async function requireSession(
@@ -488,7 +510,7 @@ async function writeChunk(
   if (prior) {
     if (!prior.equals(bytes)) throw new PublicError("bulk upload chunk refused", "bulk_upload_chunk_refused")
     recordChunk(file, chunkIdx)
-    await remember(store, session)
+    await commitFile(store, session, fileIdx)
     return { state: file.state }
   }
   await staging.putStagingChunk({
@@ -500,7 +522,7 @@ async function writeChunk(
     bytes,
   })
   recordChunk(file, chunkIdx)
-  await remember(store, session)
+  await commitFile(store, session, fileIdx)
   return { state: file.state }
 }
 
@@ -563,7 +585,7 @@ async function finishFile(
       sessionId: session.id,
       files: [{ fileIdx, chunkCount: file.chunkCount }],
     })
-    await remember(store, session)
+    await commitFile(store, session, fileIdx)
     throw new PublicError("bulk upload hash mismatch", "bulk_upload_hash_mismatch")
   }
   const result = await documentUpload.uploadDocument(store, {
@@ -578,7 +600,7 @@ async function finishFile(
   })
   file.state = "finalised"
   file.docId = result.docId
-  await remember(store, session)
+  await commitFile(store, session, fileIdx)
   try {
     await staging.deleteStagingSession({
       firmId: session.firmId,

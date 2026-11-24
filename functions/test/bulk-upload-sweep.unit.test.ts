@@ -52,7 +52,7 @@ describe("bulk upload staging sweep", () => {
     expect(Math.max(...batches.map((batch) => batch.length))).toBeLessThanOrEqual(500)
   })
 
-  it("deletes staging bytes only inside a fenced step that rechecks the legal hold", () => {
+  it("keeps upload_sessions when staging shares the locked bucket and still rechecks the hold", () => {
     const src = readFileSync(new URL("../src/retention/saga.ts", import.meta.url), "utf8")
     const holdAt = src.indexOf("staging-hold-")
     const deleteAt = src.indexOf("staging-delete-")
@@ -65,5 +65,12 @@ describe("bulk upload staging sweep", () => {
     expect(destructive.indexOf("assertNoHold")).toBeLessThan(destructive.indexOf("deleteStagingObjectsByPrefix"))
     expect(src.slice(holdAt, deleteAt)).not.toContain("deleteStagingObjectsByPrefix")
     expect(src.match(/deleteStagingObjectsByPrefix/g)).toHaveLength(2)
+    const purge = src.slice(src.indexOf("async function runPurge"), src.indexOf("async function acknowledge"))
+    const ack = src.slice(src.indexOf("async function acknowledge"))
+    expect(purge).toContain("if (stagingPlan.deleteBytes)")
+    expect(purge).toContain('store.id === "firestore:upload_sessions" && !stagingPlan.deleteSessionRows')
+    expect(ack).toContain('store.id === "firestore:upload_sessions" && !stagingPlan.deleteSessionRows')
+    expect(ack).toContain("outcome: stagingPlan.ack.outcome")
+    expect(purge).not.toContain("if (true)")
   })
 })

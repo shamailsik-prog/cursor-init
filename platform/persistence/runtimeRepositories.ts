@@ -4,7 +4,7 @@ import {
   type SpineRepositories,
 } from "@/platform/persistence/spineRepositories"
 import { getProductionFirestore } from "@/platform/persistence/adminFirestore"
-import { deleteDoc, doc, getDoc, setDoc } from "@/platform/persistence/firestoreDbModular"
+import { deleteDoc, doc, getDoc, setDoc, updateDoc } from "@/platform/persistence/firestoreDbModular"
 import { PersistenceConfigurationError } from "@/platform/persistence/errors"
 
 export { PersistenceConfigurationError } from "@/platform/persistence/errors"
@@ -77,6 +77,12 @@ export async function openWhatsAppOutboundKeyFirestore(): Promise<unknown> {
 export async function writeRuntimeDocument(collectionName: string, id: string, data: Record<string, unknown>): Promise<void> {
   const db = await getRuntimeFirestore()
   await setDoc(doc(db as never, collectionName, id), data)
+}
+
+/** Patches the named fields. A missing document is not created. */
+export async function patchRuntimeDocument(collectionName: string, id: string, data: Record<string, unknown>): Promise<void> {
+  const db = await getRuntimeFirestore()
+  await updateDoc(doc(db as never, collectionName, id), data)
 }
 
 export async function deleteRuntimeDocument(collectionName: string, id: string): Promise<void> {

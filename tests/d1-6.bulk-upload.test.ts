@@ -17,6 +17,7 @@ import {
   getUploadProgress,
   resumeUpload,
   parseStoredUploadSession,
+  pendingSessionMutations,
   startBulkUpload,
   sweepExpiredBulkUploads,
   uploadChunk,
@@ -38,6 +39,23 @@ function fileOf(bytes: Buffer, store: SpineStore, firmId: string, name: string) 
 
 function declared(size: number, name: string, sha256 = "ab".repeat(32)) {
   return { name, size, sha256, classification: "confidential" as const }
+}
+
+function applyFieldPatch(current: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  const next = structuredClone(current)
+  for (const [path, value] of Object.entries(patch)) {
+    const parts = path.split(".")
+    let cursor: Record<string, unknown> = next
+    for (let i = 0; i < parts.length - 1; i++) {
+      const part = parts[i] ?? ""
+      const child = cursor[part]
+      if (!child || typeof child !== "object") return next
+      cursor = child as Record<string, unknown>
+    }
+    const last = parts[parts.length - 1] ?? ""
+    cursor[last] = value
+  }
+  return next
 }
 
 function chunkSlice(bytes: Buffer, chunkIdx: number): Buffer {
@@ -564,6 +582,11 @@ describe("L9.1 high-speed bulk upload", () => {
               async set(data: Record<string, unknown>) {
                 rows.set(id, data)
               },
+              async update(patch: Record<string, unknown>) {
+                const current = rows.get(id)
+                if (!current) throw new Error("upload session missing")
+                rows.set(id, applyFieldPatch(current, patch))
+              },
               async delete() {
                 rows.delete(id)
               },
@@ -795,6 +818,95 @@ describe("L9.1 high-speed bulk upload", () => {
     }
   })
 
+  it("two instances finalising different files keep both, without a shared lock", async () => {
+    const rows = new Map<string, Record<string, unknown>>()
+    const db = {
+      collection(name: string) {
+        return {
+          doc(id: string) {
+            const key = `${name}/${id}`
+            return {
+              async set(data: Record<string, unknown>) {
+                rows.set(key, structuredClone(data))
+              },
+              async update(patch: Record<string, unknown>) {
+                const current = rows.get(key)
+                if (!current) throw new Error("upload session missing")
+                rows.set(key, applyFieldPatch(current, patch))
+              },
+              async delete() {
+                rows.delete(key)
+              },
+              async get() {
+                const data = rows.get(key)
+                return { exists: data !== undefined, data: () => (data ? structuredClone(data) : undefined) }
+              },
+            }
+          },
+        }
+      },
+    }
+    const { setFirestorePersistenceForTests } = await import("@/platform/persistence/runtimeRepositories")
+    setFirestorePersistenceForTests(db)
+    vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "firestore")
+    let waiting = 0
+    let sessionKey = ""
+    let releaseBoth: () => void = () => {}
+    const bothInside = new Promise<void>((resolve) => {
+      releaseBoth = resolve
+    })
+    if (vi.isMockFunction(documentUpload.uploadDocument)) vi.mocked(documentUpload.uploadDocument).mockRestore()
+    const realUpload = documentUpload.uploadDocument.bind(documentUpload)
+    const spy = vi.spyOn(documentUpload, "uploadDocument").mockImplementation(async (store, input) => {
+      waiting += 1
+      if (waiting === 2) {
+        const row = rows.get(sessionKey)
+        if (row) row.marker = "keep"
+        releaseBoth()
+      }
+      const opened = await Promise.race([
+        bothInside,
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("the two finalises did not overlap")), 2000)
+        }),
+      ])
+      void opened
+      return realUpload(store, input)
+    })
+    try {
+      const leftStore = newStore()
+      const rightStore = newStore()
+      const left = Buffer.from("cross-left")
+      const right = Buffer.from("cross-right")
+      const started = await startBulkUpload(
+        leftStore,
+        "firmA",
+        "m1",
+        [fileOf(left, leftStore, "firmA", "left.pdf"), fileOf(right, leftStore, "firmA", "right.pdf")],
+        caller
+      )
+      await uploadChunk(leftStore, started.sessionId, 0, 1, left, caller)
+      await uploadChunk(leftStore, started.sessionId, 1, 1, right, caller)
+      const key = `upload_sessions/${started.sessionId}`
+      sessionKey = key
+      const [first, second] = await Promise.all([
+        finaliseFile(leftStore, started.sessionId, 0, caller),
+        finaliseFile(rightStore, started.sessionId, 1, caller),
+      ])
+      const saved = rows.get(key)
+      const files = (saved?.files ?? []) as Array<{ state: string; docId?: string }>
+      expect(saved?.marker).toBe("keep")
+      expect(files.map((file) => file.state)).toEqual(["finalised", "finalised"])
+      expect(files[0]?.docId).toBe(first.docId)
+      expect(files[1]?.docId).toBe(second.docId)
+      await expect(finaliseFile(leftStore, started.sessionId, 0, caller)).resolves.toMatchObject({ docId: first.docId, reused: true })
+      await expect(finaliseFile(rightStore, started.sessionId, 1, caller)).resolves.toMatchObject({ docId: second.docId, reused: true })
+    } finally {
+      spy.mockRestore()
+      setFirestorePersistenceForTests(null)
+    }
+  })
+
   it("overlapping Firestore chunk writes and finalises keep both files", async () => {
     const rows = new Map<string, Record<string, unknown>>()
     const db = {
@@ -805,12 +917,17 @@ describe("L9.1 high-speed bulk upload", () => {
               async set(data: Record<string, unknown>) {
                 rows.set(`${name}/${id}`, structuredClone(data))
               },
+              async update(patch: Record<string, unknown>) {
+                const current = rows.get(`${name}/${id}`)
+                if (!current) throw new Error("upload session missing")
+                rows.set(`${name}/${id}`, applyFieldPatch(current, patch))
+              },
               async delete() {
                 rows.delete(`${name}/${id}`)
               },
               async get() {
                 const data = rows.get(`${name}/${id}`)
-                return { exists: data !== undefined, data: () => data }
+                return { exists: data !== undefined, data: () => (data ? structuredClone(data) : undefined) }
               },
             }
           },
@@ -862,9 +979,56 @@ describe("L9.1 high-speed bulk upload", () => {
       expect(done[0]?.docId).toBe(first.docId)
       expect(done[1]?.docId).toBe(second.docId)
       expect(maxInFlight).toBe(1)
+      expect(pendingSessionMutations(store)).toBe(0)
     } finally {
       spy.mockRestore()
       setFirestorePersistenceForTests(null)
     }
+  })
+
+  it("a staging sweep continues after one delete fails and reports that failure", async () => {
+    const store = newStore()
+    const now = 5_000_000_000
+    const first = Buffer.from("fail-first")
+    const second = Buffer.from("delete-second")
+    const a = await startBulkUpload(store, "firmA", "m1", [fileOf(first, store, "firmA", "a.pdf")], caller)
+    const b = await startBulkUpload(store, "firmA", "m1", [fileOf(second, store, "firmA", "b.pdf")], caller)
+    await uploadChunk(store, a.sessionId, 0, 1, first, caller)
+    await uploadChunk(store, b.sessionId, 0, 1, second, caller)
+    const aPath = `${uploadSessionsOf(store).get(a.sessionId)?.storagePath}/0/1`
+    const bPath = `${uploadSessionsOf(store).get(b.sessionId)?.storagePath}/0/1`
+    staging.setStagingWrittenAtForTests(aPath, now - BULK_UPLOAD_STAGING_TTL_MS)
+    staging.setStagingWrittenAtForTests(bPath, now - BULK_UPLOAD_STAGING_TTL_MS)
+    staging.setStagingDeleteStatusForTests(async (storagePath) => (storagePath === aPath ? 403 : 204))
+    await expect(sweepExpiredBulkUploads(store, now)).rejects.toThrow(/1 failure/)
+    expect(
+      (await staging.readStagingChunks({ firmId: "firmA", matterId: "m1", sessionId: a.sessionId, fileIdx: 0, chunkCount: 1 }))[0]?.equals(first)
+    ).toBe(true)
+    expect(
+      await staging.readStagingChunks({ firmId: "firmA", matterId: "m1", sessionId: b.sessionId, fileIdx: 0, chunkCount: 1 })
+    ).toEqual([null])
+    expect(pendingSessionMutations(store)).toBe(0)
+  })
+
+  it("S3 and R2 keep staging bytes and session rows, and memory does not", () => {
+    vi.stubEnv("SIKANDER_DOCUMENT_OBJECT_BACKEND", "s3")
+    expect(staging.liveStagingMatterDeletion()).toMatchObject({
+      sharesLock: true,
+      deleteBytes: false,
+      deleteSessionRows: false,
+      ack: { outcome: "retained", detail: { locked: true, reason: "locked_vault_bucket" } },
+    })
+    vi.stubEnv("SIKANDER_DOCUMENT_OBJECT_BACKEND", "r2")
+    expect(staging.stagingSharesLockedVaultBucket()).toBe(true)
+    expect(staging.liveStagingMatterDeletion().ack.outcome).toBe("retained")
+    vi.stubEnv("SIKANDER_DOCUMENT_OBJECT_BACKEND", "memory")
+    expect(staging.liveStagingMatterDeletion()).toMatchObject({
+      sharesLock: false,
+      deleteBytes: true,
+      deleteSessionRows: true,
+      ack: { outcome: "purged", detail: { locked: false, reason: "prefix_empty" } },
+    })
+    expect(() => staging.chunkFirestoreWrites([1], 0)).toThrow(/firestore batch failed validation/)
+    expect(() => staging.chunkFirestoreWrites([1], 501)).toThrow(/firestore batch failed validation/)
   })
 })
