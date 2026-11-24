@@ -17,7 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { insideTempDir, isolationProblems } from "../drill/target"
 import { makeKeyRing } from "../lib/envelope.mjs"
 import { psqlArgv } from "../lib/exec"
-import { backupLogical, restoreLogical } from "../postgres/logical"
+import { backupLogical, restoreLogical, setRestorePlaintextHookForTests } from "../postgres/logical"
 import { DRILL_CLUSTER_TIMEZONE, startCluster, type PgCluster } from "./helpers/cluster"
 import { seedAnnexA, seedRows } from "./helpers/seeds"
 
@@ -533,6 +533,10 @@ exec "\${args[@]}"
     await dropDatabase(target)
     await dropExtraRoles(target)
     const seen: string[] = []
+    setRestorePlaintextHookForTests((file) => {
+      seen.push(path.basename(file))
+      swap()
+    })
     try {
       const res = await restoreLogical({
         bundleDir,
@@ -540,18 +544,15 @@ exec "\${args[@]}"
         db: "legal_scraper",
         expectedSystemIdentifier: targetId,
         env: target.env,
-        onPlaintext: async (file) => {
-          seen.push(path.basename(file))
-          swap()
-        },
       })
       expect(swapped).toBe(true)
-      expect(seen).toContain("globals.sql")
+      expect(seen).toEqual(["globals.sql"])
       expect(seen).not.toContain("globals-applied.sql")
       expect(res.ok, res.differences.join("\n")).toBe(false)
       expect(res.differences.join("\n")).toMatch(/socket directory/)
       await expectClusterUnwritten(decoy)
     } finally {
+      setRestorePlaintextHookForTests(null)
       try {
         if (existsSync(target.socketDir) && lstatSync(target.socketDir).isSymbolicLink()) rmSync(target.socketDir)
       } catch {

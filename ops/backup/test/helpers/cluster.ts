@@ -1,6 +1,7 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { drillScratchDir } from "../../drill/target"
+import { registerCluster } from "../../lib/emergency"
 import { runCommand, psqlArgv } from "../../lib/exec"
 
 export const DRILL_CLUSTER_TIMEZONE = "Asia/Karachi"
@@ -77,6 +78,7 @@ export async function startCluster(opts: {
     pgPrefix: prefix,
   })
   if (start.code !== 0) throw new Error(start.stderr || start.stdout)
+  const release = registerCluster(dir, env)
   const ident = await runCommand(
     psqlArgv("postgres", ["-t", "-A", "-c", "SELECT system_identifier::text FROM pg_control_system();"]),
     { env, pgPrefix: prefix }
@@ -91,6 +93,8 @@ export async function startCluster(opts: {
     systemIdentifier: ident.stdout.trim(),
     env,
     async stop() {
+      release()
+      if (!existsSync(dir)) return
       await runCommand(["pg_ctl", "-D", dir, "-m", "fast", "stop"], { env, pgPrefix: prefix })
       rmSync(dir, { recursive: true, force: true })
     },

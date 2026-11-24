@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto"
-import { chmodSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -872,6 +872,18 @@ describe("restore guards that a one-line deletion must fail", () => {
     }
   })
 
+  it("refuses an existing 0700 drill root under a non-sticky parent", () => {
+    const parent = mkdtempSync(path.join(os.tmpdir(), "f33-nosticky-exist-"))
+    chmodSync(parent, 0o700)
+    const root = path.join(parent, "root")
+    mkdirSync(root, { mode: 0o700 })
+    try {
+      expect(() => ensureDrillTempRoot(root)).toThrow(/sticky/)
+    } finally {
+      rmSync(parent, { recursive: true, force: true })
+    }
+  })
+
   it("creates a missing temp root as mode 0700", () => {
     const dir = path.join(os.tmpdir(), `f33-root-new-${process.pid}-${Date.now()}`)
     try {
@@ -1067,6 +1079,20 @@ describe("R4 operator prefix and plaintext", () => {
     expect(mod.operatorPrefixProblems(["docker", "exec", "-i", "pg", "bash", "-c"]).join("\n")).toMatch(
       /allowlisted docker exec/
     )
+    expect(mod.operatorPrefixProblems(["docker", "compose", "exec", "db"]).join("\n")).toMatch(/allowlisted docker exec/)
+    expect(mod.operatorPrefixProblems(["docker", "exec", "-i", ""]).join("\n")).toMatch(/allowlisted docker exec/)
+  })
+
+  it("base backup refuses a non-docker prefix before pg_basebackup", async () => {
+    const { baseBackup } = await import("../postgres/pitr")
+    const dir = mkdtempSync(path.join(os.tmpdir(), "f33-pitr-prefix-"))
+    try {
+      await expect(baseBackup({ outRoot: dir, key: randomBytes(32), pgPrefix: ["bash", "x"] })).rejects.toThrow(
+        /allowlisted/
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it("backup refuses a non-docker prefix before it opens a session", async () => {

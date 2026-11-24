@@ -47,8 +47,27 @@ describe("docker child environment", () => {
     expect(opts.env.DOCKER_HOST).toBeUndefined()
     expect(opts.env.DOCKER_CONTEXT).toBeUndefined()
     expect(opts.env.PGHOST).toBeUndefined()
-    expect(opts.env.HOME).toBe("/home/drill")
+    expect(opts.env.HOME).toBeUndefined()
+    expect(opts.env.DOCKER_CONFIG).toMatch(/empty-docker-config/)
     expect(opts.env.NODE_ENV).toBe("test")
+  })
+
+  it("docker-compose gets the same fixed environment and not the caller HOME", async () => {
+    await runCommand(["psql", "-c", "SELECT 1"], {
+      pgPrefix: ["docker-compose", "exec", "-T", "db"],
+      exactEnv: true,
+      env: {
+        NODE_ENV: "test",
+        PATH: "/tmp/evil:/usr/bin",
+        DOCKER_HOST: "tcp://evil:2375",
+        HOME: "/home/drill",
+      },
+    })
+    const opts = spawnMock.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv }
+    expect(opts.env.PATH).toBe(DOCKER_CLIENT_PATH)
+    expect(opts.env.DOCKER_HOST).toBeUndefined()
+    expect(opts.env.HOME).toBeUndefined()
+    expect(opts.env.DOCKER_CONFIG).toMatch(/empty-docker-config/)
   })
 
   it("keeps a non-docker child environment", async () => {
