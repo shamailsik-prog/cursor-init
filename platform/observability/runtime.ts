@@ -9,8 +9,7 @@
  * redacted record can leave, and only after the flag is on.
  */
 
-import { randomUUID } from "node:crypto"
-import { normalizeFieldKey, redactForObservability } from "@/platform/observability/redact"
+import { mintUuid, normalizeFieldKey, redactForObservability } from "@/platform/observability/redact"
 
 export const OBS_LOG_EXPORTER_FLAG = "LEGAL_OS_OBS_LOG_EXPORTER"
 export const OBS_METRICS_EXPORTER_FLAG = "LEGAL_OS_OBS_METRICS_EXPORTER"
@@ -141,8 +140,10 @@ export function createObservability(options: ObservabilityOptions = {}): Observa
     },
     startSpan(name, attributes) {
       const started = performance.now()
-      const traceId = randomUUID()
-      const spanId = randomUUID()
+      const trace = mintUuid()
+      const span = mintUuid()
+      const traceId = trace.text
+      const spanId = span.text
       const overrides = new Map<string, unknown>()
       let exception: unknown
       let ended = false
@@ -182,8 +183,8 @@ export function createObservability(options: ObservabilityOptions = {}): Observa
                 ...merged,
                 signal: "trace",
                 event: safeName(name),
-                traceId,
-                spanId,
+                traceId: trace,
+                spanId: span,
                 status: status === "error" ? "error" : "ok",
                 durationMs: Math.max(0, Math.round(performance.now() - started)),
               },

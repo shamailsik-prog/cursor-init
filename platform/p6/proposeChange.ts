@@ -189,6 +189,7 @@ export async function approveProposal(
     const row = await tx.getProposal(proposalId)
     if (!row) throw new Error("proposal not found")
     assertApprovalBound(row)
+    if (actorKey(row.proposedBy) === "") throw new Error("proposer key missing")
     if (actorKey(actor.actorId) === actorKey(row.proposedBy)) throw new Error("approver must differ from proposer")
     if (row.changeClass !== "substantive") throw new Error("cosmetic proposals are not partner-approved")
     if (row.status !== "pending") throw new Error("proposal is not pending")
