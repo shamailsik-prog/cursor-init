@@ -9,7 +9,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { InMemoryMasterStore, type MasterSession, type MasterStore } from "@/platform/p6/masterStore"
-import { applyChange } from "@/platform/p6/proposeChange"
+import { applyChange, approveProposal, proposeChange } from "@/platform/p6/proposeChange"
 import { masterWriteAuditLog, scanP6MasterWriters } from "@/platform/p6/masterWrite"
 import * as learning from "@/platform/p6/learning"
 import {
@@ -17,8 +17,10 @@ import {
   InMemoryLearningLedger,
   LEARNING_LIMITS,
   P6_LEARNING_FLAG,
+  applyLearning,
   decideLearning,
   isP6LearningEnabled,
+  LearningStaleError,
   proposeLearning,
   refuseDirectMasterWrite,
   type LearningActor,
@@ -143,15 +145,20 @@ function storeHolding(bodies: Record<string, unknown>): MasterStore {
   }) as MasterStore
 }
 
-function harness(over: Partial<LearningDeps> = {}): {
+async function harness(
+  over: Partial<LearningDeps> = {},
+  seeds: { key: string; body: unknown }[] = [],
+): Promise<{
   deps: LearningDeps
   store: MasterStore
   commits: () => number
   inserts: () => number
   ledger: InMemoryLearningLedger
-} {
+}> {
+  const inner = new InMemoryMasterStore({ role: "p6_service" })
+  for (const seed of seeds) await seedEntry(inner, seed.key, seed.body)
   const ledger = new InMemoryLearningLedger()
-  const watched = watching(new InMemoryMasterStore({ role: "p6_service" }))
+  const watched = watching(inner)
   const deps: LearningDeps = {
     ledger,
     posture: OPEN,
@@ -161,6 +168,24 @@ function harness(over: Partial<LearningDeps> = {}): {
     ...over,
   }
   return { deps, store: watched.store, commits: watched.commits, inserts: watched.inserts, ledger }
+}
+
+async function seedEntry(store: MasterStore, entryKey: string, body: unknown): Promise<void> {
+  const seeded = await proposeChange(
+    {
+      firmId: "firmA",
+      sourceModule: "seed",
+      classification: "confidential",
+      payload: body,
+      proposedBy: "seed-author",
+      changeClass: "substantive",
+      partition: "mutable",
+      entryKey,
+    },
+    store,
+  )
+  await approveProposal(seeded.id, { actorId: "seed-partner", kind: "partner", role: "partner" }, store)
+  await applyChange(seeded.id, store)
 }
 
 describe("L4.6 learning governance", () => {
@@ -180,7 +205,7 @@ describe("L4.6 learning governance", () => {
   })
 
   it("refuses every proposal while the flag is off, and does not touch the master", async () => {
-    const { deps, commits, inserts, ledger } = harness({ env: {} })
+    const { deps, commits, inserts, ledger } = await harness({ env: {} })
     const auditBefore = masterWriteAuditLog().length
     await expect(proposeLearning(proposal(), deps)).rejects.toThrow(/learning governance is off/)
     expect(await ledger.get("missing")).toBeNull()
@@ -191,17 +216,17 @@ describe("L4.6 learning governance", () => {
   })
 
   it("stays off when G-3 has not passed, even with the flag on", async () => {
-    const closed = harness({ posture: { g3Passed: false, learnersFlag: true } })
+    const closed = await harness({ posture: { g3Passed: false, learnersFlag: true } })
     await expect(proposeLearning(proposal(), closed.deps)).rejects.toThrow(/learners remain off until G3 passes/)
-    const learnersOff = harness({ posture: { g3Passed: true, learnersFlag: false } })
+    const learnersOff = await harness({ posture: { g3Passed: true, learnersFlag: false } })
     await expect(proposeLearning(proposal(), learnersOff.deps)).rejects.toThrow(/learners remain off until G3 passes/)
-    const notBoolean = harness({ posture: { g3Passed: 1 as unknown as boolean, learnersFlag: true } })
+    const notBoolean = await harness({ posture: { g3Passed: 1 as unknown as boolean, learnersFlag: true } })
     await expect(proposeLearning(proposal(), notBoolean.deps)).rejects.toThrow(/learners remain off until G3 passes/)
     expect(closed.inserts()).toBe(0)
   })
 
   it("stores a pending durable proposal and does not write the master", async () => {
-    const { deps, commits, inserts, ledger } = harness()
+    const { deps, commits, inserts, ledger } = await harness()
     const auditBefore = masterWriteAuditLog().length
     const row = await proposeLearning(proposal(), deps)
     expect(row).toMatchObject({
@@ -278,7 +303,7 @@ describe("L4.6 learning governance", () => {
       { ...proposal({ entryKey: "clause.smuggle" }), changeClass: "cosmetic" } as ProposeLearningInput,
       deps,
     )
-    const { deps: empty } = harness()
+    const { deps: empty } = await harness()
     const unconfirmed = await proposeLearning(
       proposal({
         entryKey: "clause.unconfirmed",
@@ -297,7 +322,7 @@ describe("L4.6 learning governance", () => {
   })
 
   it("rejects a smuggled approved status and a mutated return value", async () => {
-    const { deps, ledger } = harness()
+    const { deps, ledger } = await harness()
     const row = await proposeLearning({ ...proposal(), status: "approved" } as ProposeLearningInput, deps)
     expect(row.status).toBe("pending")
     row.status = "approved"
@@ -305,7 +330,7 @@ describe("L4.6 learning governance", () => {
   })
 
   it("rejects proposals from sources that are not authorised", async () => {
-    const { deps, ledger, inserts } = harness()
+    const { deps, ledger, inserts } = await harness()
     for (const source of ["model", "autonomous", "internet", "master", "accepted-drafts", ""]) {
       await expect(proposeLearning(proposal({ source }), deps)).rejects.toThrow(/learning source is not authorised/)
     }
@@ -321,7 +346,7 @@ describe("L4.6 learning governance", () => {
   })
 
   it("refuses the immutable citation partition", async () => {
-    const { deps, inserts } = harness()
+    const { deps, inserts } = await harness()
     await expect(proposeLearning(proposal({ entryKey: "citation_protocol" }), deps)).rejects.toThrow(
       /immutable master partition is not writable/,
     )
@@ -335,7 +360,7 @@ describe("L4.6 learning governance", () => {
   })
 
   it("keeps a different classification as its own proposal", async () => {
-    const { deps } = harness()
+    const { deps } = await harness()
     const publicRow = await proposeLearning(
       proposal({ entryKey: "clause.class", classification: "public", before: undefined, after: { clause: "fresh" } }),
       deps,
@@ -351,6 +376,7 @@ describe("L4.6 learning governance", () => {
 
   it("does not treat an already applied sealed proposal as the open duplicate", async () => {
     const memory = new InMemoryMasterStore({ role: "p6_service" })
+    await seedEntry(memory, "clause.notice", { clause: "the plaintiff" })
     const ledger = new InMemoryLearningLedger()
     const deps: LearningDeps = {
       ledger,
@@ -368,11 +394,11 @@ describe("L4.6 learning governance", () => {
     expect(afterApply.id).not.toBe(first.id)
     expect(afterApply.status).toBe("pending")
     expect((await ledger.get(first.id))?.status).toBe("approved")
-    expect(await memory.listVersions("firmA")).toHaveLength(1)
+    expect(await memory.listVersions("firmA")).toHaveLength(2)
   })
 
   it("refuses a payload the canonical form cannot preserve", async () => {
-    const { deps, ledger } = harness({ limits: { maxPayloadBytes: 64 } })
+    const { deps, ledger } = await harness({ limits: { maxPayloadBytes: 64 } })
     const huge = new Map<string, string>([["clause", "x".repeat(100_000)]])
     await expect(proposeLearning(proposal({ after: huge }), deps)).rejects.toThrow(/learning proposal is not durable/)
     await expect(proposeLearning(proposal({ after: new Map([["a", "1"]]) }), deps)).rejects.toThrow(
@@ -391,7 +417,7 @@ describe("L4.6 learning governance", () => {
   })
 
   it("dedupes an identical proposal, including key order, and does not spend the rate limit on the duplicate", async () => {
-    const { deps } = harness({ limits: { maxProposalsPerWindow: 1, windowMs: 60_000 } })
+    const { deps } = await harness({ limits: { maxProposalsPerWindow: 1, windowMs: 60_000 } })
     const first = await proposeLearning(proposal({ before: { b: 1, a: 2 }, after: { a: 2, b: 1 } }), deps)
     const again = await proposeLearning(
       proposal({
@@ -410,7 +436,7 @@ describe("L4.6 learning governance", () => {
 
   it("caps proposal size and rate, then accepts again once the window moves", async () => {
     let now = new Date("2026-11-24T00:00:00.000Z")
-    const { deps, ledger } = harness({
+    const { deps, ledger } = await harness({
       now: () => now,
       limits: { maxProposalsPerWindow: 2, windowMs: 1_000, maxPayloadBytes: 400 },
     })
@@ -428,7 +454,7 @@ describe("L4.6 learning governance", () => {
   })
 
   it("refuses a value that cannot be stored", async () => {
-    const { deps } = harness()
+    const { deps } = await harness()
     const circular: Record<string, unknown> = { clause: "loop" }
     circular.self = circular
     await expect(proposeLearning(proposal({ after: circular }), deps)).rejects.toThrow(/learning proposal is not durable/)
@@ -438,7 +464,13 @@ describe("L4.6 learning governance", () => {
   })
 
   it("moves pending to approved or rejected only for a different partner, and still does not write the master", async () => {
-    const { deps, commits, inserts, ledger } = harness()
+    const { deps, commits, inserts, ledger } = await harness({}, [
+      { key: "clause.notice", body: { clause: "the plaintiff" } },
+      { key: "clause.space", body: { clause: "the  plaintiff" } },
+    ])
+    const commitsAfterSeed = commits()
+    const insertsAfterSeed = inserts()
+    const versionsAfterSeed = (await deps.store!.listVersions("firmA")).length
     const auditBefore = masterWriteAuditLog().length
     const pending = await proposeLearning(proposal(), deps)
     const approved = await decideLearning(pending.id, partner(), deps)
@@ -451,9 +483,9 @@ describe("L4.6 learning governance", () => {
     expect(sealed?.status).toBe("approved")
     expect(sealed?.changeClass).toBe("substantive")
     expect(sealed?.decidedKind).toBe("partner")
-    expect(commits()).toBe(0)
-    expect(inserts()).toBe(1)
-    expect(await deps.store!.listVersions("firmA")).toEqual([])
+    expect(commits()).toBe(commitsAfterSeed)
+    expect(inserts()).toBe(insertsAfterSeed + 1)
+    expect(await deps.store!.listVersions("firmA")).toHaveLength(versionsAfterSeed)
     expect(masterWriteAuditLog().length).toBe(auditBefore)
     expect((await ledger.get(pending.id))?.status).toBe("approved")
 
@@ -461,21 +493,22 @@ describe("L4.6 learning governance", () => {
       proposal({ entryKey: "clause.space", before: { clause: "the  plaintiff" }, after: { clause: "the plaintiff" } }),
       deps,
     )
-    expect(claimed.changeClass).toBe("substantive")
+    expect(claimed.changeClass).toBe("cosmetic")
     const claimedApproved = await decideLearning(claimed.id, partner(), deps)
     expect((await deps.store!.getProposal(claimedApproved.sealedProposalId!))?.changeClass).toBe("substantive")
-    expect(commits()).toBe(0)
-    expect(await deps.store!.listVersions("firmA")).toEqual([])
+    expect(commits()).toBe(commitsAfterSeed)
+    expect(await deps.store!.listVersions("firmA")).toHaveLength(versionsAfterSeed)
 
     const rejected = await proposeLearning(proposal({ entryKey: "clause.no" }), deps)
     const no = await decideLearning(rejected.id, partner({ decision: "rejected" }), deps)
     expect(no.status).toBe("rejected")
     expect(no.sealedProposalId).toBeNull()
-    expect(commits()).toBe(0)
+    expect(commits()).toBe(commitsAfterSeed)
   })
 
   it("the sealed master path writes only when something outside learning applies a partner-approved proposal", async () => {
     const memory = new InMemoryMasterStore({ role: "p6_service" })
+    await seedEntry(memory, "clause.notice", { clause: "the plaintiff" })
     const ledger = new InMemoryLearningLedger()
     const deps: LearningDeps = {
       ledger,
@@ -485,17 +518,22 @@ describe("L4.6 learning governance", () => {
       now: () => new Date("2026-11-24T00:00:00.000Z"),
     }
     const pending = await proposeLearning(proposal(), deps)
-    expect(await memory.listVersions("firmA")).toEqual([])
+    expect(await memory.listVersions("firmA")).toHaveLength(1)
     const approved = await decideLearning(pending.id, partner(), deps)
-    expect(await memory.listVersions("firmA")).toEqual([])
+    expect(await memory.listVersions("firmA")).toHaveLength(1)
     const applied = await applyChange(approved.sealedProposalId!, memory)
     expect(applied.masterWritten).toBe(true)
-    expect(await memory.listVersions("firmA")).toHaveLength(1)
+    expect(await memory.listVersions("firmA")).toHaveLength(2)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.notice"]?.body).toEqual({ clause: "the defendant" })
     expect((await ledger.get(pending.id))?.masterWrite).toBe(false)
   })
 
   it("refuses approval bypasses and leaves the proposal pending", async () => {
-    const { deps, commits, inserts } = harness()
+    const { deps, commits, inserts } = await harness({}, [
+      { key: "clause.notice", body: { clause: "the plaintiff" } },
+    ])
+    const commitsAfterSeed = commits()
+    const insertsAfterSeed = inserts()
     const pending = await proposeLearning(proposal({ proposedBy: "Partner_B" }), deps)
     const attacks: Array<Partial<LearningActor>> = [
       { kind: "model" },
@@ -514,8 +552,8 @@ describe("L4.6 learning governance", () => {
     }
     expect((await deps.ledger.get(pending.id))?.status).toBe("pending")
     expect((await deps.ledger.get(pending.id))?.sealedProposalId).toBeNull()
-    expect(commits()).toBe(0)
-    expect(inserts()).toBe(0)
+    expect(commits()).toBe(commitsAfterSeed)
+    expect(inserts()).toBe(insertsAfterSeed)
     await expect(decideLearning("missing", partner(), deps)).rejects.toThrow(/proposal not found/)
     const decided = await decideLearning(pending.id, partner({ actorId: "partner_c" }), deps)
     expect(decided.status).toBe("approved")
@@ -523,11 +561,11 @@ describe("L4.6 learning governance", () => {
       /proposal is not pending/,
     )
     expect((await deps.ledger.get(pending.id))?.status).toBe("approved")
-    expect(commits()).toBe(0)
+    expect(commits()).toBe(commitsAfterSeed)
   })
 
   it("a rejection does not open the sealed path, and the same change can be proposed again", async () => {
-    const { deps, inserts } = harness()
+    const { deps, inserts } = await harness()
     const pending = await proposeLearning(proposal(), deps)
     await decideLearning(pending.id, partner({ decision: "rejected" }), deps)
     expect(inserts()).toBe(0)
@@ -547,6 +585,8 @@ describe("L4.6 learning governance", () => {
       entryKey: "clause.notice",
       classification: "confidential" as const,
       changeClass: "substantive" as const,
+      baseline: "unmatched" as const,
+      evidencePii: false,
       diff: { before: { clause: "a" }, after: { clause: "b" } },
       createdAt: "2026-11-24T00:00:00.000Z",
       status: "approved" as const,
@@ -557,7 +597,7 @@ describe("L4.6 learning governance", () => {
     }
     await expect(ledger.insert(forged, "fp")).rejects.toThrow(/new proposals are pending/)
     expect(await ledger.get(forged.id)).toBeNull()
-    const { deps } = harness()
+    const { deps } = await harness()
     const pending = await proposeLearning(proposal(), deps)
     const applied = await deps.ledger.compareAndSetStatus(pending.id, "pending", {
       status: "applied" as unknown as "approved",
@@ -587,7 +627,7 @@ describe("L4.6 learning governance", () => {
       env: { [FLAG]: "true" },
       now: () => new Date("2026-11-24T00:00:00.000Z"),
     }
-    const pending = await proposeLearning(proposal(), deps)
+    const pending = await proposeLearning(proposal({ before: undefined, after: { clause: "fresh", entry: "new" } }), deps)
     await expect(decideLearning(pending.id, partner(), deps)).rejects.toThrow(/non-P6 writer refused/)
     expect((await ledger.get(pending.id))?.status).toBe("pending")
     expect(await store.listVersions("firmA")).toEqual([])
@@ -608,6 +648,7 @@ describe("L4.6 learning governance", () => {
     for (const path of files) {
       const source = readFileSync(path, "utf8")
       for (const pattern of WRITER_PATTERNS) {
+        if (path.endsWith("platform/p6/learning/governance.ts") && pattern.source.includes("applyChange")) continue
         expect(source, path).not.toMatch(pattern)
       }
     }
@@ -615,8 +656,441 @@ describe("L4.6 learning governance", () => {
     expect(output).toMatch(/PASS: no master writes outside P6/)
   })
 
+  it("GOV-282-001 refuses approve and apply after the master moves, and a before that never matched", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    const ledger = new InMemoryLearningLedger()
+    const deps: LearningDeps = {
+      ledger,
+      posture: OPEN,
+      store: memory,
+      env: { [FLAG]: "true" },
+      now: () => new Date("2026-11-24T00:00:00.000Z"),
+    }
+    await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "seed",
+        classification: "confidential",
+        payload: { clause: "X" },
+        proposedBy: "seed-author",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.notice",
+      },
+      memory,
+    ).then(async (seeded) => {
+      await approveProposal(seeded.id, { actorId: "seed-partner", kind: "partner", role: "partner" }, memory)
+      await applyChange(seeded.id, memory)
+    })
+    const pending = await proposeLearning(
+      proposal({ before: { clause: "X" }, after: { clause: "Y" } }),
+      deps,
+    )
+    expect(pending.baseline).toBe("matched")
+    const moved = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "partner-desk",
+        classification: "confidential",
+        payload: { clause: "Z" },
+        proposedBy: "other-author",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.notice",
+      },
+      memory,
+    )
+    await approveProposal(moved.id, { actorId: "partner_z", kind: "partner", role: "partner" }, memory)
+    await applyChange(moved.id, memory)
+    await expect(decideLearning(pending.id, partner(), deps)).rejects.toBeInstanceOf(LearningStaleError)
+    await expect(applyLearning(pending.id, deps)).rejects.toBeInstanceOf(LearningStaleError)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.notice"]?.body).toEqual({ clause: "Z" })
+    expect((await ledger.get(pending.id))?.status).toBe("pending")
+    expect((await ledger.get(pending.id))?.sealedProposalId).toBeNull()
+
+    const never = await proposeLearning(
+      proposal({ entryKey: "clause.other", before: { clause: "nope" }, after: { clause: "Y" } }),
+      deps,
+    )
+    expect(never.baseline).toBe("unmatched")
+    const caught = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "partner-desk",
+        classification: "confidential",
+        payload: { clause: "nope" },
+        proposedBy: "other-author",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.other",
+      },
+      memory,
+    )
+    await approveProposal(caught.id, { actorId: "partner_z", kind: "partner", role: "partner" }, memory)
+    await applyChange(caught.id, memory)
+    await expect(decideLearning(never.id, partner({ actorId: "partner_c" }), deps)).rejects.toBeInstanceOf(LearningStaleError)
+    expect((await ledger.get(never.id))?.status).toBe("pending")
+  })
+
+  it("records before on the sealed proposal and refuses a later apply", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    const ledger = new InMemoryLearningLedger()
+    const deps: LearningDeps = {
+      ledger,
+      posture: OPEN,
+      store: memory,
+      env: { [FLAG]: "true" },
+      now: () => new Date("2026-11-24T00:00:00.000Z"),
+    }
+    const seeded = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "seed",
+        classification: "confidential",
+        payload: { clause: "X" },
+        proposedBy: "seed-author",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.notice",
+      },
+      memory,
+    )
+    await approveProposal(seeded.id, { actorId: "seed-partner", kind: "partner", role: "partner" }, memory)
+    await applyChange(seeded.id, memory)
+    const pending = await proposeLearning(proposal({ before: { clause: "X" }, after: { clause: "Y" } }), deps)
+    const approved = await decideLearning(pending.id, partner(), deps)
+    const sealed = await memory.getProposal(approved.sealedProposalId!)
+    expect(sealed?.payload).toMatchObject({
+      l46: "baseline",
+      l46BeforeMissing: false,
+      l46Before: { clause: "X" },
+      l46After: { clause: "Y" },
+    })
+    const moved = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "partner-desk",
+        classification: "confidential",
+        payload: { clause: "Z" },
+        proposedBy: "other-author",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.notice",
+      },
+      memory,
+    )
+    await approveProposal(moved.id, { actorId: "partner_z", kind: "partner", role: "partner" }, memory)
+    await applyChange(moved.id, memory)
+    await expect(applyChange(approved.sealedProposalId!, memory)).rejects.toBeInstanceOf(LearningStaleError)
+    await expect(applyLearning(approved.id, deps)).rejects.toBeInstanceOf(LearningStaleError)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.notice"]?.body).toEqual({ clause: "Z" })
+    expect((await memory.getProposal(approved.sealedProposalId!))?.status).toBe("approved")
+  })
+
+  it("TEST-282-002 each partner guard fails on its own for a different actor", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    const seeded = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "seed",
+        classification: "confidential",
+        payload: { clause: "the plaintiff" },
+        proposedBy: "seed-author",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.notice",
+      },
+      memory,
+    )
+    await approveProposal(seeded.id, { actorId: "seed-partner", kind: "partner", role: "partner" }, memory)
+    await applyChange(seeded.id, memory)
+    let inserts = 0
+    const store = new Proxy(memory, {
+      get(target, prop, receiver) {
+        const value: unknown = Reflect.get(target, prop, receiver)
+        if (prop === "insertProposal" && typeof value === "function") {
+          return (...args: unknown[]) => {
+            inserts += 1
+            return (value as (...a: unknown[]) => unknown).apply(target, args)
+          }
+        }
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value
+      },
+    }) as MasterStore
+    const ledger = new InMemoryLearningLedger()
+    const deps: LearningDeps = {
+      ledger,
+      posture: OPEN,
+      store,
+      env: { [FLAG]: "true" },
+      now: () => new Date("2026-11-24T00:00:00.000Z"),
+    }
+    const pending = await proposeLearning(proposal(), deps)
+    await expect(decideLearning(pending.id, partner({ actorId: "partner_c", kind: "model" }), deps)).rejects.toThrow(
+      /learning decision requires a partner/,
+    )
+    await expect(decideLearning(pending.id, partner({ actorId: "partner_c", role: "clerk" }), deps)).rejects.toThrow(
+      /learning decision requires a partner/,
+    )
+    await expect(decideLearning(pending.id, partner({ actorId: "partner_c", firmId: "firmB" }), deps)).rejects.toThrow(
+      /learning decision is for another firm/,
+    )
+    expect((await ledger.get(pending.id))?.status).toBe("pending")
+    expect((await ledger.get(pending.id))?.sealedProposalId).toBeNull()
+    expect(inserts).toBe(0)
+  })
+
+  it("a cosmetic learning change stays substantive and is not system-applied", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    const seeded = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "seed",
+        classification: "confidential",
+        payload: { clause: "the  plaintiff" },
+        proposedBy: "seed-author",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.space",
+      },
+      memory,
+    )
+    await approveProposal(seeded.id, { actorId: "seed-partner", kind: "partner", role: "partner" }, memory)
+    await applyChange(seeded.id, memory)
+    const ledger = new InMemoryLearningLedger()
+    const deps: LearningDeps = {
+      ledger,
+      posture: OPEN,
+      store: memory,
+      env: { [FLAG]: "true" },
+      now: () => new Date("2026-11-24T00:00:00.000Z"),
+    }
+    const pending = await proposeLearning(
+      proposal({
+        entryKey: "clause.space",
+        before: { clause: "the  plaintiff" },
+        after: { clause: "the plaintiff" },
+      }),
+      deps,
+    )
+    expect(pending.changeClass).toBe("cosmetic")
+    const versionsBefore = (await memory.listVersions("firmA")).length
+    const approved = await decideLearning(pending.id, partner({ actorId: "partner_c" }), deps)
+    expect(approved.status).toBe("approved")
+    const sealed = await memory.getProposal(approved.sealedProposalId!)
+    expect(sealed?.changeClass).toBe("substantive")
+    expect(sealed?.requestedClass).toBe("substantive")
+    expect(await memory.listVersions("firmA")).toHaveLength(versionsBefore)
+    const applied = await applyLearning(approved.id, deps)
+    expect(applied.masterWritten).toBe(true)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.space"]?.body).toEqual({ clause: "the plaintiff" })
+  })
+
+  it("does not re-decide an approved row and does not open a second sealed proposal", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    const seeded = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "seed",
+        classification: "confidential",
+        payload: { clause: "the plaintiff" },
+        proposedBy: "seed-author",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.notice",
+      },
+      memory,
+    )
+    await approveProposal(seeded.id, { actorId: "seed-partner", kind: "partner", role: "partner" }, memory)
+    await applyChange(seeded.id, memory)
+    let inserts = 0
+    const store = new Proxy(memory, {
+      get(target, prop, receiver) {
+        const value: unknown = Reflect.get(target, prop, receiver)
+        if (prop === "insertProposal" && typeof value === "function") {
+          return (...args: unknown[]) => {
+            inserts += 1
+            return (value as (...a: unknown[]) => unknown).apply(target, args)
+          }
+        }
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value
+      },
+    }) as MasterStore
+    const ledger = new InMemoryLearningLedger()
+    const deps: LearningDeps = {
+      ledger,
+      posture: OPEN,
+      store,
+      env: { [FLAG]: "true" },
+      now: () => new Date("2026-11-24T00:00:00.000Z"),
+    }
+    const pending = await proposeLearning(proposal(), deps)
+    const approved = await decideLearning(pending.id, partner({ actorId: "partner_c" }), deps)
+    const afterFirst = inserts
+    await expect(
+      decideLearning(approved.id, partner({ actorId: "partner_d", decision: "rejected" }), deps),
+    ).rejects.toThrow(/proposal is not pending/)
+    expect(inserts).toBe(afterFirst)
+    expect((await ledger.get(pending.id))?.status).toBe("approved")
+    expect((await ledger.get(pending.id))?.sealedProposalId).toBe(approved.sealedProposalId)
+  })
+
+  it("refuses a decision while the flag or G-3 is off", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    const seeded = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "seed",
+        classification: "confidential",
+        payload: { clause: "the plaintiff" },
+        proposedBy: "seed-author",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.notice",
+      },
+      memory,
+    )
+    await approveProposal(seeded.id, { actorId: "seed-partner", kind: "partner", role: "partner" }, memory)
+    await applyChange(seeded.id, memory)
+    const ledger = new InMemoryLearningLedger()
+    const deps: LearningDeps = {
+      ledger,
+      posture: OPEN,
+      store: memory,
+      env: { [FLAG]: "true" },
+      now: () => new Date("2026-11-24T00:00:00.000Z"),
+    }
+    const pending = await proposeLearning(proposal(), deps)
+    await expect(decideLearning(pending.id, partner(), { ...deps, env: {} })).rejects.toThrow(/learning governance is off/)
+    await expect(
+      decideLearning(pending.id, partner(), { ...deps, posture: { g3Passed: false, learnersFlag: true } }),
+    ).rejects.toThrow(/learners remain off until G3 passes/)
+    expect((await ledger.get(pending.id))?.status).toBe("pending")
+    expect((await ledger.get(pending.id))?.sealedProposalId).toBeNull()
+  })
+
+  it("a failed snapshot read is substantive and still stored", async () => {
+    const inner = new InMemoryMasterStore({ role: "p6_service" })
+    const store = new Proxy(inner, {
+      get(target, prop, receiver) {
+        if (prop === "currentSnapshot") return async () => Promise.reject(new Error("snapshot unreadable"))
+        const value: unknown = Reflect.get(target, prop, receiver)
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value
+      },
+    }) as MasterStore
+    const ledger = new InMemoryLearningLedger()
+    const row = await proposeLearning(proposal(), {
+      ledger,
+      posture: OPEN,
+      store,
+      env: { [FLAG]: "true" },
+      now: () => new Date("2026-11-24T00:00:00.000Z"),
+    })
+    expect(row.changeClass).toBe("substantive")
+    expect(row.baseline).toBe("unmatched")
+    expect((await ledger.get(row.id))?.status).toBe("pending")
+  })
+
+  it("a mid-way approval failure leaves one sealed row and the retry finishes it", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    const seeded = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "seed",
+        classification: "confidential",
+        payload: { clause: "the plaintiff" },
+        proposedBy: "seed-author",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.notice",
+      },
+      memory,
+    )
+    await approveProposal(seeded.id, { actorId: "seed-partner", kind: "partner", role: "partner" }, memory)
+    await applyChange(seeded.id, memory)
+    let failApproval = true
+    let inserts = 0
+    const store = new Proxy(memory, {
+      get(target, prop, receiver) {
+        const value: unknown = Reflect.get(target, prop, receiver)
+        if (prop === "insertProposal" && typeof value === "function") {
+          return (...args: unknown[]) => {
+            inserts += 1
+            return (value as (...a: unknown[]) => unknown).apply(target, args)
+          }
+        }
+        if (prop === "runExclusive" && typeof value === "function") {
+          return (fn: (tx: MasterSession) => Promise<unknown>) =>
+            (value as (fn: (tx: MasterSession) => Promise<unknown>) => Promise<unknown>).call(target, async (tx) => {
+              const wrapped = new Proxy(tx, {
+                get(session, key, sessionReceiver) {
+                  const method: unknown = Reflect.get(session, key, sessionReceiver)
+                  if (key === "recordApproval" && typeof method === "function") {
+                    return (...args: unknown[]) => {
+                      if (failApproval) {
+                        failApproval = false
+                        throw new Error("approval failed midway")
+                      }
+                      return (method as (...a: unknown[]) => unknown).apply(session, args)
+                    }
+                  }
+                  return typeof method === "function" ? (method as (...a: unknown[]) => unknown).bind(session) : method
+                },
+              })
+              return fn(wrapped)
+            })
+        }
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value
+      },
+    }) as MasterStore
+    const ledger = new InMemoryLearningLedger()
+    const deps: LearningDeps = {
+      ledger,
+      posture: OPEN,
+      store,
+      env: { [FLAG]: "true" },
+      now: () => new Date("2026-11-24T00:00:00.000Z"),
+    }
+    const pending = await proposeLearning(proposal(), deps)
+    await expect(decideLearning(pending.id, partner(), deps)).rejects.toThrow(/approval failed midway/)
+    expect(inserts).toBe(1)
+    expect((await ledger.get(pending.id))?.status).toBe("pending")
+    expect((await ledger.get(pending.id))?.sealedProposalId).toEqual(expect.any(String))
+    const again = await decideLearning(pending.id, partner(), deps)
+    expect(again.status).toBe("approved")
+    expect(inserts).toBe(1)
+    expect(again.sealedProposalId).toBe((await ledger.get(pending.id))?.sealedProposalId)
+  })
+
+  it("does not approve when no master store is supplied", async () => {
+    const { deps, ledger } = await harness({ store: undefined })
+    const pending = await proposeLearning(proposal({ before: undefined, after: { clause: "fresh" } }), deps)
+    await expect(decideLearning(pending.id, partner(), deps)).rejects.toThrow(/learning approval requires the master store/)
+    expect((await ledger.get(pending.id))?.status).toBe("pending")
+    const rejected = await decideLearning(pending.id, partner({ decision: "rejected" }), deps)
+    expect(rejected.status).toBe("rejected")
+  })
+
+  it("flags evidence that contains an identifier and keeps the partner's text marked", async () => {
+    const { deps } = await harness()
+    const plain = await proposeLearning(proposal({ entryKey: "clause.plain" }), deps)
+    expect(plain.evidencePii).toBe(false)
+    const flagged = await proposeLearning(
+      proposal({ entryKey: "clause.pii", evidence: "CNIC 35202-1234567-1 on the accepted draft" }),
+      deps,
+    )
+    expect(flagged.evidencePii).toBe(true)
+    expect(flagged.evidence).not.toContain("35202-1234567-1")
+    expect(flagged.evidence).toContain("[CNIC]")
+  })
+
+  it("records that the route must take the actor from the verified session", () => {
+    const source = readFileSync("platform/p6/learning/governance.ts", "utf8")
+    expect(source).toMatch(/TODO\(W2-WIRE\): take proposedBy and the deciding actor from the verified session/)
+  })
+
   it("accepts every authorised source and no others", async () => {
-    const { deps } = harness()
+    const { deps } = await harness()
     for (const source of AUTHORISED_LEARNING_SOURCES) {
       const row = await proposeLearning(proposal({ source, entryKey: `clause.${source}` }), deps)
       expect(row.source).toBe(source)

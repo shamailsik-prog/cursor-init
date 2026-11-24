@@ -11,6 +11,14 @@ export type LearningProposalRecord = {
   entryKey: string
   classification: Classification
   changeClass: "cosmetic" | "substantive"
+  /**
+   * matched: the live entry equalled `before` when the proposal was stored.
+   * unmatched: it did not, or the snapshot could not be read. That proposal cannot be approved.
+   * unobserved: no store was supplied, so approval must read the live entry itself.
+   */
+  baseline: "matched" | "unmatched" | "unobserved"
+  /** True when the stored evidence was redacted because it contained an identifier. */
+  evidencePii: boolean
   diff: { before: unknown; after: unknown }
   createdAt: string
   status: "pending" | "approved" | "rejected"

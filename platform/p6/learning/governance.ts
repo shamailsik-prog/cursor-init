@@ -10,11 +10,14 @@ import { isClassification } from "@/platform/p1/types"
 import { assertLearnersStopped, type LearnerPosture } from "@/platform/p6/learners"
 import { canonicalPayload, normalizeActorKey, payloadDigest, type MasterStore } from "@/platform/p6/masterStore"
 import { effectiveClass } from "@/platform/p6/masterWrite"
-import { approveProposal, proposeChange } from "@/platform/p6/proposeChange"
+import { approveProposal, applyChange, proposeChange } from "@/platform/p6/proposeChange"
+import { baselineMatchesLive, learningBaselinePayload } from "@/platform/p6/learning/baseline"
 import { isP6LearningEnabled } from "@/platform/p6/learning/flag"
 import type { LearningLedger } from "@/platform/p6/learning/ledger"
 import { parseLearningSource } from "@/platform/p6/learning/sources"
+import { LearningStaleError } from "@/platform/p6/learning/stale"
 import type { LearningActor, LearningProposalRecord, ProposeLearningInput } from "@/platform/p6/learning/types"
+import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
 
 export const LEARNING_LIMITS = {
   maxProposalsPerWindow: 30,
@@ -87,22 +90,45 @@ function claimedClass(before: unknown, after: unknown): "cosmetic" | "substantiv
   }
 }
 
-async function changeClassOf(
+async function observeBaseline(
   input: ProposeLearningInput,
   entryKey: string,
   store: MasterStore | undefined,
-): Promise<"cosmetic" | "substantive"> {
+): Promise<{ changeClass: "cosmetic" | "substantive"; baseline: LearningProposalRecord["baseline"] }> {
   const claimed = claimedClass(input.before, input.after)
-  if (!store) return claimed
+  if (!store) return { changeClass: claimed, baseline: "unobserved" }
   try {
     const snapshot = await store.currentSnapshot(input.firmId)
     const live = snapshot.entries[entryKey]?.body
-    if (canonicalPayload(live) !== canonicalPayload(input.before)) return "substantive"
+    if (!baselineMatchesLive(live, input.before)) return { changeClass: "substantive", baseline: "unmatched" }
     const liveClass = claimedClass(live, input.after)
-    return claimed === "cosmetic" && liveClass === "cosmetic" ? "cosmetic" : "substantive"
+    const changeClass = claimed === "cosmetic" && liveClass === "cosmetic" ? "cosmetic" : "substantive"
+    return { changeClass, baseline: "matched" }
   } catch {
-    return "substantive"
+    return { changeClass: "substantive", baseline: "unmatched" }
   }
+}
+
+async function assertCurrentBaseline(row: LearningProposalRecord, store: MasterStore): Promise<void> {
+  if (row.baseline === "unmatched") throw new LearningStaleError()
+  let live: unknown
+  try {
+    const snapshot = await store.currentSnapshot(row.firmId)
+    live = snapshot.entries[row.entryKey]?.body
+  } catch {
+    throw new LearningStaleError()
+  }
+  if (!baselineMatchesLive(live, row.diff.before)) throw new LearningStaleError()
+}
+
+function redactEvidence(evidence: string): { evidence: string; evidencePii: boolean } {
+  let masked: string
+  try {
+    masked = maskOutboundPII(evidence).masked
+  } catch {
+    throw new Error("learning proposal is not durable")
+  }
+  return { evidence: masked, evidencePii: masked !== evidence }
 }
 
 function isJsonValue(value: unknown, seen = new WeakSet<object>()): boolean {
@@ -185,24 +211,26 @@ export async function proposeLearning(input: ProposeLearningInput, deps: Learnin
     assertOpen(deps)
     if (!isClassification(input.classification)) throw new Error("artefact write omitted classification")
     const firmId = text(input.firmId)
+    // TODO(W2-WIRE): take proposedBy and the deciding actor from the verified session. A caller-supplied id is not identity.
     const proposedBy = text(input.proposedBy)
     const entryKey = text(input.entryKey)
     if (!firmId || !proposedBy || !entryKey || normalizeActorKey(proposedBy) === "") {
       throw new Error("learning proposal omitted firm, author or entry")
     }
     const source = parseLearningSource(input.source)
-    const evidence = text(input.evidence)
-    if (!evidence) throw new Error("learning proposal omitted evidence")
+    const rawEvidence = text(input.evidence)
+    if (!rawEvidence) throw new Error("learning proposal omitted evidence")
     assertWritable(input.partition, entryKey)
     const limits = limitsOf(deps.limits)
     if (
-      evidence.length > limits.maxEvidenceChars ||
+      rawEvidence.length > limits.maxEvidenceChars ||
       firmId.length > limits.maxFieldChars ||
       proposedBy.length > limits.maxFieldChars ||
       entryKey.length > limits.maxFieldChars
     ) {
       throw new Error("learning proposal exceeds size cap")
     }
+    const { evidence, evidencePii } = redactEvidence(rawEvidence)
     if (input.after === undefined || !isJsonValue(input.after) || (input.before !== undefined && !isJsonValue(input.before))) {
       throw new Error("learning proposal is not durable")
     }
@@ -216,16 +244,18 @@ export async function proposeLearning(input: ProposeLearningInput, deps: Learnin
     if (Buffer.byteLength(encoded, "utf8") > limits.maxPayloadBytes) {
       throw new Error("learning proposal exceeds size cap")
     }
-    const changeClass = await changeClassOf(input, entryKey, deps.store)
+    const observed = await observeBaseline(input, entryKey, deps.store)
     const draft: LearningProposalRecord = {
       id: randomUUID(),
       firmId,
       proposedBy,
       source,
       evidence,
+      evidencePii,
       entryKey,
       classification: input.classification,
-      changeClass,
+      changeClass: observed.changeClass,
+      baseline: observed.baseline,
       diff: { before: input.before, after: input.after },
       createdAt: clock(deps).toISOString(),
       status: "pending",
@@ -258,14 +288,27 @@ export async function decideLearning(id: string, actor: LearningActor, deps: Lea
     if (!row) throw new Error("proposal not found")
     if (row.status !== "pending") throw new Error("proposal is not pending")
     assertPartner(actor, row)
-    let sealedProposalId: string | null = null
-    if (decision === "approved" && deps.store) {
+    if (decision === "rejected") {
+      const saved = await deps.ledger.compareAndSetStatus(id, "pending", {
+        status: "rejected",
+        decidedBy: actor.actorId,
+        decidedAt: clock(deps).toISOString(),
+        sealedProposalId: null,
+      })
+      if (!saved) throw new Error("proposal is not pending")
+      if (saved.masterWrite !== false) refuseDirectMasterWrite()
+      return saved
+    }
+    if (!deps.store) throw new Error("learning approval requires the master store")
+    await assertCurrentBaseline(row, deps.store)
+    let sealedProposalId = row.sealedProposalId
+    if (!sealedProposalId) {
       const sealed = await proposeChange(
         {
           firmId: row.firmId,
           sourceModule: "L4.6",
           classification: row.classification,
-          payload: row.diff.after,
+          payload: learningBaselinePayload(row.diff.before, row.diff.after),
           proposedBy: row.proposedBy,
           changeClass: "substantive",
           partition: "mutable",
@@ -273,15 +316,20 @@ export async function decideLearning(id: string, actor: LearningActor, deps: Lea
         },
         deps.store,
       )
-      await approveProposal(
-        sealed.id,
-        { actorId: actor.actorId, kind: "partner", role: "partner" },
-        deps.store,
-      )
+      const noted = await deps.ledger.attachSealed(id, sealed.id)
+      // The ledger points at the sealed row before that row is approved, so a retry does not insert another one.
+      if (!noted) throw new Error("proposal is not pending")
       sealedProposalId = sealed.id
     }
+    const existing = await deps.store.getProposal(sealedProposalId)
+    if (!existing) throw new Error("proposal not found")
+    if (existing.status === "pending") {
+      await approveProposal(sealedProposalId, { actorId: actor.actorId, kind: "partner", role: "partner" }, deps.store)
+    } else if (existing.status !== "approved") {
+      throw new Error("proposal is not pending")
+    }
     const saved = await deps.ledger.compareAndSetStatus(id, "pending", {
-      status: decision,
+      status: "approved",
       decidedBy: actor.actorId,
       decidedAt: clock(deps).toISOString(),
       sealedProposalId,
@@ -289,5 +337,19 @@ export async function decideLearning(id: string, actor: LearningActor, deps: Lea
     if (!saved) throw new Error("proposal is not pending")
     if (saved.masterWrite !== false) refuseDirectMasterWrite()
     return saved
+  })
+}
+
+export async function applyLearning(id: string, deps: LearningDeps): Promise<{ masterWritten: true; proposalId: string }> {
+  return exclusive(deps.ledger, async () => {
+    assertOpen(deps)
+    if (!deps.store) throw new Error("learning approval requires the master store")
+    const row = await deps.ledger.get(id)
+    if (!row) throw new Error("proposal not found")
+    await assertCurrentBaseline(row, deps.store)
+    if (row.status !== "approved" || !row.sealedProposalId) throw new Error("proposal is not approved")
+    const applied = await applyChange(row.sealedProposalId, deps.store)
+    if (applied.masterWritten !== true) refuseDirectMasterWrite()
+    return { masterWritten: true, proposalId: applied.proposalId }
   })
 }

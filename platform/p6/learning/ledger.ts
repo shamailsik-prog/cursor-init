@@ -17,6 +17,8 @@ export interface LearningLedger {
    * Any other status, including a direct apply, returns null and changes nothing.
    */
   compareAndSetStatus(id: string, from: "pending", next: LearningStatusPatch): Promise<LearningProposalRecord | null>
+  /** Records the sealed id while the learning row is still pending. A retry sees the same id. */
+  attachSealed(id: string, sealedProposalId: string): Promise<LearningProposalRecord | null>
   consumeRate(key: string, nowMs: number, max: number, windowMs: number): Promise<boolean>
 }
 
@@ -84,6 +86,15 @@ export class InMemoryLearningLedger implements LearningLedger {
       }
     }
     return clone(stored)
+  }
+
+  async attachSealed(id: string, sealedProposalId: string): Promise<LearningProposalRecord | null> {
+    const current = this.rows.get(id)
+    if (!current || current.status !== "pending") return null
+    if (sealedProposalId.trim() === "") return null
+    if (current.sealedProposalId && current.sealedProposalId !== sealedProposalId) return null
+    current.sealedProposalId = sealedProposalId
+    return clone(current)
   }
 
   async consumeRate(key: string, nowMs: number, max: number, windowMs: number): Promise<boolean> {
