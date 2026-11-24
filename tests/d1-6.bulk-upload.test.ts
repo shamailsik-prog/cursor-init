@@ -41,6 +41,15 @@ function declared(size: number, name: string, sha256 = "ab".repeat(32)) {
   return { name, size, sha256, classification: "confidential" as const }
 }
 
+function isIndexSegment(part: string): boolean {
+  return /^[0-9]+$/.test(part)
+}
+
+/**
+ * Firestore field-path update. A numeric segment on an array parent replaces
+ * that array with a map, so `files.0` drops every other file. A whole-field
+ * write of `files` keeps the array.
+ */
 function applyFieldPatch(current: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
   const next = structuredClone(current)
   for (const [path, value] of Object.entries(patch)) {
@@ -49,13 +58,112 @@ function applyFieldPatch(current: Record<string, unknown>, patch: Record<string,
     for (let i = 0; i < parts.length - 1; i++) {
       const part = parts[i] ?? ""
       const child = cursor[part]
-      if (!child || typeof child !== "object") return next
+      const descent = parts[i + 1] ?? ""
+      // A numeric index into an array is not an element write. Firestore replaces that array with a map.
+      if (!child || typeof child !== "object" || (Array.isArray(child) && isIndexSegment(descent))) {
+        const map: Record<string, unknown> = {}
+        cursor[part] = map
+        cursor = map
+        continue
+      }
       cursor = child as Record<string, unknown>
     }
     const last = parts[parts.length - 1] ?? ""
-    cursor[last] = value
+    cursor[last] = typeof value === "object" && value !== null ? structuredClone(value) : value
   }
   return next
+}
+
+function sessionFirestore(rows: Map<string, Record<string, unknown>>, names?: string[]) {
+  const versions = new Map<string, number>()
+  const bump = (key: string) => versions.set(key, (versions.get(key) ?? 0) + 1)
+  const read = (key: string, id: string) => {
+    const data = rows.get(key)
+    return {
+      exists: data !== undefined,
+      id,
+      version: versions.get(key) ?? 0,
+      data: () => (data ? structuredClone(data) : undefined),
+    }
+  }
+  const api = (key: string, id: string) => ({
+    id,
+    path: key,
+    read: () => read(key, id),
+    async set(data: Record<string, unknown>) {
+      rows.set(key, structuredClone(data))
+      bump(key)
+    },
+    async update(patch: Record<string, unknown>) {
+      const current = rows.get(key)
+      if (!current) throw new Error("upload session missing")
+      rows.set(key, applyFieldPatch(current, patch))
+      bump(key)
+    },
+    async delete() {
+      rows.delete(key)
+      bump(key)
+    },
+    async get() {
+      const snap = read(key, id)
+      return { exists: snap.exists, id, data: snap.data }
+    },
+  })
+  return {
+    collection(name: string) {
+      names?.push(name)
+      return {
+        doc(id: string) {
+          return api(`${name}/${id}`, id)
+        },
+      }
+    },
+    async runTransaction<T>(
+      fn: (tx: {
+        get: (ref: ReturnType<typeof api>) => Promise<{ exists: boolean; data: () => Record<string, unknown> | undefined }>
+        set: (ref: ReturnType<typeof api>, data: Record<string, unknown>) => void
+        update: (ref: ReturnType<typeof api>, data: Record<string, unknown>) => void
+        delete: (ref: ReturnType<typeof api>) => void
+      }) => Promise<T>
+    ): Promise<T> {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const seen = new Map<string, number>()
+        const pending = new Map<string, Record<string, unknown> | null>()
+        const tx = {
+          async get(ref: ReturnType<typeof api>) {
+            const snap = ref.read()
+            seen.set(ref.path, snap.version)
+            return { exists: snap.exists, data: snap.data }
+          },
+          set(ref: ReturnType<typeof api>, data: Record<string, unknown>) {
+            pending.set(ref.path, structuredClone(data))
+          },
+          update(ref: ReturnType<typeof api>, patch: Record<string, unknown>) {
+            const staged = pending.get(ref.path)
+            const base = staged === undefined ? rows.get(ref.path) : staged
+            if (!base) throw new Error("upload session missing")
+            pending.set(ref.path, applyFieldPatch(base, patch))
+          },
+          delete(ref: ReturnType<typeof api>) {
+            pending.set(ref.path, null)
+          },
+        }
+        const result = await fn(tx)
+        let conflict = false
+        for (const [path, version] of seen) {
+          if ((versions.get(path) ?? 0) !== version) conflict = true
+        }
+        if (conflict) continue
+        for (const [path, data] of pending) {
+          if (data === null) rows.delete(path)
+          else rows.set(path, data)
+          bump(path)
+        }
+        return result
+      }
+      throw new Error("transaction contention")
+    },
+  }
 }
 
 function chunkSlice(bytes: Buffer, chunkIdx: number): Buffer {
@@ -573,32 +681,7 @@ describe("L9.1 high-speed bulk upload", () => {
   it("writes upload_sessions in Firestore and reloads the row after the memory map is dropped", async () => {
     const rows = new Map<string, Record<string, unknown>>()
     const names: string[] = []
-    const db = {
-      collection(name: string) {
-        names.push(name)
-        return {
-          doc(id: string) {
-            return {
-              async set(data: Record<string, unknown>) {
-                rows.set(id, data)
-              },
-              async update(patch: Record<string, unknown>) {
-                const current = rows.get(id)
-                if (!current) throw new Error("upload session missing")
-                rows.set(id, applyFieldPatch(current, patch))
-              },
-              async delete() {
-                rows.delete(id)
-              },
-              async get() {
-                const data = rows.get(id)
-                return { exists: data !== undefined, data: () => data }
-              },
-            }
-          },
-        }
-      },
-    }
+    const db = sessionFirestore(rows, names)
     const { setFirestorePersistenceForTests } = await import("@/platform/persistence/runtimeRepositories")
     setFirestorePersistenceForTests(db)
     vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "firestore")
@@ -608,7 +691,7 @@ describe("L9.1 high-speed bulk upload", () => {
       const started = await startBulkUpload(store, "firmA", "m1", [fileOf(bytes, store, "firmA", "durable.pdf")], caller)
       await uploadChunk(store, started.sessionId, 0, 1, bytes, caller)
       expect(names).toContain("upload_sessions")
-      const saved = rows.get(started.sessionId)
+      const saved = rows.get(`upload_sessions/${started.sessionId}`)
       expect(saved?.firmId).toBe("firmA")
       expect(saved?.matterId).toBe("m1")
       const files = saved?.files as Array<{ firmId: string }>
@@ -818,34 +901,64 @@ describe("L9.1 high-speed bulk upload", () => {
     }
   })
 
+  it("a numeric segment on an array field replaces that array with a map", () => {
+    const patched = applyFieldPatch(
+      { files: [{ name: "a" }, { name: "b" }, { name: "c" }], marker: "keep" },
+      { "files.1": { name: "b2" } }
+    )
+    expect(Array.isArray(patched.files)).toBe(false)
+    expect(patched.files).toEqual({ "1": { name: "b2" } })
+    expect(patched.marker).toBe("keep")
+  })
+
+  it("a per-file session write does not use a files index field path", () => {
+    const src = readFileSync(new URL("../services/d1-6/bulkUpload.ts", import.meta.url), "utf8")
+    expect(src.includes("files.${")).toBe(false)
+    expect(src.includes("runTransaction")).toBe(true)
+  })
+
+  it("a chunk write to one of three files leaves the other two in the array", async () => {
+    const rows = new Map<string, Record<string, unknown>>()
+    const db = sessionFirestore(rows)
+    const { setFirestorePersistenceForTests } = await import("@/platform/persistence/runtimeRepositories")
+    setFirestorePersistenceForTests(db)
+    vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "firestore")
+    try {
+      const store = newStore()
+      const first = Buffer.from("file-a")
+      const middle = Buffer.from("file-b")
+      const last = Buffer.from("file-c")
+      const started = await startBulkUpload(
+        store,
+        "firmA",
+        "m1",
+        [fileOf(first, store, "firmA", "a.pdf"), fileOf(middle, store, "firmA", "b.pdf"), fileOf(last, store, "firmA", "c.pdf")],
+        caller
+      )
+      await uploadChunk(store, started.sessionId, 1, 1, middle, caller)
+      const saved = rows.get(`upload_sessions/${started.sessionId}`)
+      expect(saved).toBeTruthy()
+      expect(Array.isArray(saved?.files)).toBe(true)
+      const parsed = parseStoredUploadSession(started.sessionId, saved ?? {})
+      expect(parsed?.files.map((file) => file.name)).toEqual(["a.pdf", "b.pdf", "c.pdf"])
+      expect(parsed?.files[0]?.receivedChunks).toEqual([])
+      expect(parsed?.files[0]?.state).toBe("pending")
+      expect(parsed?.files[1]?.receivedChunks).toEqual([1])
+      expect(parsed?.files[1]?.state).toBe("uploading")
+      expect(parsed?.files[2]?.receivedChunks).toEqual([])
+      expect(parsed?.files[2]?.state).toBe("pending")
+      expect(new Set(parsed?.files.map((file) => file.fileId)).size).toBe(3)
+      const legacy = structuredClone(saved ?? {})
+      for (const file of legacy.files as Array<Record<string, unknown>>) delete file.fileId
+      expect(parseStoredUploadSession(started.sessionId, legacy)?.files).toHaveLength(3)
+    } finally {
+      setFirestorePersistenceForTests(null)
+    }
+  })
+
   it("two instances finalising different files keep both, without a shared lock", async () => {
     const rows = new Map<string, Record<string, unknown>>()
-    const db = {
-      collection(name: string) {
-        return {
-          doc(id: string) {
-            const key = `${name}/${id}`
-            return {
-              async set(data: Record<string, unknown>) {
-                rows.set(key, structuredClone(data))
-              },
-              async update(patch: Record<string, unknown>) {
-                const current = rows.get(key)
-                if (!current) throw new Error("upload session missing")
-                rows.set(key, applyFieldPatch(current, patch))
-              },
-              async delete() {
-                rows.delete(key)
-              },
-              async get() {
-                const data = rows.get(key)
-                return { exists: data !== undefined, data: () => (data ? structuredClone(data) : undefined) }
-              },
-            }
-          },
-        }
-      },
-    }
+    const db = sessionFirestore(rows)
     const { setFirestorePersistenceForTests } = await import("@/platform/persistence/runtimeRepositories")
     setFirestorePersistenceForTests(db)
     vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "firestore")
@@ -909,31 +1022,7 @@ describe("L9.1 high-speed bulk upload", () => {
 
   it("overlapping Firestore chunk writes and finalises keep both files", async () => {
     const rows = new Map<string, Record<string, unknown>>()
-    const db = {
-      collection(name: string) {
-        return {
-          doc(id: string) {
-            return {
-              async set(data: Record<string, unknown>) {
-                rows.set(`${name}/${id}`, structuredClone(data))
-              },
-              async update(patch: Record<string, unknown>) {
-                const current = rows.get(`${name}/${id}`)
-                if (!current) throw new Error("upload session missing")
-                rows.set(`${name}/${id}`, applyFieldPatch(current, patch))
-              },
-              async delete() {
-                rows.delete(`${name}/${id}`)
-              },
-              async get() {
-                const data = rows.get(`${name}/${id}`)
-                return { exists: data !== undefined, data: () => (data ? structuredClone(data) : undefined) }
-              },
-            }
-          },
-        }
-      },
-    }
+    const db = sessionFirestore(rows)
     const { setFirestorePersistenceForTests } = await import("@/platform/persistence/runtimeRepositories")
     setFirestorePersistenceForTests(db)
     vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "firestore")

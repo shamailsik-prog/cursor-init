@@ -2,9 +2,10 @@ import { isClassification, type Classification } from "@/platform/p1/types"
 import { PublicError } from "@/platform/http/publicError"
 import { uploadSessionRecord } from "@/platform/documents/uploadSessionRecord"
 import * as staging from "@/platform/documents/uploadStagingStore"
+import { doc, runTransaction } from "@/platform/persistence/firestoreDbModular"
 import {
   deleteRuntimeDocument,
-  patchRuntimeDocument,
+  getRuntimeFirestore,
   readRuntimeDocument,
   resolvePersistenceMode,
   writeRuntimeDocument,
@@ -149,6 +150,10 @@ function parseStoredFile(firmId: string, raw: unknown): BulkUploadFileRow | unde
     if (typeof file.docId !== "string" || file.docId.length < 1) return undefined
     row.docId = file.docId
   }
+  if (file.fileId !== undefined) {
+    if (typeof file.fileId !== "string" || !SAFE_SEGMENT.test(file.fileId)) return undefined
+    row.fileId = file.fileId
+  }
   return row
 }
 
@@ -219,15 +224,44 @@ async function withSessionMutation<T>(store: object, sessionId: string, run: () 
   }
 }
 
-/** Writes one file. The rest of the session row is left as it is. */
+/**
+ * Writes one file back by its fileId. The Firestore write is a transaction that
+ * reads the session and replaces that one array element. A `files.<index>` field
+ * path is never used: Firestore would turn the array into a map and drop the
+ * other files. A contended transaction retries, so two instances finalising
+ * different files both keep their result.
+ */
 async function commitFile(store: SpineStore, session: BulkUploadSessionRow, fileIdx: number): Promise<void> {
   const file = session.files[fileIdx]
-  if (!file) throw new PublicError("bulk upload refused", "bulk_upload_refused")
+  if (!file?.fileId) throw new PublicError("bulk upload refused", "bulk_upload_refused")
   const cached = uploadSessionsOf(store).get(session.id)
-  if (cached) cached.files[fileIdx] = file
+  if (cached) {
+    const slot = cached.files.findIndex((row) => row.fileId === file.fileId)
+    if (slot >= 0) cached.files[slot] = file
+  }
   if (resolvePersistenceMode() !== "firestore") return
-  await patchRuntimeDocument(staging.UPLOAD_SESSIONS_COLLECTION, session.id, {
-    [`files.${fileIdx}`]: { ...file },
+  await replaceStoredFile(session.id, file)
+}
+
+async function replaceStoredFile(sessionId: string, file: BulkUploadFileRow): Promise<void> {
+  const db = await getRuntimeFirestore()
+  const ref = doc(db as never, staging.UPLOAD_SESSIONS_COLLECTION, sessionId)
+  await runTransaction(db as never, async (tx) => {
+    const snap = await tx.get(ref)
+    if (!snap.exists()) throw new PublicError("upload session refused", "upload_session_refused")
+    const data = snap.data()
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      throw new PublicError("upload session refused", "upload_session_refused")
+    }
+    const record = data as Record<string, unknown>
+    if (!parseStoredUploadSession(sessionId, record) || !Array.isArray(record.files)) {
+      throw new PublicError("upload session refused", "upload_session_refused")
+    }
+    const next = record.files.map((row) => (row && typeof row === "object" ? { ...(row as object) } : row))
+    const slot = next.findIndex((row) => row && typeof row === "object" && (row as { fileId?: unknown }).fileId === file.fileId)
+    if (slot < 0) throw new PublicError("bulk upload refused", "bulk_upload_refused")
+    next[slot] = { ...file }
+    tx.update(ref, { files: next })
   })
 }
 
@@ -434,6 +468,7 @@ export async function startBulkUpload(
     const classification: Classification = file.classification
     rows.push({
       firmId,
+      fileId: store.id("upf"),
       name: file.name,
       size: file.size,
       sha256: file.sha256,
