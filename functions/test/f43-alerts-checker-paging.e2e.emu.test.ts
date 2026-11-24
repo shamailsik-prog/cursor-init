@@ -2,7 +2,6 @@ import { FieldPath, FieldValue, Query, Timestamp, type DocumentData, type Docume
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { adminDb } from "../src/admin"
 import { EMULATORS, uniq } from "./emu"
-import { deleteFirmData } from "./firmCleanup"
 import { sweepOrigins } from "./jobs"
 
 /**
@@ -52,13 +51,26 @@ async function countOwnIds(prefix: string): Promise<number> {
   return (await adminDb().collection("ai_reservations").orderBy(FieldPath.documentId()).startAt(prefix).endAt(`${prefix}\uf8ff`).select().get()).size
 }
 
-async function deleteWhereFirm(collection: string, firmIds: string[]): Promise<void> {
-  for (const firmId of firmIds) {
-    const snap = await adminDb().collection(collection).where("firmId", "==", firmId).select().get()
-    for (let i = 0; i < snap.docs.length; i += 400) {
-      const batch = adminDb().batch()
-      for (const d of snap.docs.slice(i, i + 400)) batch.delete(d.ref)
-      await batch.commit()
+/**
+ * Collections this file writes: the reservation and job rows the tests seed, and the alert plus its outbox page
+ * the checker raises. `deleteFirmData` queries every root collection twice per firm (a `firmId` query and an id-prefix
+ * scan). On the shared CI emulator that scan, across the 14 to 17 firm ids the held-firm cases clean, is this file's
+ * time (CI-260-R5-003). One `in` query per collection below deletes the same rows.
+ */
+const WRITTEN_COLLECTIONS = ["ai_reservations", "jobs", "ops_alerts", "ops_alert_notifications"] as const
+
+async function deleteWritten(firmIds: readonly string[]): Promise<void> {
+  const ids = [...new Set(firmIds.filter((id) => id.length > 0))]
+  if (ids.length === 0) return
+  const db = adminDb()
+  for (const collection of WRITTEN_COLLECTIONS) {
+    for (let i = 0; i < ids.length; i += 30) {
+      const snap = await db.collection(collection).where("firmId", "in", ids.slice(i, i + 30)).select().get()
+      for (let j = 0; j < snap.docs.length; j += 400) {
+        const batch = db.batch()
+        for (const d of snap.docs.slice(j, j + 400)) batch.delete(d.ref)
+        await batch.commit()
+      }
     }
   }
 }
@@ -110,10 +122,8 @@ describe.skipIf(!EMULATORS)("PR #120 review: the checker pages through a persist
   const extraFirms: string[] = []
 
   afterEach(async () => {
-    await deleteWhereFirm("jobs", [firmA, firmB])
-    await deleteWhereFirm("ai_reservations", [firmA, firmB, ...extraFirms])
+    await deleteWritten([firmA, firmB, ...extraFirms])
     await stateRef().delete()
-    await deleteFirmData([firmA, firmB, ...extraFirms])
     extraFirms.length = 0
   }, CLEANUP_TIMEOUT_MS)
 
