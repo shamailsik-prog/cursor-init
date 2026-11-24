@@ -403,8 +403,164 @@ export async function restoreDocumentObjectFile(
   await writeFile(filePath, payload, { flag: "wx" })
 }
 
+// L9.1 upload-staging. Chunks are ciphertext in the same AES-GCM format as
+// originals. They live under upload-staging/<firmId>/<sessionId>/<fileIdx>/<chunkIdx>
+// and are never written on a document storage path.
+const stagingMemory = new Map<string, Buffer>()
+
+function assertStagingPath(storagePath: string): void {
+  const scheme = activeStorageScheme()
+  if (!storagePath.startsWith(scheme)) {
+    throw new Error("staging path failed scheme validation")
+  }
+  const segments = storagePath.slice(scheme.length).split("/")
+  // Originals are firmId/documents/docId/vN (four segments). Staging is five,
+  // and the first segment is the literal prefix, so a document path cannot match.
+  if (segments.length !== 5 || segments[0] !== "upload-staging") {
+    throw new Error("staging path is not under upload-staging/")
+  }
+  if (segments.some((segment) => !SAFE_SEGMENT.test(segment))) {
+    throw new Error("staging path segment failed safety validation")
+  }
+}
+
+function stagingChunkPath(firmId: string, sessionId: string, fileIdx: number, chunkIdx: number): string {
+  if (!SAFE_SEGMENT.test(firmId) || !SAFE_SEGMENT.test(sessionId)) {
+    throw new Error("staging identity failed path safety validation")
+  }
+  if (!Number.isSafeInteger(fileIdx) || fileIdx < 0 || !Number.isSafeInteger(chunkIdx) || chunkIdx < 1) {
+    throw new Error("staging chunk index failed validation")
+  }
+  const storagePath = `${activeStorageScheme()}upload-staging/${firmId}/${sessionId}/${fileIdx}/${chunkIdx}`
+  assertStagingPath(storagePath)
+  return storagePath
+}
+
+function isMissingStaging(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code
+  if (code === "ENOENT") return true
+  return err instanceof Error && /not found/.test(err.message)
+}
+
+async function writeStagingPayload(storagePath: string, payload: Buffer): Promise<void> {
+  assertStagingPath(storagePath)
+  const kind = resolveDocumentObjectBackendKind()
+  if (kind === "memory") {
+    if (stagingMemory.has(storagePath)) throw new Error("staging chunk already exists")
+    stagingMemory.set(storagePath, payload)
+    return
+  }
+  if (kind === "s3") {
+    await writeS3Payload(storagePath, payload)
+    return
+  }
+  const filePath = filesystemPathForStoragePath(storagePath)
+  await mkdir(path.dirname(filePath), { recursive: true })
+  await writeFile(filePath, payload, { flag: "wx" })
+}
+
+async function readStagingPayload(storagePath: string): Promise<Buffer> {
+  assertStagingPath(storagePath)
+  const kind = resolveDocumentObjectBackendKind()
+  if (kind === "memory") {
+    const payload = stagingMemory.get(storagePath)
+    if (!payload) throw new Error(`staging chunk not found: ${storagePath}`)
+    return payload
+  }
+  if (kind === "s3") return readS3Payload(storagePath)
+  return readFile(filesystemPathForStoragePath(storagePath))
+}
+
+async function removeStagingPayload(storagePath: string): Promise<void> {
+  assertStagingPath(storagePath)
+  const kind = resolveDocumentObjectBackendKind()
+  if (kind === "memory") {
+    stagingMemory.delete(storagePath)
+    return
+  }
+  if (kind === "s3") {
+    await deleteS3Payload(storagePath)
+    return
+  }
+  try {
+    await unlink(filesystemPathForStoragePath(storagePath))
+  } catch (err) {
+    if ((err as { code?: string }).code !== "ENOENT") throw err
+  }
+}
+
+export async function putStagingChunk(input: {
+  firmId: string
+  sessionId: string
+  fileIdx: number
+  chunkIdx: number
+  bytes: Buffer
+}): Promise<void> {
+  if (!Buffer.isBuffer(input.bytes)) throw new Error("staging chunk bytes must be a buffer")
+  const storagePath = stagingChunkPath(input.firmId, input.sessionId, input.fileIdx, input.chunkIdx)
+  const payload = encryptPlaintext(input.bytes)
+  await writeStagingPayload(storagePath, payload)
+  try {
+    const roundTrip = decryptDocumentObjectPayload(await readStagingPayload(storagePath))
+    if (!roundTrip.equals(input.bytes)) throw new Error("staging chunk round-trip verification failed")
+  } catch (err) {
+    try {
+      await removeStagingPayload(storagePath)
+    } catch (deleteErr) {
+      console.error("[documentObjectStore] staging rollback failed:", deleteErr)
+    }
+    throw err
+  }
+}
+
+/** Reads `chunkCount` chunks beginning at `fromChunk` (default 1). A missing chunk is null. */
+export async function readStagingChunks(input: {
+  firmId: string
+  sessionId: string
+  fileIdx: number
+  chunkCount: number
+  fromChunk?: number
+}): Promise<Array<Buffer | null>> {
+  const from = input.fromChunk ?? 1
+  if (!Number.isSafeInteger(from) || from < 1) throw new Error("staging chunk index failed validation")
+  if (!Number.isSafeInteger(input.chunkCount) || input.chunkCount < 1 || input.chunkCount > 100_000) {
+    throw new Error("staging chunk count failed validation")
+  }
+  const out: Array<Buffer | null> = []
+  for (let offset = 0; offset < input.chunkCount; offset++) {
+    const storagePath = stagingChunkPath(input.firmId, input.sessionId, input.fileIdx, from + offset)
+    try {
+      out.push(decryptDocumentObjectPayload(await readStagingPayload(storagePath)))
+    } catch (err) {
+      if (!isMissingStaging(err)) throw err
+      out.push(null)
+    }
+  }
+  return out
+}
+
+/** Deletes the named files' staging chunks. Paths outside upload-staging are refused. */
+export async function deleteStagingSession(input: {
+  firmId: string
+  sessionId: string
+  files: Array<{ fileIdx: number; chunkCount: number }>
+}): Promise<void> {
+  for (const file of input.files) {
+    if (!Number.isSafeInteger(file.fileIdx) || file.fileIdx < 0) {
+      throw new Error("staging chunk index failed validation")
+    }
+    if (!Number.isSafeInteger(file.chunkCount) || file.chunkCount < 0 || file.chunkCount > 100_000) {
+      throw new Error("staging chunk count failed validation")
+    }
+    for (let chunkIdx = 1; chunkIdx <= file.chunkCount; chunkIdx++) {
+      await removeStagingPayload(stagingChunkPath(input.firmId, input.sessionId, file.fileIdx, chunkIdx))
+    }
+  }
+}
+
 export function resetDocumentObjectStoreForTests(): void {
   memoryObjects.clear()
+  stagingMemory.clear()
   testHookFailNextRead = false
   testHookFailNextDelete = false
   resetDocumentObjectS3ClientForTests()

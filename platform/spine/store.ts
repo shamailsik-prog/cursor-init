@@ -4,6 +4,7 @@ import type { Classification } from "@/platform/p1/types"
 import type { CaseNumberStatus, MatterStage, MatterStatus } from "@/platform/d1/matterDocument"
 import { classificationRank, isClassification } from "@/platform/p1/types"
 import { currentRequestIdentity } from "@/platform/p5/requestSession"
+import type { BulkUploadSessionRow } from "@/platform/spine/bulkUploadSession"
 
 export type { Classification } from "@/platform/p1/types"
 
@@ -5658,6 +5659,8 @@ export class SpineStore {
   matters = new Map<string, Matter>()
   documents = new Map<string, DocumentRecord>()
   docsByHash = new Map<string, string>()
+  /** L9.1 resumable bulk-upload sessions. Rows are not original documents. */
+  uploadSessions = new Map<string, BulkUploadSessionRow>()
   jobs: Job[] = []
   entities = new Map<string, Entity>()
   links: EntityLink[] = []
