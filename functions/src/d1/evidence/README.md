@@ -8,7 +8,7 @@ Architecture lines 1189–1209. Per-matter evidence register and an append-only 
 
 ## Stores
 
-`evidence_items` and `custody_events` are the pre-registered inventory rows (`matter_content`, deletion key `matterId`). They were never `pending`. This writer does not append a duplicate and does not add `pending`. Every evidence row and every custody event carries `firmId`. `infra/retention/inventory.json` is not edited. Client writes are denied: both collections are Functions-only (`allow create, update, delete: if false`). A read still requires a matter member cleared for that row, including a custody note.
+`evidence_items` and `custody_events` are the pre-registered inventory rows (`matter_content`, deletion key `matterId`). They were never `pending`. This writer does not append a duplicate and does not add `pending`. Every evidence row and every custody event carries `firmId`. `infra/retention/inventory.json` is not edited. Client writes are denied: both collections are Functions-only (`allow create, update, delete: if false`). A partner token cannot plant an evidence row, forge a back-dated custody event, or pre-create the next seq. A read still requires a matter member cleared for that row, including a custody note.
 
 ## Custody hash
 
