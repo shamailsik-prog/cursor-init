@@ -14,11 +14,11 @@ import {
   readDraftTemplateAnalyticsRow,
 } from "@/platform/persistence/draftTemplateAnalytics"
 import {
-  nextCourtOpsAckRow,
   readWorkflowOpsActivityRow,
   refuseBlindCourtOpsAckWrite,
 } from "@/platform/persistence/courtOpsAcknowledgement"
 import { resolveOpenFollowUpFirestore } from "@/platform/persistence/courtOpsFollowUpResolve"
+import { recordCourtOpsAckFirestore, upsertFollowUpFirestore } from "@/platform/persistence/courtOpsMatterBinding"
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import {
   deleteDoc,
@@ -2221,13 +2221,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
     },
     followUps: {
-      async upsert(row) {
-        const payload: Record<string, unknown> = { ...row }
-        if (payload.status === undefined) delete payload.status
-        if (payload.resolvedBy === undefined) delete payload.resolvedBy
-        if (payload.resolvedAt === undefined) delete payload.resolvedAt
-        await setDoc(doc(db, "follow_ups", row.id), payload)
-      },
+      async upsert(row) { return upsertFollowUpFirestore(db, row) },
       async resolveOpen(input) { return resolveOpenFollowUpFirestore(db, input) },
       async get(id, firmId) {
         return getById<FollowUp>(db, "follow_ups", id, firmId)
@@ -2454,16 +2448,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         refuseBlindCourtOpsAckWrite(row.id)
         await setDoc(doc(db, "workflow_ops_activity", row.id), row)
       },
-      async recordCourtOpsAcknowledgement(firmId, row) {
-        const firm = requireCallerFirmId(firmId, "workflowOpsActivity.recordCourtOpsAcknowledgement")
-        const ref = doc(db, "workflow_ops_activity", row.id)
-        return runTransaction(db, async (tx) => {
-          const snap = await tx.get(ref)
-          const next = nextCourtOpsAckRow(firm, row, snap.exists() ? snap.data() : null)
-          tx.set(ref, next)
-          return next
-        })
-      },
+      async recordCourtOpsAcknowledgement(firmId, row) { return recordCourtOpsAckFirestore(db, firmId, row) },
       async get(id, firmId) {
         const row = await getById<WorkflowOpsActivityRow>(db, "workflow_ops_activity", id, firmId)
         return row ? readWorkflowOpsActivityRow(id, row) : null

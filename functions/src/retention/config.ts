@@ -117,6 +117,14 @@ export const retentionTestSeam: {
   beforeAck?: (part: string) => Promise<void>
   /** FA-F42-R2-001: runs inside halt()'s transaction after reads begin, before the hold is re-checked (race regression). */
   beforeHaltCommit?: (ctx: { firmId: string; matterId: string; requestId: string }) => Promise<void>
+  /**
+   * FA-D4-001-FU1-001 R2: court-ops reach pages outside one `runFenced` transaction (a page loop cannot be one
+   * transaction). `failCourtOpsReach` makes the call throw. `courtOpsReachMaxPages` lowers the 1,000-page cap.
+   * `afterCourtOpsReachPage` runs after a page's transaction commits (a throw is a crash between pages).
+   */
+  failCourtOpsReach?: boolean
+  courtOpsReachMaxPages?: number
+  afterCourtOpsReachPage?: (page: number) => Promise<void>
 } = {}
 
 /** The longest store key. Some legacy collection names run to 1,500 characters, past Firestore's field-name limit. */
