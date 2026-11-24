@@ -70,13 +70,13 @@ export class InMemoryLearningLedger implements LearningLedger {
     if (status !== "approved" && status !== "rejected") return null
     const actor = normalizeActorKey(next.decidedBy)
     if (actor === "" || actor === normalizeActorKey(current.proposedBy)) return null
-    if (status === "rejected" && next.sealedProposalId !== null) return null
+    if (next.sealedProposalId !== current.sealedProposalId) return null
     const stored: LearningProposalRecord = {
       ...current,
       status,
       decidedBy: next.decidedBy,
       decidedAt: next.decidedAt,
-      sealedProposalId: status === "approved" ? next.sealedProposalId : null,
+      sealedProposalId: current.sealedProposalId,
       masterWrite: false,
     }
     this.rows.set(id, stored)

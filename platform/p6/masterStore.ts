@@ -534,12 +534,16 @@ async function assertStoredWrite(
   if (!input.proposalId) throw new Error("proposal not found")
   const stored = await raw.getProposal(input.proposalId)
   if (!stored || stored.firmId !== input.firmId) throw new Error("commit is bound to the proposal")
-  const { sealedBaselineMatches } = await import("@/platform/p6/learning/baseline")
+  const { masterBody, sealedBaselineMatches } = await import("@/platform/p6/learning/baseline")
+  const { isSealedVoid } = await import("@/platform/p6/learning/sealedVoid")
   const { LearningStaleError } = await import("@/platform/p6/learning/stale")
-  if (!sealedBaselineMatches(current.entries[stored.entryKey]?.body, stored.payload)) {
+  if (isSealedVoid(stored.id)) throw new Error("sealed proposal is void")
+  const liveBody = current.entries[stored.entryKey]?.body
+  if (!sealedBaselineMatches(liveBody, stored.payload, stored.sourceModule)) {
     throw new LearningStaleError()
   }
-  const liveClass = rules.effectiveClass(stored.requestedClass, current.entries[stored.entryKey]?.body, stored.payload)
+  const writtenBody = masterBody(stored.payload, stored.sourceModule)
+  const liveClass = rules.effectiveClass(stored.requestedClass, liveBody, writtenBody)
   const substantive = liveClass === "substantive" || stored.changeClass === "substantive"
   const expected = rules.nextSnapshot(current, stored)
   if (!sameDocument(input.snapshot, expected) || !sameDocument(input.diff.after, input.snapshot)) {
@@ -1353,7 +1357,7 @@ async function readClassification(client: pg.PoolClient, firmId: string): Promis
 function commitError(error: unknown): Error {
   if (
     error instanceof Error &&
-    /did not commit|non-P6 writer refused|master version conflict|proposal already has a version|declassify|frozen|proposedBy is immutable|proposal not found|version not found|approval is not a direct status change|proposal status transition is refused|commit is bound to the proposal|proposer key missing|partner approval|approver must differ|cosmetic proposal is not pending|proposal is already applied|learning proposal is stale|master session is closed/.test(
+    /did not commit|non-P6 writer refused|master version conflict|proposal already has a version|declassify|frozen|proposedBy is immutable|proposal not found|version not found|approval is not a direct status change|proposal status transition is refused|commit is bound to the proposal|proposer key missing|partner approval|approver must differ|cosmetic proposal is not pending|proposal is already applied|learning proposal is stale|sealed proposal is void|master session is closed/.test(
       error.message,
     )
   ) {

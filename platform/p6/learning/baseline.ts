@@ -34,9 +34,11 @@ export function learningEnvelope(payload: unknown, sourceModule: string): Learni
   return payload
 }
 
-/** Body that a sealed apply writes. An L4.6 envelope contributes `l46After` only. Any other payload is stored whole. */
+/** Body that a sealed apply writes. An L4.6 envelope contributes `l46After` only, including null. Any other payload is stored whole. */
 export function masterBody(payload: unknown, sourceModule: string): unknown {
-  return learningEnvelope(payload, sourceModule)?.l46After ?? payload
+  const envelope = learningEnvelope(payload, sourceModule)
+  if (!envelope) return payload
+  return envelope.l46After
 }
 
 /** True when the live entry is the baseline the learner recorded. A missing entry matches only a missing before. */

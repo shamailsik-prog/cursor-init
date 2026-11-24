@@ -10,7 +10,8 @@ import { isClassification } from "@/platform/p1/types"
 import { assertLearnersStopped, type LearnerPosture } from "@/platform/p6/learners"
 import { canonicalPayload, normalizeActorKey, payloadDigest, type MasterStore } from "@/platform/p6/masterStore"
 import { effectiveClass } from "@/platform/p6/masterWrite"
-import { approveProposal, proposeChange, voidSealedProposal } from "@/platform/p6/proposeChange"
+import { approveProposal, proposeChange } from "@/platform/p6/proposeChange"
+import { markSealedVoid } from "@/platform/p6/learning/sealedVoid"
 import { baselineMatchesLive, LEARNING_SOURCE_MODULE, learningBaselinePayload } from "@/platform/p6/learning/baseline"
 import { isP6LearningEnabled } from "@/platform/p6/learning/flag"
 import type { LearningLedger } from "@/platform/p6/learning/ledger"
@@ -285,6 +286,19 @@ export async function proposeLearning(input: ProposeLearningInput, deps: Learnin
   })
 }
 
+/** Partner-only. Not exported. An applied seal cannot be voided. */
+async function voidOpenSeal(proposalId: string, store: MasterStore): Promise<void> {
+  if (store.role !== "p6_service") throw new Error("non-P6 writer refused")
+  await store.runExclusive(async (tx) => {
+    const row = await tx.getProposal(proposalId)
+    if (!row) throw new Error("proposal not found")
+    if (row.status === "applied") throw new Error("proposal is already applied")
+    if (row.sourceModule !== LEARNING_SOURCE_MODULE) throw new Error("proposal is not a learning seal")
+    await tx.lockFirm(row.firmId)
+    markSealedVoid(proposalId)
+  })
+}
+
 export async function decideLearning(id: string, actor: LearningActor, deps: LearningDeps): Promise<LearningProposalRecord> {
   return exclusive(deps.ledger, async () => {
     assertLearningOpen(deps)
@@ -296,13 +310,13 @@ export async function decideLearning(id: string, actor: LearningActor, deps: Lea
     if (decision === "rejected") {
       if (row.sealedProposalId) {
         if (!deps.store) throw new Error("learning rejection requires the master store")
-        await voidSealedProposal(row.sealedProposalId, deps.store)
+        await voidOpenSeal(row.sealedProposalId, deps.store)
       }
       const saved = await deps.ledger.compareAndSetStatus(id, "pending", {
         status: "rejected",
         decidedBy: actor.actorId,
         decidedAt: clock(deps).toISOString(),
-        sealedProposalId: null,
+        sealedProposalId: row.sealedProposalId,
       })
       if (!saved) throw new Error("proposal is not pending")
       if (saved.masterWrite !== false) refuseDirectMasterWrite()

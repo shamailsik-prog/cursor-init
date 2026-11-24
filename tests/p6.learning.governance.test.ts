@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import { InMemoryMasterStore, type MasterSession, type MasterStore } from "@/platform/p6/masterStore"
 import { applyLearning } from "@/platform/p6/applyLearning"
 import { applyChange, approveProposal, proposeChange } from "@/platform/p6/proposeChange"
+import * as proposals from "@/platform/p6/proposeChange"
 import { masterWriteAuditLog, scanP6MasterWriters } from "@/platform/p6/masterWrite"
 import * as learning from "@/platform/p6/learning"
 import {
@@ -347,7 +348,7 @@ describe("L4.6 learning governance", () => {
     expect(await ledger.findByFingerprint("none")).toBeNull()
   })
 
-  it("R22 refuses the immutable citation partition", async () => {
+  it("refuses the immutable citation partition", async () => {
     const { deps, inserts } = await harness()
     await expect(proposeLearning(proposal({ entryKey: "citation_protocol" }), deps)).rejects.toThrow(
       /immutable master partition is not writable/,
@@ -361,7 +362,7 @@ describe("L4.6 learning governance", () => {
     expect(inserts()).toBe(0)
   })
 
-  it("R15 keeps a different classification as its own proposal", async () => {
+  it("keeps a different classification as its own proposal", async () => {
     const { deps } = await harness()
     const publicRow = await proposeLearning(
       proposal({ entryKey: "clause.class", classification: "public", before: undefined, after: { clause: "fresh" } }),
@@ -418,7 +419,7 @@ describe("L4.6 learning governance", () => {
     expect(await ledger.get(stored.id)).toMatchObject({ status: "pending" })
   })
 
-  it("M20/M33 dedupes an identical proposal, including key order, and does not spend the rate limit on the duplicate", async () => {
+  it("dedupes an identical proposal, including key order, and does not spend the rate limit on the duplicate", async () => {
     const { deps } = await harness({ limits: { maxProposalsPerWindow: 1, windowMs: 60_000 } })
     const first = await proposeLearning(proposal({ before: { b: 1, a: 2 }, after: { a: 2, b: 1 } }), deps)
     const again = await proposeLearning(
@@ -639,9 +640,10 @@ describe("L4.6 learning governance", () => {
 
   it("refuses a direct master write and exports no writer", () => {
     expect(() => refuseDirectMasterWrite()).toThrow(/learning cannot write the master/)
-    for (const name of ["applyChange", "applyLearning", "writeMaster", "rollbackMaster", "commitVersion", "sealMasterSession"]) {
+    for (const name of ["applyChange", "applyLearning", "writeMaster", "rollbackMaster", "commitVersion", "sealMasterSession", "voidSealedProposal", "markSealedVoid"]) {
       expect(learning).not.toHaveProperty(name)
     }
+    expect(proposals).not.toHaveProperty("voidSealedProposal")
   })
 
   it("the learning tree is not a second master writer, and the CI scanner passes", () => {
@@ -1095,7 +1097,7 @@ describe("L4.6 learning governance", () => {
     expect(source).toMatch(/take proposedBy and the deciding actor from the verified session/)
   })
 
-  it("M30 refuses evidence and field text over the cap before a row is stored", async () => {
+  it("refuses evidence and field text over the cap before a row is stored", async () => {
     const { deps, ledger, inserts } = await harness({ limits: { maxEvidenceChars: 8, maxFieldChars: 6 } })
     await expect(
       proposeLearning(proposal({ evidence: "123456789", entryKey: "ev", proposedBy: "l1" }), deps),
@@ -1109,7 +1111,7 @@ describe("L4.6 learning governance", () => {
     expect(inserts()).toBe(0)
   })
 
-  it("R03/R04 a missing before matches only a missing live entry", async () => {
+  it("a missing before matches only a missing live entry", async () => {
     const memory = new InMemoryMasterStore({ role: "p6_service" })
     await seedEntry(memory, "clause.notice", { clause: "the plaintiff" })
     const ledger = new InMemoryLearningLedger()
@@ -1187,12 +1189,198 @@ describe("L4.6 learning governance", () => {
     expect((await memory.getProposal(sealedId!))?.status).toBe("pending")
     const rejected = await decideLearning(pending.id, partner({ actorId: "partner_c", decision: "rejected" }), deps)
     expect(rejected.status).toBe("rejected")
-    expect(rejected.sealedProposalId).toBeNull()
+    expect(rejected.sealedProposalId).toBe(sealedId)
+    const stored = await memory.getProposal(sealedId!)
+    const current = await memory.currentSnapshot("firmA")
+    const { nextSnapshot } = await import("@/platform/p6/masterWrite")
+    const snapshot = nextSnapshot(current, stored!)
+    await expect(
+      memory.commitVersion({
+        firmId: "firmA",
+        proposalId: sealedId!,
+        action: "apply",
+        diff: { key: "clause.notice", partition: "mutable", before: current, after: snapshot },
+        snapshot,
+        authorId: "partner_d",
+        authorKind: "partner",
+        restoredFromVersionId: null,
+        classification: "confidential",
+        proposal: stored,
+        expectedBaseVersionId: (await memory.listVersions("firmA")).at(-1)?.id ?? null,
+      }),
+    ).rejects.toThrow(/sealed proposal is void/)
     await expect(
       approveProposal(sealedId!, { actorId: "partner_d", kind: "partner", role: "partner" }, memory),
     ).rejects.toThrow(/sealed proposal is void/)
     await expect(applyChange(sealedId!, memory)).rejects.toThrow(/sealed proposal is void/)
     expect((await memory.currentSnapshot("firmA")).entries["clause.notice"]?.body).toEqual({ clause: "the plaintiff" })
+  })
+
+  it("VOID-291-009 a reject after the seal is approved cannot be committed", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    await seedEntry(memory, "clause.notice", { clause: "the plaintiff" })
+    const ledger = new InMemoryLearningLedger()
+    const real = ledger.compareAndSetStatus.bind(ledger)
+    let failApproved = true
+    ledger.compareAndSetStatus = async (id, from, next) => {
+      if (failApproved && next.status === "approved") {
+        failApproved = false
+        throw new Error("ledger cas failed")
+      }
+      return real(id, from, next)
+    }
+    const deps: LearningDeps = {
+      ledger,
+      posture: OPEN,
+      store: memory,
+      env: { [FLAG]: "true" },
+      now: () => new Date("2026-11-24T00:00:00.000Z"),
+    }
+    const pending = await proposeLearning(proposal(), deps)
+    await expect(decideLearning(pending.id, partner(), deps)).rejects.toThrow(/ledger cas failed/)
+    const sealedId = (await ledger.get(pending.id))?.sealedProposalId
+    expect((await memory.getProposal(sealedId!))?.status).toBe("approved")
+    expect((await ledger.get(pending.id))?.status).toBe("pending")
+    const rejected = await decideLearning(pending.id, partner({ actorId: "partner_c", decision: "rejected" }), deps)
+    expect(rejected.status).toBe("rejected")
+    expect(rejected.sealedProposalId).toBe(sealedId)
+    const stored = await memory.getProposal(sealedId!)
+    const current = await memory.currentSnapshot("firmA")
+    const { nextSnapshot } = await import("@/platform/p6/masterWrite")
+    const snapshot = nextSnapshot(current, stored!)
+    const versions = (await memory.listVersions("firmA")).length
+    await expect(
+      memory.commitVersion({
+        firmId: "firmA",
+        proposalId: sealedId!,
+        action: "apply",
+        diff: { key: "clause.notice", partition: "mutable", before: current, after: snapshot },
+        snapshot,
+        authorId: "partner_b",
+        authorKind: "partner",
+        restoredFromVersionId: null,
+        classification: "confidential",
+        proposal: null,
+        expectedBaseVersionId: (await memory.listVersions("firmA")).at(-1)?.id ?? null,
+      }),
+    ).rejects.toThrow(/sealed proposal is void/)
+    expect(await memory.listVersions("firmA")).toHaveLength(versions)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.notice"]?.body).toEqual({ clause: "the plaintiff" })
+    expect((await memory.getProposal(sealedId!))?.status).toBe("approved")
+  })
+
+  it("a reject does not void an applied seal or a seal from another module", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    await seedEntry(memory, "clause.notice", { clause: "the plaintiff" })
+    const ledger = new InMemoryLearningLedger()
+    const deps: LearningDeps = {
+      ledger,
+      posture: OPEN,
+      store: memory,
+      env: { [FLAG]: "true" },
+      now: () => new Date("2026-11-24T00:00:00.000Z"),
+    }
+    const applied = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "L4.6",
+        classification: "confidential",
+        payload: {
+          l46: "baseline",
+          l46BeforeMissing: false,
+          l46Before: { clause: "the plaintiff" },
+          l46After: { clause: "kept" },
+        },
+        proposedBy: "learner-1",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.notice",
+      },
+      memory,
+    )
+    await approveProposal(applied.id, { actorId: "partner_b", kind: "partner", role: "partner" }, memory)
+    await applyChange(applied.id, memory)
+    const pending = await proposeLearning(proposal({ entryKey: "clause.other", before: undefined, after: { clause: "fresh" } }), deps)
+    await ledger.attachSealed(pending.id, applied.id)
+    await expect(decideLearning(pending.id, partner({ decision: "rejected" }), deps)).rejects.toThrow(/proposal is already applied/)
+    expect((await ledger.get(pending.id))?.status).toBe("pending")
+    expect((await memory.currentSnapshot("firmA")).entries["clause.notice"]?.body).toEqual({ clause: "kept" })
+
+    const other = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "partner-desk",
+        classification: "confidential",
+        payload: { clause: "desk" },
+        proposedBy: "learner-1",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.desk",
+      },
+      memory,
+    )
+    const second = await proposeLearning(proposal({ entryKey: "clause.second", before: undefined, after: { clause: "fresh" } }), deps)
+    await ledger.attachSealed(second.id, other.id)
+    await expect(decideLearning(second.id, partner({ actorId: "partner_c", decision: "rejected" }), deps)).rejects.toThrow(
+      /proposal is not a learning seal/,
+    )
+    expect((await ledger.get(second.id))?.status).toBe("pending")
+    expect((await memory.getProposal(other.id))?.status).toBe("pending")
+  })
+
+  it("an L4.6 payload that is not an envelope is not applied", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    await seedEntry(memory, "clause.notice", { clause: "X" })
+    const raw = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "L4.6",
+        classification: "confidential",
+        payload: { clause: "Y" },
+        proposedBy: "learner-1",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.notice",
+      },
+      memory,
+    )
+    await approveProposal(raw.id, { actorId: "partner_b", kind: "partner", role: "partner" }, memory)
+    await expect(applyChange(raw.id, memory)).rejects.toBeInstanceOf(LearningStaleError)
+    const stored = await memory.getProposal(raw.id)
+    const current = await memory.currentSnapshot("firmA")
+    const { nextSnapshot } = await import("@/platform/p6/masterWrite")
+    const snapshot = nextSnapshot(current, stored!)
+    await expect(memory.commitVersion({
+      firmId: "firmA",
+      proposalId: raw.id,
+      action: "apply",
+      diff: { key: "clause.notice", partition: "mutable", before: current, after: snapshot },
+      snapshot,
+      authorId: "partner_b",
+      authorKind: "partner",
+      restoredFromVersionId: null,
+      classification: "confidential",
+      proposal: null,
+      expectedBaseVersionId: (await memory.listVersions("firmA")).at(-1)?.id ?? null,
+    })).rejects.toBeInstanceOf(LearningStaleError)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.notice"]?.body).toEqual({ clause: "X" })
+  })
+
+  it("an L4.6 envelope writes l46After even when that body is null, and a padded source is not L4.6", async () => {
+    const { masterBody, sealedBaselineMatches } = await import("@/platform/p6/learning/baseline")
+    const envelope = {
+      l46: "baseline",
+      l46BeforeMissing: false,
+      l46Before: { clause: "X" },
+      l46After: null,
+    }
+    expect(masterBody(envelope, "L4.6")).toBeNull()
+    expect(masterBody(envelope, "partner-desk")).toEqual(envelope)
+    expect(masterBody(envelope, "L4.6 ")).toEqual(envelope)
+    expect(sealedBaselineMatches({ clause: "X" }, envelope, "L4.6")).toBe(true)
+    expect(sealedBaselineMatches({ clause: "Y" }, envelope, "L4.6 ")).toBe(true)
+    expect(sealedBaselineMatches({ clause: "Y" }, envelope, "L4.6")).toBe(false)
+    expect(sealedBaselineMatches(undefined, { clause: "Y" }, "L4.6")).toBe(false)
   })
 
   it("DESIGN-282-R2-005 treats an envelope as learning only when the source module is L4.6", async () => {
