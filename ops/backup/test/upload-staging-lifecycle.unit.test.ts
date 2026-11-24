@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
-import { UPLOAD_STAGING_LIFECYCLE_DAYS, UPLOAD_STAGING_OBJECT_PREFIX } from "@/platform/documents/documentObjectStore"
+import { UPLOAD_STAGING_LIFECYCLE_DAYS, UPLOAD_STAGING_OBJECT_PREFIX } from "@/platform/documents/uploadStagingStore"
 import { loadInfraConfig } from "../config"
 import { desiredUploadStagingLifecycle } from "../objects/protection"
 

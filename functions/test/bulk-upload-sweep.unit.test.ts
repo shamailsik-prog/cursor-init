@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   putStagingChunk,
   readStagingChunks,
-  resetDocumentObjectStoreForTests,
+  resetUploadStagingForTests,
   setStagingWrittenAtForTests,
-} from "@/platform/documents/documentObjectStore"
+} from "@/platform/documents/uploadStagingStore"
+import { resetDocumentObjectStoreForTests } from "@/platform/documents/documentObjectStore"
 import { BULK_UPLOAD_STAGING_TTL_MS } from "@/services/d1-6/bulkUpload"
 import { runBulkUploadStagingSweep } from "../src/d1/bulkUploadSweep"
 import { documentObjectTestKey } from "./documentObjectTestKey"
@@ -13,6 +14,7 @@ describe("bulk upload staging sweep", () => {
   afterEach(() => {
     vi.unstubAllEnvs()
     resetDocumentObjectStoreForTests()
+    resetUploadStagingForTests()
   })
 
   it("builds the document-object fixture at runtime as 32 varied bytes", () => {

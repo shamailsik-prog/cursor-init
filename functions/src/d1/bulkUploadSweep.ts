@@ -1,5 +1,5 @@
 import { onSchedule } from "firebase-functions/v2/scheduler"
-import { UPLOAD_SESSIONS_COLLECTION, sweepExpiredStagingObjects } from "@/platform/documents/documentObjectStore"
+import { UPLOAD_SESSIONS_COLLECTION, sweepExpiredStagingObjects } from "@/platform/documents/uploadStagingStore"
 import { BULK_UPLOAD_STAGING_TTL_MS, isBulkUploadEnabled } from "@/services/d1-6/bulkUpload"
 import { adminDb } from "../admin"
 import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../runtimeOptions"

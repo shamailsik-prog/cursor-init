@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import * as objectStore from "@/platform/documents/documentObjectStore"
+import * as staging from "@/platform/documents/uploadStagingStore"
 import { uploadSessionsOf } from "@/platform/spine/bulkUploadSession"
 import { newStore, type SpineStore } from "@/platform/spine/store"
 import * as documentUpload from "@/services/d1-6/uploadDocument"
@@ -47,11 +48,13 @@ describe("L9.1 high-speed bulk upload", () => {
   beforeEach(() => {
     vi.stubEnv(FLAG, "true")
     objectStore.resetDocumentObjectStoreForTests()
+    staging.resetUploadStagingForTests()
   })
 
   afterEach(() => {
     vi.unstubAllEnvs()
     objectStore.resetDocumentObjectStoreForTests()
+    staging.resetUploadStagingForTests()
   })
 
   it("pins the session caps and the fixed chunk size", () => {
@@ -77,7 +80,7 @@ describe("L9.1 high-speed bulk upload", () => {
       idempotencyKey: "held-1",
       uploadedBy: "partner_a",
     })
-    const puts = vi.spyOn(objectStore, "putStagingChunk")
+    const puts = vi.spyOn(staging, "putStagingChunk")
     const uploads = vi.spyOn(documentUpload, "uploadDocument")
     const started = await startBulkUpload(store, "firmA", "m1", [
       fileOf(freshA, store, "firmA", "a.pdf"),
@@ -166,7 +169,7 @@ describe("L9.1 high-speed bulk upload", () => {
       store.documents.get(kept.docId)?.contentHash ?? ""
     )
     expect(keptBytes.equals(original)).toBe(true)
-    const gone = await objectStore.readStagingChunks({
+    const gone = await staging.readStagingChunks({
       firmId: "firmA",
       matterId: "m1",
       sessionId: started.sessionId,
@@ -174,7 +177,7 @@ describe("L9.1 high-speed bulk upload", () => {
       chunkCount: 1,
     })
     expect(gone).toEqual([null])
-    const sibling = await objectStore.readStagingChunks({
+    const sibling = await staging.readStagingChunks({
       firmId: "firmA",
       matterId: "m1",
       sessionId: started.sessionId,
@@ -194,7 +197,7 @@ describe("L9.1 high-speed bulk upload", () => {
     const store = newStore()
     const bytes = Buffer.from("%PDF-chunk-once%")
     const started = await startBulkUpload(store, "firmA", null, [fileOf(bytes, store, "firmA", "once.pdf")], caller)
-    const puts = vi.spyOn(objectStore, "putStagingChunk")
+    const puts = vi.spyOn(staging, "putStagingChunk")
     await uploadChunk(store, started.sessionId, 0, 1, bytes, caller)
     await uploadChunk(store, started.sessionId, 0, 1, bytes, caller)
     expect(puts).toHaveBeenCalledTimes(1)
@@ -202,7 +205,7 @@ describe("L9.1 high-speed bulk upload", () => {
     flipped[0] = flipped[0] === 0x25 ? 0x26 : 0x25
     await expect(uploadChunk(store, started.sessionId, 0, 1, flipped, caller)).rejects.toThrow(/chunk refused/)
     expect(puts).toHaveBeenCalledTimes(1)
-    const stored = await objectStore.readStagingChunks({
+    const stored = await staging.readStagingChunks({
       firmId: "firmA",
       matterId: null,
       sessionId: started.sessionId,
@@ -299,7 +302,7 @@ describe("L9.1 high-speed bulk upload", () => {
     expect(second.reused).toBe(true)
     expect(uploads).toHaveBeenCalledTimes(1)
     expect(documentUpload.ocrJobsFor(store, first.docId)).toHaveLength(1)
-    const staged = await objectStore.readStagingChunks({
+    const staged = await staging.readStagingChunks({
       firmId: "firmA",
       matterId: "m1",
       sessionId: started.sessionId,
@@ -389,14 +392,12 @@ describe("L9.1 high-speed bulk upload", () => {
 
   it("does not call deleteDocumentObject on a document storage path", () => {
     const bulkSrc = readFileSync(new URL("../services/d1-6/bulkUpload.ts", import.meta.url), "utf8")
-    const storeSrc = readFileSync(new URL("../platform/documents/documentObjectStore.ts", import.meta.url), "utf8")
+    const stagingSrc = readFileSync(new URL("../platform/documents/uploadStagingStore.ts", import.meta.url), "utf8")
     expect(bulkSrc.includes("deleteDocumentObject")).toBe(false)
     expect(bulkSrc.includes("TODO(W1-L45)")).toBe(true)
     expect(bulkSrc.includes("isLooseUploadBlocked")).toBe(true)
-    const start = storeSrc.indexOf("// L9.1 upload-staging")
-    const end = storeSrc.indexOf("export function resetDocumentObjectStoreForTests")
-    expect(start).toBeGreaterThan(-1)
-    expect(storeSrc.slice(start, end).includes("deleteDocumentObject")).toBe(false)
+    expect(stagingSrc.includes("deleteDocumentObject")).toBe(false)
+    expect(stagingSrc.includes("// L9.1 upload-staging")).toBe(true)
   })
 
   it("every row carries firmId, and an expired session deletes only its staging", async () => {
@@ -435,7 +436,7 @@ describe("L9.1 high-speed bulk upload", () => {
     expect(uploadSessionsOf(store).has(started.sessionId)).toBe(true)
     await expect(getUploadProgress(store, started.sessionId, caller)).rejects.toThrow(/bulk upload session expired/)
     expect(uploadSessionsOf(store).has(started.sessionId)).toBe(false)
-    const chunks = await objectStore.readStagingChunks({
+    const chunks = await staging.readStagingChunks({
       firmId: "firmA",
       matterId: "m1",
       sessionId: started.sessionId,
@@ -463,13 +464,13 @@ describe("L9.1 high-speed bulk upload", () => {
     const deadRow = uploadSessionsOf(store).get(deadStart.sessionId)
     expect(deadRow).toBeTruthy()
     deadRow!.expiresAtMs = 1
-    objectStore.setStagingWrittenAtForTests(`${deadRow!.storagePath}/0/1`, 1)
+    staging.setStagingWrittenAtForTests(`${deadRow!.storagePath}/0/1`, 1)
     vi.stubEnv(FLAG, "false")
     const removed = await sweepExpiredBulkUploads(store, BULK_UPLOAD_STAGING_TTL_MS + 1)
     expect(removed).toBe(1)
     expect(uploadSessionsOf(store).has(deadStart.sessionId)).toBe(false)
     expect(uploadSessionsOf(store).has(liveStart.sessionId)).toBe(true)
-    const gone = await objectStore.readStagingChunks({
+    const gone = await staging.readStagingChunks({
       firmId: "firmA",
       matterId: "m1",
       sessionId: deadStart.sessionId,
@@ -477,7 +478,7 @@ describe("L9.1 high-speed bulk upload", () => {
       chunkCount: 1,
     })
     expect(gone).toEqual([null])
-    const kept = await objectStore.readStagingChunks({
+    const kept = await staging.readStagingChunks({
       firmId: "firmA",
       matterId: "m1",
       sessionId: liveStart.sessionId,
@@ -512,11 +513,11 @@ describe("L9.1 high-speed bulk upload", () => {
     await uploadChunk(store, youngSession.sessionId, 0, 1, youngBytes, caller)
     await uploadChunk(store, other.sessionId, 0, 1, otherBytes, caller)
     const oldRow = uploadSessionsOf(store).get(oldSession.sessionId)!
-    objectStore.setStagingWrittenAtForTests(`${oldRow.storagePath}/0/1`, 1)
+    staging.setStagingWrittenAtForTests(`${oldRow.storagePath}/0/1`, 1)
     uploadSessionsOf(store).delete(oldSession.sessionId)
     const removed = await sweepExpiredBulkUploads(store, BULK_UPLOAD_STAGING_TTL_MS + 2)
     expect(removed).toBe(1)
-    const orphan = await objectStore.readStagingChunks({
+    const orphan = await staging.readStagingChunks({
       firmId: "firmA",
       matterId: "m1",
       sessionId: oldSession.sessionId,
@@ -524,7 +525,7 @@ describe("L9.1 high-speed bulk upload", () => {
       chunkCount: 1,
     })
     expect(orphan).toEqual([null])
-    const young = await objectStore.readStagingChunks({
+    const young = await staging.readStagingChunks({
       firmId: "firmA",
       matterId: "m1",
       sessionId: youngSession.sessionId,
@@ -532,7 +533,7 @@ describe("L9.1 high-speed bulk upload", () => {
       chunkCount: 1,
     })
     expect(young[0]?.equals(youngBytes)).toBe(true)
-    const sibling = await objectStore.readStagingChunks({
+    const sibling = await staging.readStagingChunks({
       firmId: "firmA",
       matterId: "m2",
       sessionId: other.sessionId,
@@ -613,16 +614,16 @@ describe("L9.1 high-speed bulk upload", () => {
     await uploadChunk(store, a.sessionId, 0, 1, mine, caller)
     await uploadChunk(store, b.sessionId, 0, 1, other, caller)
     await uploadChunk(store, c.sessionId, 0, 1, foreign, { userId: "partner_b", firmId: "firmB" })
-    const removed = await objectStore.deleteStagingObjectsByPrefix(objectStore.stagingMatterPrefix("firmA", "m1"))
+    const removed = await staging.deleteStagingObjectsByPrefix(staging.stagingMatterPrefix("firmA", "m1"))
     expect(removed).toBe(1)
     expect(
-      await objectStore.readStagingChunks({ firmId: "firmA", matterId: "m1", sessionId: a.sessionId, fileIdx: 0, chunkCount: 1 })
+      await staging.readStagingChunks({ firmId: "firmA", matterId: "m1", sessionId: a.sessionId, fileIdx: 0, chunkCount: 1 })
     ).toEqual([null])
     expect(
-      (await objectStore.readStagingChunks({ firmId: "firmA", matterId: "m2", sessionId: b.sessionId, fileIdx: 0, chunkCount: 1 }))[0]?.equals(other)
+      (await staging.readStagingChunks({ firmId: "firmA", matterId: "m2", sessionId: b.sessionId, fileIdx: 0, chunkCount: 1 }))[0]?.equals(other)
     ).toBe(true)
     expect(
-      (await objectStore.readStagingChunks({ firmId: "firmB", matterId: "m1", sessionId: c.sessionId, fileIdx: 0, chunkCount: 1 }))[0]?.equals(foreign)
+      (await staging.readStagingChunks({ firmId: "firmB", matterId: "m1", sessionId: c.sessionId, fileIdx: 0, chunkCount: 1 }))[0]?.equals(foreign)
     ).toBe(true)
   })
 

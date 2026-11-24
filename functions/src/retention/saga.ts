@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { FieldPath, FieldValue, Timestamp, type DocumentData, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
 import vaultConfig from "@/infra/backup/document-vault.json"
-import { UPLOAD_SESSIONS_COLLECTION, deleteStagingObjectsByPrefix, listStagingObjects, stagingMatterPrefix } from "@/platform/documents/documentObjectStore"
+import { UPLOAD_SESSIONS_COLLECTION, deleteStagingObjectsByPrefix, listStagingObjects, stagingMatterPrefix } from "@/platform/documents/uploadStagingStore"
 import { adminDb } from "../admin"
 import { reachCourtOpsDeletion } from "./courtOpsDeletionReach"
 import { REGISTRY_SCOPE, bumpRegistryVersion } from "../d1/registryVersion"

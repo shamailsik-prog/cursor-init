@@ -1,8 +1,13 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { PublicError } from "@/platform/http/publicError"
-import * as objectStore from "@/platform/documents/documentObjectStore"
-import { uploadSessionRecord } from "@/functions/src/d1/uploadSessionRecord"
-import { getRuntimeFirestore, resolvePersistenceMode } from "@/platform/persistence/runtimeRepositories"
+import { uploadSessionRecord } from "@/platform/documents/uploadSessionRecord"
+import * as staging from "@/platform/documents/uploadStagingStore"
+import {
+  deleteRuntimeDocument,
+  readRuntimeDocument,
+  resolvePersistenceMode,
+  writeRuntimeDocument,
+} from "@/platform/persistence/runtimeRepositories"
 import {
   uploadSessionsOf,
   type BulkUploadFileRow,
@@ -36,7 +41,7 @@ export const BULK_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
  * in infra/backup/upload-staging-lifecycle.json is the same one day and does not
  * need this process. `sweepExpiredBulkUploads` lists the objects themselves.
  */
-export const BULK_UPLOAD_STAGING_TTL_MS = objectStore.UPLOAD_STAGING_LIFECYCLE_DAYS * 24 * 60 * 60 * 1000
+export const BULK_UPLOAD_STAGING_TTL_MS = staging.UPLOAD_STAGING_LIFECYCLE_DAYS * 24 * 60 * 60 * 1000
 
 const SAFE_SEGMENT = /^[A-Za-z0-9_-]+$/
 const SHA256_HEX = /^[0-9a-f]{64}$/
@@ -97,16 +102,6 @@ function heldDocument(
   return undefined
 }
 
-type SessionDoc = {
-  set(data: Record<string, unknown>): Promise<unknown>
-  delete(): Promise<unknown>
-  get(): Promise<{ exists: boolean; data(): Record<string, unknown> | undefined }>
-}
-
-type SessionDb = {
-  collection(name: string): { doc(id: string): SessionDoc }
-}
-
 function sessionPayload(session: BulkUploadSessionRow): Record<string, unknown> {
   return uploadSessionRecord(session)
 }
@@ -128,34 +123,23 @@ function sessionFromPayload(id: string, data: Record<string, unknown>): BulkUplo
   }
 }
 
-async function sessionDb(): Promise<SessionDb | null> {
-  if (resolvePersistenceMode() !== "firestore") return null
-  return (await getRuntimeFirestore()) as SessionDb
-}
-
-/** Writes the row to Firestore `upload_sessions` when persistence mode is firestore. */
 async function remember(store: SpineStore, session: BulkUploadSessionRow): Promise<void> {
   uploadSessionsOf(store).set(session.id, session)
-  const db = await sessionDb()
-  if (!db) return
-  await db.collection(objectStore.UPLOAD_SESSIONS_COLLECTION).doc(session.id).set(sessionPayload(session))
+  if (resolvePersistenceMode() !== "firestore") return
+  await writeRuntimeDocument(staging.UPLOAD_SESSIONS_COLLECTION, session.id, sessionPayload(session))
 }
 
 async function forget(store: SpineStore, session: BulkUploadSessionRow): Promise<void> {
   uploadSessionsOf(store).delete(session.id)
-  const db = await sessionDb()
-  if (!db) return
-  await db.collection(objectStore.UPLOAD_SESSIONS_COLLECTION).doc(session.id).delete()
+  if (resolvePersistenceMode() !== "firestore") return
+  await deleteRuntimeDocument(staging.UPLOAD_SESSIONS_COLLECTION, session.id)
 }
 
 async function recall(store: SpineStore, sessionId: string): Promise<BulkUploadSessionRow | undefined> {
   const cached = uploadSessionsOf(store).get(sessionId)
   if (cached) return cached
-  const db = await sessionDb()
-  if (!db) return undefined
-  const snap = await db.collection(objectStore.UPLOAD_SESSIONS_COLLECTION).doc(sessionId).get()
-  if (!snap.exists) return undefined
-  const data = snap.data()
+  if (resolvePersistenceMode() !== "firestore") return undefined
+  const data = await readRuntimeDocument(staging.UPLOAD_SESSIONS_COLLECTION, sessionId)
   if (!data) return undefined
   const row = sessionFromPayload(sessionId, data)
   if (!row) return undefined
@@ -164,7 +148,7 @@ async function recall(store: SpineStore, sessionId: string): Promise<BulkUploadS
 }
 
 async function deleteSessionStaging(session: BulkUploadSessionRow): Promise<void> {
-  await objectStore.deleteStagingSession({
+  await staging.deleteStagingSession({
     firmId: session.firmId,
     matterId: session.matterId,
     sessionId: session.id,
@@ -178,7 +162,7 @@ async function deleteSessionStaging(session: BulkUploadSessionRow): Promise<void
  * turning the feature off must not keep expired chunks.
  */
 export async function sweepExpiredBulkUploads(store: SpineStore, now: number = Date.now()): Promise<number> {
-  const removed = await objectStore.sweepExpiredStagingObjects(now, BULK_UPLOAD_STAGING_TTL_MS)
+  const removed = await staging.sweepExpiredStagingObjects(now, BULK_UPLOAD_STAGING_TTL_MS)
   for (const session of [...uploadSessionsOf(store).values()]) {
     if (!session.firmId || session.expiresAtMs > now) continue
     await forget(store, session)
@@ -220,7 +204,7 @@ export function uploadSessionDocument(session: BulkUploadSessionRow): {
     throw new PublicError("bulk upload refused", "bulk_upload_refused")
   }
   return {
-    collection: objectStore.UPLOAD_SESSIONS_COLLECTION,
+    collection: staging.UPLOAD_SESSIONS_COLLECTION,
     firmId: session.firmId,
     matterId: session.matterId,
     callerId: session.callerId,
@@ -337,7 +321,7 @@ export async function startBulkUpload(
     firmId,
     matterId,
     callerId: caller.userId,
-    storagePath: objectStore.stagingSessionStoragePath(firmId, matterId, id),
+    storagePath: staging.stagingSessionStoragePath(firmId, matterId, id),
     createdAtMs: now,
     expiresAtMs: now + BULK_UPLOAD_STAGING_TTL_MS,
     files: rows,
@@ -371,7 +355,7 @@ export async function uploadChunk(
   if (!Buffer.isBuffer(bytes) || bytes.length !== expectedChunkLength(file.size, chunkIdx, file.chunkCount)) {
     throw new PublicError("bulk upload chunk refused", "bulk_upload_chunk_refused")
   }
-  const [prior] = await objectStore.readStagingChunks({
+  const [prior] = await staging.readStagingChunks({
     firmId: session.firmId,
     matterId: session.matterId,
     sessionId: session.id,
@@ -385,7 +369,7 @@ export async function uploadChunk(
     await remember(store, session)
     return { state: file.state }
   }
-  await objectStore.putStagingChunk({
+  await staging.putStagingChunk({
     firmId: session.firmId,
     matterId: session.matterId,
     sessionId: session.id,
@@ -428,7 +412,7 @@ export async function finaliseFile(
   for (let index = 1; index <= file.chunkCount; index++) {
     if (!have.has(index)) throw new PublicError("bulk upload incomplete", "bulk_upload_incomplete")
   }
-  const parts = await objectStore.readStagingChunks({
+  const parts = await staging.readStagingChunks({
     firmId: session.firmId,
     matterId: session.matterId,
     sessionId: session.id,
@@ -442,7 +426,7 @@ export async function finaliseFile(
   const actual = bulkDeclaredHash(store, session.firmId, assembled)
   if (actual !== file.sha256 || assembled.length !== file.size) {
     file.state = "failed"
-    await objectStore.deleteStagingSession({
+    await staging.deleteStagingSession({
       firmId: session.firmId,
       matterId: session.matterId,
       sessionId: session.id,
@@ -465,7 +449,7 @@ export async function finaliseFile(
   file.docId = result.docId
   await remember(store, session)
   try {
-    await objectStore.deleteStagingSession({
+    await staging.deleteStagingSession({
       firmId: session.firmId,
       matterId: session.matterId,
       sessionId: session.id,
