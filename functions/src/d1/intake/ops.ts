@@ -245,5 +245,5 @@ export async function promoteToClient(caller: Caller, intakeId: string, confirma
   return promoteIntake(caller, intake)
 }
 
-export { IntakeRefusal } from "./promote"
+export { IntakeRefusal, intakeTestSeam } from "./promote"
 export type { IntakeClassifier, IntakeRecord, PromoteResult, RouteRule }

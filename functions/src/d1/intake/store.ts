@@ -193,6 +193,44 @@ export async function patchIntake(firmId: string, intakeId: string, clearance: C
   return stored
 }
 
+const CLAIM_TTL_MS = 120_000
+
+export type PromotionClaim = { token: string; uid: string }
+
+/**
+ * One owner at a time. A second caller sees "held" until this one finishes or the claim expires.
+ * A promoted intake answers "promoted" and is not claimed again.
+ */
+export async function claimPromotion(firmId: string, intakeId: string, clearance: Classification, claim: PromotionClaim): Promise<"owner" | "promoted" | "held"> {
+  assertEnabled()
+  const ref = intakes().doc(intakeId)
+  return adminDb().runTransaction(async (tx) => {
+    const data = (await tx.get(ref)).data()
+    if (!data || data.firmId !== firmId || !withinClearance(data, clearance)) throw new HttpError(404, "not_found")
+    if (data.status === "promoted" && typeof data.clientId === "string" && typeof data.matterId === "string" && typeof data.conflictCheckId === "string") {
+      return "promoted"
+    }
+    const existing = data.promotionClaim as { token?: unknown } | undefined
+    const at = data.promotionClaimAt
+    const age = at instanceof Timestamp ? Date.now() - at.toMillis() : 0
+    if (existing && typeof existing.token === "string" && existing.token !== claim.token && age < CLAIM_TTL_MS) return "held"
+    tx.update(ref, { promotionClaim: claim, promotionClaimAt: FieldValue.serverTimestamp() })
+    return "owner"
+  })
+}
+
+/** Drop this caller's claim. A claim owned by someone else is left in place. */
+export async function releasePromotionClaim(firmId: string, intakeId: string, token: string): Promise<void> {
+  assertEnabled()
+  const ref = intakes().doc(intakeId)
+  await adminDb().runTransaction(async (tx) => {
+    const data = (await tx.get(ref)).data()
+    const existing = data?.promotionClaim as { token?: unknown } | undefined
+    if (!data || data.firmId !== firmId || !existing || existing.token !== token) return
+    tx.update(ref, { promotionClaim: FieldValue.delete(), promotionClaimAt: FieldValue.delete() })
+  })
+}
+
 /** Copy the promoted matter id onto every message of this firm. A replay writes the same value. */
 export async function stampMessageMatter(firmId: string, intakeId: string, matterId: string): Promise<void> {
   assertEnabled()

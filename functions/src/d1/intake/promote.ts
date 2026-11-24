@@ -1,4 +1,5 @@
-import type { DocumentData } from "firebase-admin/firestore"
+import { randomUUID } from "node:crypto"
+import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../../admin"
 import { HttpError } from "../../http/errors"
@@ -10,9 +11,14 @@ import { registerClientOp, type RegisterResult } from "../client/ops"
 import { maxLabel } from "../conflict/engine"
 import { runConflictCheckOp } from "../conflict/ops"
 import type { Waiver } from "../conflict/disclosure"
-import { openMatterOp } from "../matter/ops"
-import { patchIntake, stampMessageMatter } from "./store"
+import { CHECK_VALIDITY_MS, openMatterOp } from "../matter/ops"
+import { claimPromotion, patchIntake, readIntake, releasePromotionClaim, stampMessageMatter } from "./store"
 import type { IntakeRecord, PromoteResult, WaiverRef } from "./types"
+
+/** Test-only hold after the claim and before a check or a client is created. Unset in production. */
+export const intakeTestSeam: { afterClaim?: () => Promise<void> } = {}
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
  * Promotion runs the existing Module 6 check before any client or matter write.
@@ -143,7 +149,39 @@ function labelFor(intake: IntakeRecord, check: DocumentData, caller: Caller): Cl
   return label
 }
 
-export async function promoteIntake(caller: Caller, intake: IntakeRecord): Promise<PromoteResult> {
+/** A cached check cannot open a matter when it is stale or older than the open-matter window. */
+function unusable(row: DocumentData, now = Date.now()): boolean {
+  if (row.stale === true) return true
+  if (!(row.createdAt instanceof Timestamp)) return true
+  return now - row.createdAt.toMillis() > CHECK_VALIDITY_MS
+}
+
+/** The check, and the event rows copied from it, are at least the intake's label. */
+async function raiseFloor(checkId: string, intakeLabel: Classification, row: DocumentData): Promise<DocumentData> {
+  const current = isKnownClassification(row.classification) ? row.classification : "privileged-restricted"
+  const floor = maxLabel(intakeLabel, current)
+  if (row.classification === floor) return row
+  const db = adminDb()
+  await db.collection("conflict_checks").doc(checkId).update({ classification: floor })
+  const events = await db.collection("conflict_events").where("checkId", "==", checkId).get()
+  for (const doc of events.docs) {
+    if (doc.get("classification") !== floor) await doc.ref.update({ classification: floor })
+  }
+  const decided = db.collection("events").doc(`${checkId}_decided`)
+  const decidedRow = await decided.get()
+  if (decidedRow.exists && decidedRow.get("classification") !== floor) await decided.update({ classification: floor })
+  return { ...row, classification: floor }
+}
+
+async function promotedResult(caller: Caller, intakeId: string): Promise<PromoteResult> {
+  const fresh = await readIntake(caller.firmId, intakeId, caller.clearanceLevel)
+  if (!fresh?.clientId || !fresh.matterId || !fresh.conflictCheckId) throw new HttpError(500, "internal")
+  await stampMessageMatter(fresh.firmId, fresh.intakeId, fresh.matterId)
+  return resultOf(fresh, fresh.clientId, fresh.matterId, fresh.conflictCheckId, fresh.waiver)
+}
+
+async function runPromotion(caller: Caller, intake: IntakeRecord): Promise<PromoteResult> {
+  if (process.env.NODE_ENV !== "production") await intakeTestSeam.afterClaim?.()
   if (intake.status === "closed") throw new HttpError(409, "intake_closed")
   if (intake.status === "promoted" && intake.clientId && intake.matterId && intake.conflictCheckId) {
     await stampMessageMatter(intake.firmId, intake.intakeId, intake.matterId)
@@ -155,6 +193,14 @@ export async function promoteIntake(caller: Caller, intake: IntakeRecord): Promi
   if (intake.prospect.opposingParties.length < 1) throw new HttpError(409, "opposing_required")
 
   let checkId = intake.conflictCheckId
+  if (checkId && isSafeDocId(checkId)) {
+    const loaded = await raiseFloor(checkId, intake.classification, await loadCheck(checkId, caller.firmId))
+    const boundAlready = typeof loaded.boundMatterId === "string" && loaded.boundMatterId !== ""
+    if (!boundAlready && unusable(loaded)) {
+      await patchIntake(intake.firmId, intake.intakeId, caller.clearanceLevel, { conflictCheckId: null })
+      checkId = null
+    }
+  }
   if (!checkId) {
     const keys: Record<string, string> = { phone: intake.prospect.phone }
     const screened = await callFirm(runConflictCheckOp, caller, {
@@ -166,7 +212,7 @@ export async function promoteIntake(caller: Caller, intake: IntakeRecord): Promi
   }
   if (!isSafeDocId(checkId)) throw new IntakeRefusal(409, "conflict_blocked")
 
-  const row = await loadCheck(checkId, caller.firmId)
+  const row = await raiseFloor(checkId, intake.classification, await loadCheck(checkId, caller.firmId))
   const bound = typeof row.boundMatterId === "string" ? row.boundMatterId : ""
   if (bound) {
     const existing = await matterForCheck(caller.firmId, checkId)
@@ -197,4 +243,29 @@ export async function promoteIntake(caller: Caller, intake: IntakeRecord): Promi
   const courtId = intake.court?.status === "ok" ? intake.court.courtId : undefined
   const opened = await openOrFind(caller, checkId, intake.prospect.name, label, courtId)
   return finish(intake, caller, opened.clientId, opened.matterId, checkId, cleared.waiver, label)
+}
+
+export async function promoteIntake(caller: Caller, intake: IntakeRecord): Promise<PromoteResult> {
+  if (intake.status === "closed") throw new HttpError(409, "intake_closed")
+  if (intake.status === "promoted" && intake.clientId && intake.matterId && intake.conflictCheckId) {
+    await stampMessageMatter(intake.firmId, intake.intakeId, intake.matterId)
+    return resultOf(intake, intake.clientId, intake.matterId, intake.conflictCheckId, intake.waiver)
+  }
+  const claim = { token: randomUUID(), uid: caller.uid }
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const gate = await claimPromotion(intake.firmId, intake.intakeId, caller.clearanceLevel, claim)
+    if (gate === "promoted") return promotedResult(caller, intake.intakeId)
+    if (gate === "held") {
+      await delay(100)
+      continue
+    }
+    try {
+      const current = await readIntake(caller.firmId, intake.intakeId, caller.clearanceLevel)
+      if (!current) throw new HttpError(404, "not_found")
+      return await runPromotion(caller, current)
+    } finally {
+      await releasePromotionClaim(intake.firmId, intake.intakeId, claim.token)
+    }
+  }
+  throw new HttpError(409, "promotion_in_progress")
 }

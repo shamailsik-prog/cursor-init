@@ -1,5 +1,10 @@
+import { readFileSync } from "node:fs"
+import path from "node:path"
+import { assertFails, assertSucceeds, initializeTestEnvironment } from "@firebase/rules-unit-testing"
+import { doc, getDoc, setLogLevel } from "firebase/firestore"
+import { Timestamp } from "firebase-admin/firestore"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { adminDb } from "../src/admin"
+import { adminApp, adminDb } from "../src/admin"
 import { keywordIntakeClassifier } from "../src/d1/intake/classify"
 import { intakeEnabled } from "../src/d1/intake/flag"
 import {
@@ -9,10 +14,12 @@ import {
   createIntake,
   getIntakeThread,
   listIntakes,
+  intakeTestSeam,
   promoteToClient,
   routeIntake,
   type IntakeClassifier,
 } from "../src/d1/intake/ops"
+import { anonymiseUnpromotedIntakes } from "../src/retention/unpromotedIntake"
 import { routeByRules } from "../src/d1/intake/route"
 import { reconcileNameIndex } from "../src/d1/conflict/nameIndex"
 import type { Caller } from "../src/p5/auth"
@@ -36,6 +43,7 @@ const claims = (firmId: string, role: string, clearanceLevel = "privileged-restr
 
 afterEach(() => {
   delete process.env[FLAG]
+  intakeTestSeam.afterClaim = undefined
 })
 
 describe("intake flag, classifier and routing (no emulator)", () => {
@@ -406,4 +414,187 @@ describe.skipIf(!EMULATORS)("client intake (emulator)", () => {
     const routed = await routeIntake(caller, intake.intakeId, [{ practiceArea: "land", assigneeId: uid }])
     expect(routed).toMatchObject({ queue: "lawyer", assigneeId: uid, practiceArea: "land" })
   }, 60_000)
+
+  it("two overlapping promotions create one client, one check and one matter", async () => {
+    const firmId = await newFirm()
+    const { caller, uid } = await asCaller(firmId, "partner")
+    const intake = await createIntake(caller, { text: "Please file a civil suit", prospect: prospect("Parallel Prospect"), classification: "confidential" })
+    let release: () => void = () => {}
+    const hold = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let waiting = false
+    intakeTestSeam.afterClaim = async () => {
+      if (waiting) return
+      waiting = true
+      await hold
+    }
+    const first = promoteToClient(caller, intake.intakeId, { confirmedBy: uid })
+    const claimed = await waitFor(async () => {
+      const claim = (await adminDb().collection("intakes").doc(intake.intakeId).get()).get("promotionClaim") as { token?: string } | undefined
+      return typeof claim?.token === "string"
+    })
+    expect(claimed).toBe(true)
+    const second = promoteToClient(caller, intake.intakeId, { confirmedBy: uid })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(await counts(firmId)).toMatchObject({ clients: 0, checks: 0, matters: 0 })
+    release()
+    const [a, b] = await Promise.all([first, second])
+    expect(b).toMatchObject({ clientId: a.clientId, matterId: a.matterId, conflictCheckId: a.conflictCheckId })
+    expect(await counts(firmId)).toEqual({ clients: 1, checks: 1, matters: 1 })
+  }, 60_000)
+
+  it("a confidential partner cannot read the check created from a privileged intake", async () => {
+    const firmId = await newFirm()
+    const top = await asCaller(firmId, "partner", "privileged-restricted")
+    const low = await asCaller(firmId, "partner", "confidential")
+    const seed = await createIntake(top.caller, { text: "Please file a civil suit", prospect: prospect("Seed Client"), classification: "confidential" })
+    const registered = await promoteToClient(top.caller, seed.intakeId, { confirmedBy: top.uid })
+    const matterId = adminDb().collection("matters").doc()
+    await matterId.set({
+      firmId,
+      clientId: registered.clientId,
+      matterNo: "NHS/2026/0011",
+      title: "Earlier matter",
+      stage: "pre_filing",
+      status: "live",
+      conflictCheckId: registered.conflictCheckId,
+      classification: "confidential",
+    })
+    await adminDb().collection("matter_parties").add({
+      firmId,
+      matterId: matterId.id,
+      role: "opposing",
+      name: "Privileged Prospect",
+      keys: {},
+      matterClassification: "confidential",
+      matterStatus: "live",
+      classification: "confidential",
+    })
+    await reconcileNameIndex(firmId)
+    const intake = await createIntake(top.caller, {
+      text: "Privileged instructions for counsel",
+      classification: "privileged",
+      prospect: prospect("Privileged Prospect", { email: "privileged@example.test" }),
+    })
+    const blocked = await promoteToClient(top.caller, intake.intakeId, { confirmedBy: top.uid }).then(
+      () => {
+        throw new Error("expected the unresolved conflict to block")
+      },
+      (err: unknown) => err as IntakeRefusal
+    )
+    expect(blocked).toMatchObject({ status: 409, code: "conflict_blocked" })
+    const checkId = blocked.conflictCheckId as string
+    const check = (await adminDb().collection("conflict_checks").doc(checkId).get()).data()
+    expect(check?.classification).toBe("privileged")
+    expect(check?.boundMatterId ?? null).toBeNull()
+    setLogLevel("silent")
+    const projectId = adminApp().options.projectId ?? process.env.GCLOUD_PROJECT
+    if (!projectId) throw new Error("no emulator project id")
+    const [host, port] = (process.env.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080").split(":")
+    const env = await initializeTestEnvironment({
+      projectId,
+      firestore: { rules: readFileSync(path.resolve(__dirname, "../../firestore.rules"), "utf8"), host, port: Number(port) },
+    })
+    try {
+      const lowDb = env.authenticatedContext(low.uid, { firmId, role: "partner", clearanceLevel: "confidential" }).firestore()
+      await assertFails(getDoc(doc(lowDb, "conflict_checks", checkId)))
+      const highDb = env.authenticatedContext(top.uid, { firmId, role: "partner", clearanceLevel: "privileged-restricted" }).firestore()
+      await assertSucceeds(getDoc(doc(highDb, "conflict_checks", checkId)))
+    } finally {
+      await env.cleanup()
+    }
+  }, 60_000)
+
+  it("a stale cached check and an expired cached check are replaced, and an existing client is kept", async () => {
+    const firmId = await newFirm()
+    const { caller, uid } = await asCaller(firmId, "partner")
+    const kept = await createIntake(caller, { text: "Please file a civil suit", prospect: prospect("Kept Client") })
+    const registered = await promoteToClient(caller, kept.intakeId, { confirmedBy: uid })
+    const staleIntake = await createIntake(caller, { text: "Please file a civil suit", prospect: prospect("Stale Prospect") })
+    const staleCheck = await plantCheck(firmId, uid, { stale: true })
+    await adminDb().collection("intakes").doc(staleIntake.intakeId).update({ conflictCheckId: staleCheck, clientId: registered.clientId })
+    const fromStale = await promoteToClient(caller, staleIntake.intakeId, { confirmedBy: uid })
+    expect(fromStale.conflictCheckId).not.toBe(staleCheck)
+    expect(fromStale.clientId).toBe(registered.clientId)
+
+    const expiredIntake = await createIntake(caller, { text: "Please file a civil suit", prospect: prospect("Expired Prospect") })
+    const expiredCheck = await plantCheck(firmId, uid, { createdAt: Timestamp.fromMillis(Date.now() - 31 * 24 * 60 * 60 * 1000) })
+    await adminDb().collection("intakes").doc(expiredIntake.intakeId).update({ conflictCheckId: expiredCheck, clientId: registered.clientId })
+    const fromExpired = await promoteToClient(caller, expiredIntake.intakeId, { confirmedBy: uid })
+    expect(fromExpired.conflictCheckId).not.toBe(expiredCheck)
+    expect(fromExpired.clientId).toBe(registered.clientId)
+    expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(1)
+    expect((await adminDb().collection("matters").where("firmId", "==", firmId).get()).size).toBe(3)
+  }, 60_000)
+
+  it("anonymises a null-matterId intake and its message, and leaves a promoted row", async () => {
+    const firmId = await newFirm()
+    const otherFirm = await newFirm()
+    const { caller, uid } = await asCaller(firmId, "partner")
+    const other = await asCaller(otherFirm, "partner")
+    const old = await createIntake(caller, {
+      text: "Secret enquiry about Farid",
+      prospect: prospect("Farid Secret", { email: "farid@example.test" }),
+    })
+    const fresh = await createIntake(caller, { text: "Fresh enquiry", prospect: prospect("Fresh Prospect") })
+    const promoted = await createIntake(caller, { text: "Please file a civil suit", prospect: prospect("Promoted Prospect") })
+    const done = await promoteToClient(caller, promoted.intakeId, { confirmedBy: uid })
+    const outsider = await createIntake(other.caller, { text: "Other firm secret", prospect: prospect("Other Secret") })
+    const past = Timestamp.fromMillis(Date.now() - 10 * 24 * 60 * 60 * 1000)
+    for (const id of [old.intakeId, promoted.intakeId, outsider.intakeId]) {
+      await adminDb().collection("intakes").doc(id).update({ createdAt: past })
+      const messages = await adminDb().collection("intake_messages").where("intakeId", "==", id).get()
+      for (const message of messages.docs) await message.ref.update({ createdAt: past })
+    }
+    const swept = await anonymiseUnpromotedIntakes({ firmId, olderThanMs: Date.now() - 24 * 60 * 60 * 1000 })
+    expect(swept.intakes).toBe(1)
+    expect(swept.messages).toBe(1)
+    const stored = (await adminDb().collection("intakes").doc(old.intakeId).get()).data()
+    expect(stored).toMatchObject({
+      firmId,
+      matterId: null,
+      text: null,
+      prospect: { name: null, phone: null, email: null, opposingParties: null },
+    })
+    expect(JSON.stringify(stored)).not.toContain("Farid Secret")
+    expect(JSON.stringify(stored)).not.toContain("farid@example.test")
+    const message = (await adminDb().collection("intake_messages").where("intakeId", "==", old.intakeId).get()).docs[0].data()
+    expect(message).toMatchObject({ firmId, matterId: null, text: null })
+    expect(JSON.stringify(message)).not.toContain("Secret enquiry")
+    expect((await adminDb().collection("intakes").doc(fresh.intakeId).get()).get("text")).toBe("Fresh enquiry")
+    expect((await adminDb().collection("intakes").doc(promoted.intakeId).get()).get("prospect.name")).toBe("Promoted Prospect")
+    expect((await adminDb().collection("intakes").doc(outsider.intakeId).get()).get("text")).toBe("Other firm secret")
+    expect(done.matterId).toBeTruthy()
+  }, 60_000)
 })
+
+async function waitFor(ready: () => Promise<boolean>): Promise<boolean> {
+  for (let i = 0; i < 50; i += 1) {
+    if (await ready()) return true
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  return false
+}
+
+async function plantCheck(firmId: string, uid: string, patch: Record<string, unknown>): Promise<string> {
+  const ref = adminDb().collection("conflict_checks").doc()
+  await ref.set({
+    firmId,
+    requestedBy: uid,
+    subjects: [
+      { role: "client", name: "Planted Client" },
+      { role: "opposing", name: "Planted Party" },
+    ],
+    hits: [],
+    result: "CLEAR",
+    identityBasis: "none",
+    decision: "cleared",
+    classification: "confidential",
+    boundMatterId: null,
+    stale: false,
+    createdAt: Timestamp.now(),
+    ...patch,
+  })
+  return ref.id
+}

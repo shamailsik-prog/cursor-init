@@ -20,7 +20,13 @@ A row above the caller's clearance is not found, including on the list. The thre
 
 `openMatter` binds only a check whose client subject already has a `clientId`. The pre-registration check does not have one. After the check is cleared, the client is registered and that id is added to the subject. The hits, the result and the waiver are not rewritten. The matter's `conflictCheckId` is that check, so a waiver stays the waiver the partner recorded. A second call returns the same client and matter.
 
-The client and the matter are classified at `max(intake, check)`. The intake's label is not lowered.
+The client and the matter are classified at `max(intake, check)`. The check is raised to that floor when it is created, so a reader cleared below the intake cannot read the check. The intake's label is not lowered.
+
+A promotion claims the intake in a transaction before it creates a check or a client. A second caller waits and then sees the same client and matter.
+
+A cached check that is stale, or older than the open-matter window, is replaced with a new check. A client already stored on the intake is kept.
+
+`anonymiseUnpromotedIntakes` (`functions/src/retention/unpromotedIntake.ts`) clears the named PII fields on rows whose `matterId` is still null. A promoted row is left in place.
 
 `registerClientOp` and `openMatterOp` are already exported. `client/ops.ts` and `matter/ops.ts` are not edited.
 
