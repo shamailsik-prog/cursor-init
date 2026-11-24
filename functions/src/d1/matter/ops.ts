@@ -291,6 +291,15 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
           const registryState = await readRegistryStateTx(tx, caller.firmId)
           if (registryState.version !== version) return REGISTRY_MOVED
           const check = (await tx.get(checkRef)).data()
+          // Close-versus-open is this transaction's decision. A close that landed after the caller's
+          // last re-read is visible here, and the throw aborts before any write.
+          const intakeId = typeof data.intakeId === "string" ? data.intakeId : ""
+          let intakeClosed = false
+          if (intakeId !== "") {
+            const intakeRow = isSafeDocId(intakeId) ? (await tx.get(db.collection("intakes").doc(intakeId))).data() : undefined
+            intakeClosed = !intakeRow || intakeRow.firmId !== caller.firmId || intakeRow.status === "closed"
+          }
+          if (intakeClosed) throw new HttpError(409, "intake_closed")
           const { subjects, clientId } = gateOpen(caller, check, now)
           const client = clientOf(caller, (await tx.get(db.collection("clients").doc(clientId))).data())
           const entityId = client.entityId

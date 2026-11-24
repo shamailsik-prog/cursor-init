@@ -19,8 +19,15 @@ import type { IntakeRecord, PromoteResult, WaiverRef } from "./types"
  * Test-only seams. Unset in production.
  * `afterClaim` holds after the claim and before a check or a client is created.
  * `beforeMutate` holds classify, route and close after they have read the row and before they patch it.
+ * `beforeOpen` holds after the last pre-matter re-read and before the matter-creation transaction.
+ * `floorUpdates` counts a separate write that raises a check's label. A new check must leave it at 0.
  */
-export const intakeTestSeam: { afterClaim?: () => Promise<void>; beforeMutate?: () => Promise<void> } = {}
+export const intakeTestSeam: {
+  afterClaim?: () => Promise<void>
+  beforeMutate?: () => Promise<void>
+  beforeOpen?: () => Promise<void>
+  floorUpdates: number
+} = { floorUpdates: 0 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -112,8 +119,8 @@ async function matterForCheck(firmId: string, checkId: string): Promise<{ matter
   return null
 }
 
-async function openOrFind(caller: Caller, checkId: string, title: string, classification: Classification, courtId: string | undefined): Promise<{ matterId: string; clientId: string }> {
-  const data: Record<string, unknown> = { conflictCheckId: checkId, title, classification }
+async function openOrFind(caller: Caller, checkId: string, title: string, classification: Classification, courtId: string | undefined, intakeId: string): Promise<{ matterId: string; clientId: string }> {
+  const data: Record<string, unknown> = { conflictCheckId: checkId, title, classification, intakeId }
   if (courtId !== undefined) data.courtId = courtId
   try {
     const opened = await callFirm(openMatterOp, caller, data)
@@ -165,6 +172,7 @@ async function raiseFloor(checkId: string, intakeLabel: Classification, row: Doc
   const current = isKnownClassification(row.classification) ? row.classification : "privileged-restricted"
   const floor = maxLabel(intakeLabel, current)
   if (row.classification === floor) return row
+  if (process.env.NODE_ENV !== "production") intakeTestSeam.floorUpdates += 1
   const db = adminDb()
   await db.collection("conflict_checks").doc(checkId).update({ classification: floor })
   const events = await db.collection("conflict_events").where("checkId", "==", checkId).get()
@@ -205,6 +213,7 @@ async function runPromotion(caller: Caller, loaded: IntakeRecord): Promise<Promo
   if (intake.prospect.opposingParties.length < 1) throw new HttpError(409, "opposing_required")
 
   let checkId = intake.conflictCheckId
+  let createdHere = false
   if (checkId && isSafeDocId(checkId)) {
     const loaded = await raiseFloor(checkId, intake.classification, await loadCheck(checkId, caller.firmId))
     const boundAlready = typeof loaded.boundMatterId === "string" && loaded.boundMatterId !== ""
@@ -218,13 +227,16 @@ async function runPromotion(caller: Caller, loaded: IntakeRecord): Promise<Promo
     const screened = await callFirm(runConflictCheckOp, caller, {
       client: { name: intake.prospect.name, keys },
       opposingParties: intake.prospect.opposingParties.map((party) => (party.cnic ? { name: party.name, keys: { cnic: party.cnic } } : { name: party.name })),
+      classificationFloor: intake.classification,
     })
     checkId = screened.checkId
+    createdHere = true
     await remember(caller, intake, checkId)
   }
   if (!isSafeDocId(checkId)) throw new IntakeRefusal(409, "conflict_blocked")
 
-  const row = await raiseFloor(checkId, intake.classification, await loadCheck(checkId, caller.firmId))
+  const stored = await loadCheck(checkId, caller.firmId)
+  const row = createdHere ? stored : await raiseFloor(checkId, intake.classification, stored)
   const bound = typeof row.boundMatterId === "string" ? row.boundMatterId : ""
   if (bound) {
     const existing = await matterForCheck(caller.firmId, checkId)
@@ -254,8 +266,9 @@ async function runPromotion(caller: Caller, loaded: IntakeRecord): Promise<Promo
 
   await attachClientId(checkId, clientId, row.subjects)
   intake = await stillOpen(caller, intake.intakeId)
+  if (process.env.NODE_ENV !== "production") await intakeTestSeam.beforeOpen?.()
   const courtId = intake.court?.status === "ok" ? intake.court.courtId : undefined
-  const opened = await openOrFind(caller, checkId, intake.prospect.name, label, courtId)
+  const opened = await openOrFind(caller, checkId, intake.prospect.name, label, courtId, intake.intakeId)
   return finish(intake, caller, opened.clientId, opened.matterId, checkId, cleared.waiver, label)
 }
 

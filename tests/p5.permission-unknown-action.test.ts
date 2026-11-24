@@ -117,7 +117,7 @@ describe("action registry", () => {
     expect(committed.base).toBe(MATRIX_BASE)
     const keys = new Set(committed.callers.map((c: { file: string; line: number }) => `${c.file}:${c.line}`))
     for (const required of [
-      "functions/src/d1/matter/ops.ts:443",
+      "functions/src/d1/matter/ops.ts:452",
       "functions/src/d4/drafts.ts:163",
       "platform/p5/committeeScope.ts:88",
       "services/d2-1/whatsapp.ts:71",
