@@ -1,12 +1,15 @@
-import { rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { drillScratchDir } from "../../drill/target"
+import { registerCluster } from "../../lib/emergency"
 import { runCommand, psqlArgv } from "../../lib/exec"
 
 export const DRILL_CLUSTER_TIMEZONE = "Asia/Karachi"
 
 export type PgCluster = {
   dir: string
+  /** Socket directory, separate from PGDATA so a drill can swap the folder without moving the data directory. */
+  socketDir: string
   port: number
   systemIdentifier: string
   env: NodeJS.ProcessEnv
@@ -49,13 +52,15 @@ export async function startCluster(opts: {
     )
   }
   const dir = drillScratchDir("f33-pg-")
+  const socketDir = path.join(dir, "socket")
   const port = opts.port ?? findFreePort(55432)
   const initArgs = ["initdb", "-D", dir, "--no-instructions", "-U", "postgres"]
   if (opts.walSegSize) initArgs.push(`--wal-segsize=${opts.walSegSize}`)
   const init = await runCommand(initArgs, { env: pgEnv(), pgPrefix: prefix })
   if (init.code !== 0) throw new Error(init.stderr || init.stdout)
+  mkdirSync(socketDir, { mode: 0o700 })
   const conf = path.join(dir, "postgresql.conf")
-  let extra = `port = ${port}\nlisten_addresses = '127.0.0.1'\nunix_socket_directories = '${dir}'\n`
+  let extra = `port = ${port}\nlisten_addresses = '127.0.0.1'\nunix_socket_directories = '${socketDir}'\n`
   if (opts.archive) {
     extra += `wal_level = replica\narchive_mode = on\narchive_timeout = 60\n`
     extra += `archive_command = 'node ${opts.archive.walScript} archive %p %f --archive-dir ${opts.archive.archiveDir} --key-file ${opts.archive.keyFile}'\n`
@@ -64,7 +69,7 @@ export async function startCluster(opts: {
   const env = pgEnv({
     PGDATA: dir,
     PGPORT: String(port),
-    PGHOST: dir,
+    PGHOST: socketDir,
     PGUSER: "postgres",
     ...(opts.timezone ? { TZ: opts.timezone } : {}),
   })
@@ -73,6 +78,7 @@ export async function startCluster(opts: {
     pgPrefix: prefix,
   })
   if (start.code !== 0) throw new Error(start.stderr || start.stdout)
+  const release = registerCluster(dir, env)
   const ident = await runCommand(
     psqlArgv("postgres", ["-t", "-A", "-c", "SELECT system_identifier::text FROM pg_control_system();"]),
     { env, pgPrefix: prefix }
@@ -82,10 +88,13 @@ export async function startCluster(opts: {
   }
   return {
     dir,
+    socketDir,
     port,
     systemIdentifier: ident.stdout.trim(),
     env,
     async stop() {
+      release()
+      if (!existsSync(dir)) return
       await runCommand(["pg_ctl", "-D", dir, "-m", "fast", "stop"], { env, pgPrefix: prefix })
       rmSync(dir, { recursive: true, force: true })
     },

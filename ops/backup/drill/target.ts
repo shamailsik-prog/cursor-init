@@ -63,12 +63,27 @@ export function loopbackHttpEndpoint(endpoint: string): boolean {
  * that group and other have no permissions, and that it is not a symlink.
  * A pre-existing directory is never chmod'd: a 0777 root or another user's root is refused.
  */
+function assertStickyParent(root: string): void {
+  const parent = path.dirname(root)
+  let parentStat: ReturnType<typeof lstatSync>
+  try {
+    parentStat = lstatSync(parent)
+  } catch (err) {
+    throw new Error(`drill temp root parent is not sticky: ${(err as Error).message}`)
+  }
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+    throw new Error("drill temp root parent is not a directory")
+  }
+  if ((parentStat.mode & 0o1000) === 0) throw new Error("drill temp root parent is not sticky")
+}
+
 export function ensureDrillTempRoot(root: string = DRILL_TEMP_ROOT): string {
   let created = false
   try {
     lstatSync(root)
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err
+    assertStickyParent(root)
     mkdirSync(root, { recursive: true, mode: 0o700 })
     created = true
   }
@@ -84,6 +99,7 @@ export function ensureDrillTempRoot(root: string = DRILL_TEMP_ROOT): string {
   if (uid === undefined || st.uid !== uid) throw new Error("drill temp root is not owned by the drill user")
   if ((st.mode & 0o077) !== 0) throw new Error("drill temp root is group- or world-accessible")
   if (realpathSync(root) !== root) throw new Error("drill temp root resolves outside itself")
+  assertStickyParent(root)
   return root
 }
 

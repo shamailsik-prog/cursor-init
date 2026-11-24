@@ -8,8 +8,11 @@ import type { KeyRing } from "../lib/envelope.mjs"
 import { BundleWriter, openBundleFile, verifyBundle } from "../lib/bundle"
 import { runCommand, psqlArgv } from "../lib/exec"
 import { assertPitrDataDirClean } from "./guards"
+import { operatorPrefixProblems } from "./prefix"
 
 export async function baseBackup(opts: { outRoot: string; key: Buffer; pgPrefix?: string[]; env?: NodeJS.ProcessEnv }): Promise<string> {
+  const prefixProblems = operatorPrefixProblems(opts.pgPrefix)
+  if (prefixProblems.length) throw new Error(prefixProblems.join("; "))
   const env = { ...process.env, ...opts.env }
   const bb = await runCommand(
     ["pg_basebackup", "-D", "-", "--format=tar", "--wal-method=fetch", "--checkpoint=fast", "--manifest-checksums=SHA256"],

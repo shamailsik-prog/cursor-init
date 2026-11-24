@@ -96,7 +96,62 @@ describe("restoreObjects", () => {
     })
     expect(report.restored).toEqual([])
     expect(report.unrecoverable).toEqual(["row1"])
+    expect(report.noop).toBe(false)
     expect(putCalled).toBe(false)
+  })
+
+  it("R4-L3 keeps noop false when a row is unrecoverable", async () => {
+    const store = newStore()
+    const report = await restoreObjects({
+      rows: [{ id: "row-lost", firmId: "firmA", storagePath: "s3://b/k", contentHash: "ab".repeat(32), key: "k" }],
+      source: {
+        listVersions: async () => [{ key: "k", versionId: "v1" }],
+        getVersion: async () => Buffer.from("not-a-vault-object"),
+        put: async () => {},
+      },
+      target: {
+        resolvedTarget: async () => ({ endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-drill" }),
+        listVersions: async () => [],
+        getVersion: async () => Buffer.alloc(0),
+        put: async () => {
+          throw new Error("put must not run")
+        },
+      },
+      store,
+      location: { kind: "local", endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-drill" },
+    })
+    expect(report.restored).toEqual([])
+    expect(report.unrecoverable).toEqual(["row-lost"])
+    expect(report.noop).toBe(false)
+    expect(report.refused).toEqual([])
+  })
+
+  it("R4-L3 refuses a declared bucket that disagrees with the writer bucket", async () => {
+    let writes = 0
+    const report = await restoreObjects({
+      rows: [{ id: "row1", firmId: "firmA", storagePath: "s3://b/k", contentHash: "ab".repeat(32), key: "k" }],
+      source: {
+        listVersions: async () => [],
+        getVersion: async () => Buffer.from("x"),
+        put: async () => {},
+      },
+      target: {
+        resolvedTarget: async () => ({ endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-drill" }),
+        listVersions: async () => {
+          writes += 1
+          return []
+        },
+        getVersion: async () => Buffer.from("x"),
+        put: async () => {
+          writes += 1
+        },
+      },
+      store: newStore(),
+      location: { kind: "local", endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-other" },
+    })
+    expect(writes).toBe(0)
+    expect(report.restored).toEqual([])
+    expect(report.refused).toContain("declared object location does not match the writer bucket")
   })
 
   it("rejects decrypted bytes whose content hash does not match the row", async () => {
