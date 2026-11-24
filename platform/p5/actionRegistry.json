@@ -1,8 +1,8 @@
 {
   "base": "bb8fcc3f02b0fc0a6bcc1c705bcbc270ad3c7961",
-  "inventoryCount": 280,
+  "inventoryCount": 283,
   "uniqueLiveActionCount": 50,
-  "literalCount": 261,
+  "literalCount": 264,
   "parameterCount": 19,
   "genericActions": [
     "research",
@@ -2520,6 +2520,39 @@
       "note": null
     },
     {
+      "file": "functions/src/d4/autosave.ts",
+      "line": 68,
+      "via": "loadDraftForCaller",
+      "binding": "literal",
+      "action": "draft.edit",
+      "actions": [
+        "draft.edit"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/autosave.ts",
+      "line": 101,
+      "via": "decide",
+      "binding": "literal",
+      "action": "draft.edit",
+      "actions": [
+        "draft.edit"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/autosave.ts",
+      "line": 107,
+      "via": "requireStillPermitted",
+      "binding": "literal",
+      "action": "draft.edit",
+      "actions": [
+        "draft.edit"
+      ],
+      "note": null
+    },
+    {
       "file": "functions/src/d4/doctypeOps.ts",
       "line": 48,
       "via": "requirePermission",
@@ -2613,7 +2646,7 @@
     },
     {
       "file": "functions/src/d4/drafts.ts",
-      "line": 464,
+      "line": 470,
       "via": "requireStillPermitted",
       "binding": "literal",
       "action": "draft.edit",
@@ -2624,7 +2657,7 @@
     },
     {
       "file": "functions/src/d4/drafts.ts",
-      "line": 524,
+      "line": 537,
       "via": "loadDraftForCaller",
       "binding": "literal",
       "action": "draft.edit",
@@ -2635,7 +2668,7 @@
     },
     {
       "file": "functions/src/d4/drafts.ts",
-      "line": 548,
+      "line": 561,
       "via": "loadDraftForCaller",
       "binding": "literal",
       "action": "draft.edit",
@@ -2646,7 +2679,7 @@
     },
     {
       "file": "functions/src/d4/drafts.ts",
-      "line": 583,
+      "line": 596,
       "via": "loadDraftForCaller",
       "binding": "literal",
       "action": "draft.read",
@@ -2657,7 +2690,7 @@
     },
     {
       "file": "functions/src/d4/drafts.ts",
-      "line": 634,
+      "line": 647,
       "via": "requireMatterAction",
       "binding": "literal",
       "action": "draft.read",
@@ -2668,7 +2701,7 @@
     },
     {
       "file": "functions/src/d4/drafts.ts",
-      "line": 696,
+      "line": 709,
       "via": "loadDraftForCaller",
       "binding": "literal",
       "action": "draft.read",

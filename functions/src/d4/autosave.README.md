@@ -60,4 +60,4 @@ A point's `classification` is `raisedLabel`: the strictest of the draft's label 
 
 ## Out of scope
 
-`saveToMainFiles` (Document Vault, wave 2, after Q08). The client offline-sync UI (L9.5). HTTP routes and action registration (`functions/src/index.ts`, `functions/src/http/router.ts`, `platform/p5/actionRegistry.json`).
+`saveToMainFiles` (Document Vault, wave 2, after Q08). The client offline-sync UI (L9.5). HTTP routes (`functions/src/index.ts`, `functions/src/http/router.ts`). No new action is introduced: `platform/p5/actionRegistry.json` records the `draft.edit` checks this module already makes.
