@@ -456,6 +456,98 @@ describe.skipIf(!EMULATORS)("loose vault (emulator)", () => {
     )
   })
 
+  it("a partner cannot acknowledge a malformed row that already names a matter", async () => {
+    const firmId = uniq("firm")
+    const partner = user(firmId, "partner", "confidential")
+    const matterId = await seedMatter(firmId, partner.uid, "confidential")
+    const id = await seedDoc(firmId, "clerk-holder", { sourceChannel: "evil", matterId, mimeType: "application/pdf" })
+    const before = (await docRef(id).get()).data()
+    await expect(acknowledgeLooseHold(partner, id, new Date(AGE_30D))).rejects.toMatchObject({ status: 404, code: "not_found" })
+    const after = (await docRef(id).get()).data()
+    expect(after).toEqual(before)
+    expect(after?.loosePartnerAck).toBeUndefined()
+    expect(after?.matterId).toBe(matterId)
+  })
+
+  it("an unreadable label on a malformed loose row is audited at the maximum, and a known label is audited as stored", async () => {
+    const firmId = uniq("firm")
+    const partner = user(firmId, "partner", "privileged-restricted")
+    const now30 = new Date(AGE_30D)
+    const raw = await seedDoc(firmId, "clerk-holder", { sourceChannel: "evil", classification: "not-a-label" })
+    const known = await seedDoc(firmId, "clerk-holder", { sourceChannel: "evil", classification: "confidential" })
+    await acknowledgeLooseHold(partner, raw, now30)
+    await acknowledgeLooseHold(partner, known, now30)
+    const audits = (await adminDb().collection("audit_log").where("firmId", "==", firmId).get()).docs.map((entry) => entry.data())
+    const forDoc = (docId: string) => audits.filter((row) => row.target === `documents/${docId}` && row.action === "loose_vault.acknowledge")
+    expect(forDoc(raw)).toEqual([
+      expect.objectContaining({ actorId: partner.uid, classification: "privileged-restricted", reason: "ok" }),
+    ])
+    expect(forDoc(raw)[0]?.classification).toBe("privileged-restricted")
+    expect(forDoc(known)).toEqual([
+      expect.objectContaining({ actorId: partner.uid, classification: "confidential", reason: "ok" }),
+    ])
+  })
+
+  it("a second acknowledgement leaves the first loosePartnerAck byte for byte", async () => {
+    const firmId = uniq("firm")
+    const first = user(firmId, "partner", "confidential")
+    const second = user(firmId, "partner", "privileged-restricted")
+    const now = new Date(AGE_30D)
+    const later = new Date(AGE_30D + 60 * 60 * 1000)
+    const id = await seedDoc(firmId, "clerk-holder", { sourceChannel: "evil", mimeType: "application/pdf" })
+    await acknowledgeLooseHold(first, id, now)
+    await acknowledgeLooseHold(second, id, later)
+    const row = (await docRef(id).get()).data()
+    expect(row?.loosePartnerAck.partnerId).toBe(first.uid)
+    expect(row?.loosePartnerAck.acknowledgedAt.toMillis()).toBe(now.getTime())
+    expect(row?.loosePartnerAck.acknowledgedAt.toMillis()).not.toBe(later.getTime())
+  })
+
+  it("acknowledging a malformed row writes loosePartnerAck and no other document field", async () => {
+    const firmId = uniq("firm")
+    const partner = user(firmId, "partner", "confidential")
+    const id = await seedDoc(firmId, "clerk-holder", {
+      sourceChannel: "evil",
+      mimeType: "application/pdf",
+      byteSize: 12,
+      objectVersion: 1,
+      classification: "confidential",
+    })
+    const before = (await docRef(id).get()).data()
+    expect(before?.loosePartnerAck).toBeUndefined()
+    await acknowledgeLooseHold(partner, id, new Date(AGE_30D))
+    const after = (await docRef(id).get()).data()
+    expect(after?.loosePartnerAck).toMatchObject({ partnerId: partner.uid })
+    const { loosePartnerAck: _ack, ...rest } = after ?? {}
+    expect(rest).toEqual(before)
+    expect(after?.mimeType).toBe("application/pdf")
+    expect(after?.byteSize).toBe(12)
+    expect(after?.objectVersion).toBe(1)
+    expect(after?.sourceChannel).toBe("evil")
+    expect(after?.classification).toBe("confidential")
+  })
+
+  it("a repeated acknowledgement of a malformed row is audited as already_acknowledged", async () => {
+    const firmId = uniq("firm")
+    const first = user(firmId, "partner", "confidential")
+    const second = user(firmId, "partner", "confidential")
+    const id = await seedDoc(firmId, "clerk-holder", { sourceChannel: "evil", classification: "confidential" })
+    await acknowledgeLooseHold(first, id, new Date(AGE_30D))
+    await acknowledgeLooseHold(second, id, new Date(AGE_30D + 60 * 60 * 1000))
+    const rows = (await adminDb().collection("audit_log").where("firmId", "==", firmId).get()).docs
+      .map((entry) => entry.data())
+      .filter((row) => row.target === `documents/${id}` && row.action === "loose_vault.acknowledge")
+    expect(rows).toHaveLength(2)
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ actorId: first.uid, reason: "ok", classification: "confidential" }),
+        expect.objectContaining({ actorId: second.uid, reason: "already_acknowledged", classification: "confidential" }),
+      ])
+    )
+    expect(rows.filter((row) => row.reason === "ok")).toHaveLength(1)
+    expect(rows.filter((row) => row.reason === "already_acknowledged")).toHaveLength(1)
+  })
+
   it("a confidential clerk's escalations omit privileged, restricted and unlabelled malformed rows", async () => {
     const firmId = uniq("firm")
     const clerk = user(firmId, "clerk", "confidential")
