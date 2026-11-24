@@ -105,14 +105,47 @@ async function changeClassOf(
   }
 }
 
-function fingerprintOf(row: Pick<LearningProposalRecord, "firmId" | "entryKey" | "source" | "diff">): string {
+function isJsonValue(value: unknown, seen = new WeakSet<object>()): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true
+  if (typeof value === "number") return Number.isFinite(value)
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return false
+    seen.add(value)
+    return value.every((item) => isJsonValue(item, seen))
+  }
+  if (typeof value !== "object") return false
+  if (seen.has(value)) return false
+  seen.add(value)
+  const proto = Object.getPrototypeOf(value)
+  if (proto !== Object.prototype && proto !== null) return false
+  if (Object.getOwnPropertySymbols(value).length > 0) return false
+  for (const key of Object.getOwnPropertyNames(value)) {
+    const desc = Object.getOwnPropertyDescriptor(value, key)
+    if (!desc || !("value" in desc) || desc.enumerable === false) return false
+    if (!isJsonValue(desc.value, seen)) return false
+  }
+  return true
+}
+
+function fingerprintOf(row: Pick<LearningProposalRecord, "firmId" | "entryKey" | "source" | "classification" | "diff">): string {
   return payloadDigest({
     firmId: row.firmId,
     entryKey: row.entryKey,
     source: row.source,
-    before: row.diff.before,
+    classification: row.classification,
+    beforeMissing: row.diff.before === undefined,
+    before: row.diff.before === undefined ? null : row.diff.before,
     after: row.diff.after,
   })
+}
+
+async function stillOpen(existing: LearningProposalRecord, store: MasterStore | undefined): Promise<boolean> {
+  if (existing.status === "pending") return true
+  if (existing.status !== "approved") return false
+  if (!existing.sealedProposalId) return true
+  if (!store) return false
+  const sealed = await store.getProposal(existing.sealedProposalId)
+  return sealed?.status === "pending" || sealed?.status === "approved"
 }
 
 async function exclusive<T>(key: object, fn: () => Promise<T>): Promise<T> {
@@ -170,7 +203,9 @@ export async function proposeLearning(input: ProposeLearningInput, deps: Learnin
     ) {
       throw new Error("learning proposal exceeds size cap")
     }
-    if (input.after === undefined) throw new Error("learning proposal is not durable")
+    if (input.after === undefined || !isJsonValue(input.after) || (input.before !== undefined && !isJsonValue(input.before))) {
+      throw new Error("learning proposal is not durable")
+    }
     let encoded: string
     try {
       encoded = canonicalPayload({ before: input.before, after: input.after })
@@ -201,7 +236,7 @@ export async function proposeLearning(input: ProposeLearningInput, deps: Learnin
     }
     const fingerprint = fingerprintOf(draft)
     const existing = await deps.ledger.findByFingerprint(fingerprint)
-    if (existing && (existing.status === "pending" || existing.status === "approved")) return existing
+    if (existing && (await stillOpen(existing, deps.store))) return existing
     const allowed = await deps.ledger.consumeRate(
       `${firmId}\u0000${normalizeActorKey(proposedBy)}`,
       clock(deps).getTime(),

@@ -334,6 +334,62 @@ describe("L4.6 learning governance", () => {
     expect(inserts()).toBe(0)
   })
 
+  it("keeps a different classification as its own proposal", async () => {
+    const { deps } = harness()
+    const publicRow = await proposeLearning(
+      proposal({ entryKey: "clause.class", classification: "public", before: undefined, after: { clause: "fresh" } }),
+      deps,
+    )
+    const privilegedRow = await proposeLearning(
+      proposal({ entryKey: "clause.class", classification: "privileged", before: undefined, after: { clause: "fresh" } }),
+      deps,
+    )
+    expect(privilegedRow.id).not.toBe(publicRow.id)
+    expect(privilegedRow.classification).toBe("privileged")
+    expect(publicRow.classification).toBe("public")
+  })
+
+  it("does not treat an already applied sealed proposal as the open duplicate", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    const ledger = new InMemoryLearningLedger()
+    const deps: LearningDeps = {
+      ledger,
+      posture: OPEN,
+      store: memory,
+      env: { [FLAG]: "true" },
+      now: () => new Date("2026-11-24T00:00:00.000Z"),
+    }
+    const first = await proposeLearning(proposal(), deps)
+    const approved = await decideLearning(first.id, partner(), deps)
+    const againWhileOpen = await proposeLearning(proposal(), deps)
+    expect(againWhileOpen.id).toBe(first.id)
+    await applyChange(approved.sealedProposalId!, memory)
+    const afterApply = await proposeLearning(proposal(), deps)
+    expect(afterApply.id).not.toBe(first.id)
+    expect(afterApply.status).toBe("pending")
+    expect((await ledger.get(first.id))?.status).toBe("approved")
+    expect(await memory.listVersions("firmA")).toHaveLength(1)
+  })
+
+  it("refuses a payload the canonical form cannot preserve", async () => {
+    const { deps, ledger } = harness({ limits: { maxPayloadBytes: 64 } })
+    const huge = new Map<string, string>([["clause", "x".repeat(100_000)]])
+    await expect(proposeLearning(proposal({ after: huge }), deps)).rejects.toThrow(/learning proposal is not durable/)
+    await expect(proposeLearning(proposal({ after: new Map([["a", "1"]]) }), deps)).rejects.toThrow(
+      /learning proposal is not durable/,
+    )
+    await expect(proposeLearning(proposal({ after: new Set(["a"]) }), deps)).rejects.toThrow(/learning proposal is not durable/)
+    await expect(proposeLearning(proposal({ after: new Date("2026-11-24T00:00:00.000Z") }), deps)).rejects.toThrow(
+      /learning proposal is not durable/,
+    )
+    await expect(proposeLearning(proposal({ after: { n: Number.POSITIVE_INFINITY } }), deps)).rejects.toThrow(
+      /learning proposal is not durable/,
+    )
+    const stored = await proposeLearning(proposal({ entryKey: "clause.plain", after: { clause: "plain" } }), deps)
+    expect(stored.diff.after).toEqual({ clause: "plain" })
+    expect(await ledger.get(stored.id)).toMatchObject({ status: "pending" })
+  })
+
   it("dedupes an identical proposal, including key order, and does not spend the rate limit on the duplicate", async () => {
     const { deps } = harness({ limits: { maxProposalsPerWindow: 1, windowMs: 60_000 } })
     const first = await proposeLearning(proposal({ before: { b: 1, a: 2 }, after: { a: 2, b: 1 } }), deps)
