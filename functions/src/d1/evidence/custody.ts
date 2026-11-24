@@ -1,0 +1,449 @@
+import { randomUUID } from "node:crypto"
+import type { Classification } from "@/platform/p1/types"
+import { classificationRank, isClassification } from "@/platform/p1/types"
+import { readDocumentRecord } from "@/platform/d1/documentRecord"
+import { canReadDocument } from "@/platform/p5/documentAccess"
+import { MATTER_TOMBSTONES, isTombstoneFor } from "@/platform/retention/tombstone"
+import { newStore, type Matter, type User } from "@/platform/spine/store"
+import { type DocumentReference, type DocumentSnapshot, type Query, type Transaction } from "firebase-admin/firestore"
+import { adminDb } from "../../admin"
+import { isSafeDocId } from "../../p5/common"
+import { isKnownClassification } from "../../p5/classification"
+import { requireD1Evidence } from "./flag"
+import {
+  CUSTODY_EVENTS,
+  EVIDENCE_ITEMS,
+  GENESIS_PREV_HASH,
+  EvidenceError,
+  atLeastClassification,
+  custodyEventHash,
+  inspectCustodyChain,
+  parseCustodyEvent,
+  type AddCustodyInput,
+  type ChainVerification,
+  type CustodyEvent,
+  type CustodyKind,
+  type EvidenceActor,
+  type EvidenceClock,
+  type EvidenceItem,
+  type LinkEvidenceInput,
+  type LogEvidenceInput,
+} from "./types"
+
+/**
+ * Evidence register and the append-only custody chain.
+ *
+ * Custody rows are written with `tx.create` and never updated or deleted.
+ * The evidence row holds the current custodian, the optional document link,
+ * and `eventCount`. Those fields move only inside the same transaction that
+ * appends the event that records the change. The next seq is the verified
+ * chain length plus one, not a counter that can be trusted after a direct write.
+ * Two transactions contend on the evidence document and on the event query, so
+ * concurrent appends take distinct dense seqs.
+ *
+ * `register.ts` re-exports the register operations. They live here so the matter
+ * gate and the chain writer are one copy and nothing unguarded is exported.
+ */
+
+const READERS = ["partner", "associate", "clerk", "intern"] as const
+const AUTHORS = ["partner", "associate", "clerk"] as const
+const PUBLIC_KINDS = ["receipt", "transfer", "handling", "condition", "annotation"] as const
+const TEXT_MAX = 500
+const NOTE_MAX = 4000
+const EVIDENCE_KEYS = [
+  "classification",
+  "createdAt",
+  "createdBy",
+  "custodian",
+  "documentId",
+  "eventCount",
+  "firmId",
+  "item",
+  "matterId",
+  "receiptDate",
+  "source",
+] as const
+
+type Mode = "read" | "write"
+type Gate = { matterId: string; classification: Classification }
+type Draft = {
+  kind: CustodyKind
+  note: string
+  at: string
+  custodian?: string
+  documentId?: string | null
+  classification?: Classification
+}
+
+function assertRole(caller: EvidenceActor, mode: Mode): void {
+  const allowed: readonly string[] = mode === "write" ? AUTHORS : READERS
+  if (!allowed.includes(caller.role)) throw new EvidenceError(mode === "write" ? "not_author" : "not_staff")
+}
+
+function assertActor(caller: EvidenceActor): void {
+  if (!isSafeDocId(caller.uid) || !isSafeDocId(caller.firmId)) throw new EvidenceError("invalid_input")
+}
+
+function parseId(value: unknown): string {
+  if (!isSafeDocId(value)) throw new EvidenceError("invalid_input")
+  return value
+}
+
+function parseText(value: unknown, max: number): string {
+  if (typeof value !== "string") throw new EvidenceError("invalid_input")
+  const trimmed = value.trim()
+  if (trimmed.length < 1 || trimmed.length > max || /[\u0000-\u001f]/.test(trimmed)) throw new EvidenceError("invalid_input")
+  return trimmed
+}
+
+function parseReceiptDate(value: unknown): string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new EvidenceError("invalid_input")
+  const [year, month, day] = value.split("-").map(Number)
+  const utc = new Date(Date.UTC(year!, month! - 1, day!))
+  if (utc.getUTCFullYear() !== year || utc.getUTCMonth() !== month! - 1 || utc.getUTCDate() !== day) {
+    throw new EvidenceError("invalid_input")
+  }
+  return value
+}
+
+function stamp(clock?: EvidenceClock): string {
+  const now = clock?.now?.() ?? Date.now()
+  if (typeof now !== "number" || !Number.isFinite(now)) throw new EvidenceError("invalid_input")
+  return new Date(now).toISOString()
+}
+
+function isContention(err: unknown): boolean {
+  if (typeof err !== "object" || err === null || !("code" in err)) return false
+  const code = (err as { code: unknown }).code
+  return code === "aborted" || code === "already-exists" || code === 6 || code === 10
+}
+
+async function commit<T>(fn: () => Promise<T>): Promise<T> {
+  let last: unknown
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      if (err instanceof EvidenceError || !isContention(err) || attempt === 7) throw err
+      last = err
+    }
+  }
+  throw last
+}
+
+function evidenceRef(id: string): DocumentReference {
+  return adminDb().collection(EVIDENCE_ITEMS).doc(id)
+}
+
+function custodyRef(id: string): DocumentReference {
+  return adminDb().collection(CUSTODY_EVENTS).doc(id)
+}
+
+function chainQuery(evidenceId: string): Query {
+  return adminDb().collection(CUSTODY_EVENTS).where("evidenceId", "==", evidenceId)
+}
+
+function matterRefs(matterId: string, uid: string): [DocumentReference, DocumentReference, DocumentReference] {
+  const db = adminDb()
+  return [
+    db.collection("matters").doc(matterId),
+    db.collection("matter_members").doc(`${matterId}_${uid}`),
+    db.collection(MATTER_TOMBSTONES).doc(matterId),
+  ]
+}
+
+function isPlain(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function parseEvidence(id: string, data: unknown): EvidenceItem | null {
+  if (!isPlain(data)) return null
+  const keys = Object.keys(data)
+  if (keys.length !== EVIDENCE_KEYS.length || EVIDENCE_KEYS.some((key) => !Object.hasOwn(data, key))) return null
+  const documentId = data.documentId
+  const eventCount = data.eventCount
+  if (!isSafeDocId(data.firmId) || !isSafeDocId(data.matterId)) return null
+  if (typeof data.item !== "string" || typeof data.source !== "string" || typeof data.custodian !== "string") return null
+  if (typeof data.receiptDate !== "string" || typeof data.createdBy !== "string" || typeof data.createdAt !== "string") return null
+  if (!(documentId === null || (typeof documentId === "string" && isSafeDocId(documentId)))) return null
+  if (!isKnownClassification(data.classification)) return null
+  if (!Number.isInteger(eventCount) || (eventCount as number) < 0) return null
+  return {
+    id,
+    firmId: data.firmId,
+    matterId: data.matterId,
+    item: data.item,
+    source: data.source,
+    receiptDate: data.receiptDate,
+    custodian: data.custodian,
+    classification: data.classification,
+    documentId,
+    createdBy: data.createdBy,
+    createdAt: data.createdAt,
+    eventCount: eventCount as number,
+  }
+}
+
+function decideGate(
+  caller: EvidenceActor,
+  matterId: string,
+  mode: Mode,
+  matterSnap: DocumentSnapshot,
+  memberSnap: DocumentSnapshot,
+  tombSnap: DocumentSnapshot
+): Gate {
+  assertRole(caller, mode)
+  if (isTombstoneFor(tombSnap.data(), caller.firmId, matterId)) throw new EvidenceError("matter_deleted")
+  const data = matterSnap.data()
+  if (!matterSnap.exists || !isPlain(data) || data.firmId !== caller.firmId) throw new EvidenceError("not_found")
+  if (!memberSnap.exists) throw new EvidenceError("not_member")
+  if (!isKnownClassification(data.classification)) throw new EvidenceError("not_found")
+  if (classificationRank(caller.clearanceLevel) < classificationRank(data.classification)) throw new EvidenceError("clearance")
+  return { matterId, classification: data.classification }
+}
+
+async function gateOf(caller: EvidenceActor, matterId: string, mode: Mode, tx?: Transaction): Promise<Gate> {
+  const refs = matterRefs(matterId, caller.uid)
+  const [matterSnap, memberSnap, tombSnap] = tx ? await tx.getAll(...refs) : await adminDb().getAll(...refs)
+  return decideGate(caller, matterId, mode, matterSnap!, memberSnap!, tombSnap!)
+}
+
+async function readItem(caller: EvidenceActor, evidenceId: string, mode: Mode, tx?: Transaction): Promise<{ item: EvidenceItem; gate: Gate }> {
+  const snap = tx ? await tx.get(evidenceRef(evidenceId)) : await evidenceRef(evidenceId).get()
+  const item = snap.exists ? parseEvidence(snap.id, snap.data()) : null
+  if (!item || item.firmId !== caller.firmId) throw new EvidenceError("not_found")
+  const gate = await gateOf(caller, item.matterId, mode, tx)
+  if (classificationRank(caller.clearanceLevel) < classificationRank(item.classification)) throw new EvidenceError("clearance")
+  return { item, gate }
+}
+
+function seqHint(id: string, data: unknown): number {
+  if (isPlain(data) && typeof data.seq === "number" && Number.isInteger(data.seq) && data.seq >= 1) return data.seq
+  const match = /_(\d+)$/.exec(id)
+  return match ? Number(match[1]) : 1
+}
+
+async function readChain(
+  subject: { id: string; firmId: string; matterId: string },
+  tx?: Transaction
+): Promise<{ events: CustodyEvent[]; verdict: ChainVerification }> {
+  const snap = tx ? await tx.get(chainQuery(subject.id)) : await chainQuery(subject.id).get()
+  const events: CustodyEvent[] = []
+  let malformed: ChainVerification | null = null
+  for (const doc of snap.docs) {
+    const event = parseCustodyEvent(doc.id, doc.data())
+    if (event) {
+      events.push(event)
+      continue
+    }
+    const brokenSeq = seqHint(doc.id, doc.data())
+    if (!malformed || brokenSeq < malformed.brokenSeq) malformed = { ok: false, brokenSeq, reason: "malformed" }
+  }
+  const verdict = inspectCustodyChain(subject, events)
+  if (malformed && (verdict.ok || malformed.brokenSeq < verdict.brokenSeq)) return { events, verdict: malformed }
+  return { events, verdict }
+}
+
+async function appendEvent(tx: Transaction, caller: EvidenceActor, evidenceId: string, draft: Draft): Promise<CustodyEvent> {
+  const { item } = await readItem(caller, evidenceId, "write", tx)
+  const { verdict, events } = await readChain(item, tx)
+  if (!verdict.ok) throw new EvidenceError("chain_broken")
+  const seq = verdict.eventCount + 1
+  const prevHash = seq === 1 ? GENESIS_PREV_HASH : events.find((event) => event.seq === verdict.eventCount)?.hash
+  if (prevHash === undefined) throw new EvidenceError("chain_broken")
+  const classification = draft.classification ?? item.classification
+  if (classificationRank(caller.clearanceLevel) < classificationRank(classification)) throw new EvidenceError("clearance")
+  const custodian = draft.custodian ?? item.custodian
+  const body = {
+    evidenceId: item.id,
+    firmId: item.firmId,
+    matterId: item.matterId,
+    seq,
+    kind: draft.kind,
+    actorId: caller.uid,
+    at: draft.at,
+    note: draft.note,
+    custodian,
+    documentId: draft.documentId === undefined ? null : draft.documentId,
+    classification,
+    prevHash,
+  }
+  const hash = custodyEventHash(body)
+  const id = `${item.id}_${seq}`
+  tx.create(custodyRef(id), { ...body, hash })
+  const patch: Record<string, unknown> = { eventCount: seq, custodian }
+  if (draft.classification !== undefined) patch.classification = classification
+  if (draft.documentId !== undefined) patch.documentId = draft.documentId
+  tx.update(evidenceRef(item.id), patch)
+  return { id, ...body, hash }
+}
+
+function callerMayReadDocument(caller: EvidenceActor, gate: Gate, document: { firmId: string; matterId: string | null; classification: Classification }): boolean {
+  const store = newStore()
+  const matter: Matter = {
+    id: gate.matterId,
+    firmId: caller.firmId,
+    clientId: "",
+    title: "",
+    courtId: null,
+    caseNumber: null,
+    caseNumberStatus: "pending",
+    status: "live",
+    classification: gate.classification,
+  }
+  store.matters.set(matter.id, matter)
+  store.members.set(store.memberKey(matter.id, caller.uid), {
+    matterId: matter.id,
+    userId: caller.uid,
+    firmId: caller.firmId,
+  })
+  const user: User = { id: caller.uid, firmId: caller.firmId, role: caller.role, clearanceLevel: caller.clearanceLevel }
+  return canReadDocument(store, user, document)
+}
+
+function parseLog(input: LogEvidenceInput): LogEvidenceInput {
+  if (!isClassification(input?.classification)) throw new EvidenceError("invalid_input")
+  return {
+    matterId: parseId(input.matterId),
+    item: parseText(input.item, TEXT_MAX),
+    source: parseText(input.source, TEXT_MAX),
+    receiptDate: parseReceiptDate(input.receiptDate),
+    custodian: parseText(input.custodian, TEXT_MAX),
+    classification: input.classification,
+  }
+}
+
+function parseAdd(input: AddCustodyInput): { evidenceId: string; kind: Draft["kind"]; note: string; custodian?: string } {
+  const kind = input?.kind
+  if (typeof kind !== "string" || !(PUBLIC_KINDS as readonly string[]).includes(kind)) throw new EvidenceError("invalid_input")
+  const note = parseText(input.note, NOTE_MAX)
+  const custodian = input.custodian === undefined ? undefined : parseText(input.custodian, TEXT_MAX)
+  if (kind === "transfer" && custodian === undefined) throw new EvidenceError("invalid_input")
+  return { evidenceId: parseId(input.evidenceId), kind: kind as Draft["kind"], note, custodian }
+}
+
+export async function logEvidence(caller: EvidenceActor, input: LogEvidenceInput, clock?: EvidenceClock): Promise<EvidenceItem> {
+  requireD1Evidence()
+  assertRole(caller, "write")
+  assertActor(caller)
+  const parsed = parseLog(input)
+  const createdAt = stamp(clock)
+  const id = `ev_${randomUUID().replace(/-/g, "")}`
+  return commit(() =>
+    adminDb().runTransaction(async (tx) => {
+      const gate = await gateOf(caller, parsed.matterId, "write", tx)
+      const classification = atLeastClassification(parsed.classification, gate.classification)
+      if (classificationRank(caller.clearanceLevel) < classificationRank(classification)) throw new EvidenceError("clearance")
+      const item: EvidenceItem = {
+        id,
+        firmId: caller.firmId,
+        matterId: parsed.matterId,
+        item: parsed.item,
+        source: parsed.source,
+        receiptDate: parsed.receiptDate,
+        custodian: parsed.custodian,
+        classification,
+        documentId: null,
+        createdBy: caller.uid,
+        createdAt,
+        eventCount: 0,
+      }
+      const { id: _id, ...stored } = item
+      tx.create(evidenceRef(id), stored)
+      return item
+    }, { maxAttempts: 25 })
+  )
+}
+
+export async function getEvidenceItem(caller: EvidenceActor, evidenceId: string): Promise<EvidenceItem> {
+  requireD1Evidence()
+  assertRole(caller, "read")
+  assertActor(caller)
+  const { item } = await readItem(caller, parseId(evidenceId), "read")
+  return item
+}
+
+export async function getEvidenceRegister(caller: EvidenceActor, matterId: string): Promise<EvidenceItem[]> {
+  requireD1Evidence()
+  assertRole(caller, "read")
+  assertActor(caller)
+  const id = parseId(matterId)
+  await gateOf(caller, id, "read")
+  const snap = await adminDb().collection(EVIDENCE_ITEMS).where("matterId", "==", id).get()
+  const items: EvidenceItem[] = []
+  for (const doc of snap.docs) {
+    const item = parseEvidence(doc.id, doc.data())
+    if (!item || item.firmId !== caller.firmId || item.matterId !== id) continue
+    if (classificationRank(caller.clearanceLevel) < classificationRank(item.classification)) continue
+    items.push(item)
+  }
+  items.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+  return items
+}
+
+export async function linkEvidenceToDocument(caller: EvidenceActor, input: LinkEvidenceInput, clock?: EvidenceClock): Promise<EvidenceItem> {
+  requireD1Evidence()
+  assertRole(caller, "write")
+  assertActor(caller)
+  const evidenceId = parseId(input?.evidenceId)
+  const documentId = parseId(input?.documentId)
+  const at = stamp(clock)
+  return commit(() =>
+    adminDb().runTransaction(async (tx) => {
+      const { item, gate } = await readItem(caller, evidenceId, "write", tx)
+      if (item.documentId === documentId) return item
+      if (item.documentId !== null) throw new EvidenceError("already_linked")
+      const docSnap = await tx.get(adminDb().collection("documents").doc(documentId))
+      const record = docSnap.exists ? readDocumentRecord(docSnap.id, docSnap.data()) : null
+      if (!record) throw new EvidenceError("not_found")
+      if (record.firmId !== item.firmId) throw new EvidenceError("cross_firm")
+      if (record.matterId !== item.matterId) throw new EvidenceError("cross_matter")
+      if (!callerMayReadDocument(caller, gate, record)) throw new EvidenceError("not_permitted")
+      if (record.contentHash.length === 0 || record.contentHash.length > 128 || /[\u0000-\u001f]/.test(record.contentHash)) {
+        throw new EvidenceError("not_found")
+      }
+      const classification = atLeastClassification(atLeastClassification(item.classification, record.classification), gate.classification)
+      if (classificationRank(caller.clearanceLevel) < classificationRank(classification)) throw new EvidenceError("clearance")
+      const event = await appendEvent(tx, caller, evidenceId, {
+        kind: "link",
+        note: record.contentHash,
+        at,
+        documentId,
+        classification,
+      })
+      return { ...item, documentId, classification, custodian: event.custodian, eventCount: event.seq }
+    }, { maxAttempts: 25 })
+  )
+}
+
+export async function addCustodyEvent(caller: EvidenceActor, input: AddCustodyInput, clock?: EvidenceClock): Promise<CustodyEvent> {
+  requireD1Evidence()
+  assertRole(caller, "write")
+  assertActor(caller)
+  const parsed = parseAdd(input)
+  const at = stamp(clock)
+  return commit(() =>
+    adminDb().runTransaction(
+      (tx) => appendEvent(tx, caller, parsed.evidenceId, { kind: parsed.kind, note: parsed.note, custodian: parsed.custodian, at }),
+      { maxAttempts: 25 }
+    )
+  )
+}
+
+export async function getCustodyTrail(caller: EvidenceActor, evidenceId: string): Promise<CustodyEvent[]> {
+  requireD1Evidence()
+  assertRole(caller, "read")
+  assertActor(caller)
+  const { item } = await readItem(caller, parseId(evidenceId), "read")
+  const { events } = await readChain(item)
+  return events.sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id))
+}
+
+export async function verifyCustodyChain(caller: EvidenceActor, evidenceId: string): Promise<ChainVerification> {
+  requireD1Evidence()
+  assertRole(caller, "read")
+  assertActor(caller)
+  const { item } = await readItem(caller, parseId(evidenceId), "read")
+  const { verdict } = await readChain(item)
+  return verdict
+}
