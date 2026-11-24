@@ -149,6 +149,20 @@ function isContention(err: unknown): boolean {
   return code === "aborted" || code === "already-exists" || code === 6 || code === 10
 }
 
+/** gRPC ALREADY_EXISTS (6), including the string form a lost create commit surfaces as. */
+function isAlreadyExists(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false
+  const record = err as { code?: unknown; errorInfo?: { code?: unknown } }
+  return [record.code, record.errorInfo?.code].some((code) => code === 6 || code === "already-exists" || code === "ALREADY_EXISTS")
+}
+
+function sameStored(expected: Record<string, unknown>, actual: unknown): boolean {
+  if (!isPlain(actual)) return false
+  const keys = Object.keys(expected)
+  if (Object.keys(actual).length !== keys.length) return false
+  return keys.every((key) => Object.is(actual[key], expected[key]))
+}
+
 async function commit<T>(fn: () => Promise<T>): Promise<T> {
   let last: unknown
   for (let attempt = 0; attempt < 8; attempt++) {
@@ -383,57 +397,92 @@ function parseAdd(input: AddCustodyInput): { evidenceId: string; kind: Draft["ki
   return { evidenceId: parseId(input.evidenceId), kind: kind as Draft["kind"], note, custodian }
 }
 
+async function readLoggedPair(id: string, tx?: Transaction): Promise<{ evidence: unknown; genesis: unknown; present: boolean }> {
+  const evidenceSnap = tx ? await tx.get(evidenceRef(id)) : await evidenceRef(id).get()
+  const genesisSnap = tx ? await tx.get(custodyRef(`${id}_0`)) : await custodyRef(`${id}_0`).get()
+  return { evidence: evidenceSnap.data(), genesis: genesisSnap.data(), present: evidenceSnap.exists || genesisSnap.exists }
+}
+
+/** The stored pair is this attempt's body, or `conflict`. A miss does not create a second row. */
+function replayLogged(
+  id: string,
+  evidence: unknown,
+  genesis: unknown,
+  stored: Record<string, unknown>,
+  genesisStored: Record<string, unknown>
+): EvidenceItem {
+  const item = sameStored(stored, evidence) && sameStored(genesisStored, genesis) ? parseEvidence(id, evidence) : null
+  if (!item) throw new EvidenceError("conflict")
+  return item
+}
+
 export async function logEvidence(caller: EvidenceActor, input: LogEvidenceInput, clock?: EvidenceClock): Promise<EvidenceItem> {
   requireD1Evidence()
   assertCaller(caller, "write")
   const parsed = parseLog(input)
   const createdAt = stamp(clock)
   const id = `ev_${randomUUID().replace(/-/g, "")}`
-  return commit(() =>
-    adminDb().runTransaction(async (tx) => {
-      const gate = await gateOf(caller, parsed.matterId, "write", tx)
-      const classification = atLeastClassification(parsed.classification, gate.classification)
-      if (classificationRank(caller.clearanceLevel) < classificationRank(classification)) throw new EvidenceError("clearance")
-      const genesis = {
-        evidenceId: id,
-        firmId: caller.firmId,
-        matterId: parsed.matterId,
-        seq: 0 as const,
-        kind: "genesis" as const,
-        actorId: caller.uid,
-        at: createdAt,
-        note: "",
-        custodian: parsed.custodian,
-        documentId: null,
-        classification,
-        item: parsed.item,
-        source: parsed.source,
-        receiptDate: parsed.receiptDate,
-        prevHash: GENESIS_PREV_HASH,
-      }
-      const headerHash = genesisEventHash(genesis)
-      const item: EvidenceItem = {
-        id,
-        firmId: caller.firmId,
-        matterId: parsed.matterId,
-        item: parsed.item,
-        source: parsed.source,
-        receiptDate: parsed.receiptDate,
-        custodian: parsed.custodian,
-        classification,
-        documentId: null,
-        createdBy: caller.uid,
-        createdAt,
-        eventCount: 0,
-        headerHash,
-        lastHash: headerHash,
-      }
-      const { id: _id, ...stored } = item
-      tx.create(evidenceRef(id), stored)
-      tx.create(custodyRef(`${id}_0`), { ...genesis, hash: headerHash })
-      return item
-    }, { maxAttempts: 25 })
-  )
+  let stored: Record<string, unknown> | null = null
+  let genesisStored: Record<string, unknown> | null = null
+  try {
+    return await commit(() =>
+      adminDb().runTransaction(async (tx) => {
+        const gate = await gateOf(caller, parsed.matterId, "write", tx)
+        const classification = atLeastClassification(parsed.classification, gate.classification)
+        if (classificationRank(caller.clearanceLevel) < classificationRank(classification)) throw new EvidenceError("clearance")
+        const genesis = {
+          evidenceId: id,
+          firmId: caller.firmId,
+          matterId: parsed.matterId,
+          seq: 0 as const,
+          kind: "genesis" as const,
+          actorId: caller.uid,
+          at: createdAt,
+          note: "",
+          custodian: parsed.custodian,
+          documentId: null,
+          classification,
+          item: parsed.item,
+          source: parsed.source,
+          receiptDate: parsed.receiptDate,
+          prevHash: GENESIS_PREV_HASH,
+        }
+        const headerHash = genesisEventHash(genesis)
+        const item: EvidenceItem = {
+          id,
+          firmId: caller.firmId,
+          matterId: parsed.matterId,
+          item: parsed.item,
+          source: parsed.source,
+          receiptDate: parsed.receiptDate,
+          custodian: parsed.custodian,
+          classification,
+          documentId: null,
+          createdBy: caller.uid,
+          createdAt,
+          eventCount: 0,
+          headerHash,
+          lastHash: headerHash,
+        }
+        const { id: _id, ...body } = item
+        const genesisBody = { ...genesis, hash: headerHash }
+        stored = body
+        genesisStored = genesisBody
+        const found = await readLoggedPair(id, tx)
+        if (found.present) return replayLogged(id, found.evidence, found.genesis, body, genesisBody)
+        tx.create(evidenceRef(id), body)
+        tx.create(custodyRef(`${id}_0`), genesisBody)
+        return item
+      }, { maxAttempts: 25 })
+    )
+  } catch (err) {
+    const body = stored
+    const genesisBody = genesisStored
+    if (!isAlreadyExists(err) || body === null || genesisBody === null) throw err
+    const found = await readLoggedPair(id)
+    if (!found.present) throw new EvidenceError("conflict")
+    return replayLogged(id, found.evidence, found.genesis, body, genesisBody)
+  }
 }
 
 export async function getEvidenceItem(caller: EvidenceActor, evidenceId: string): Promise<EvidenceItem> {
