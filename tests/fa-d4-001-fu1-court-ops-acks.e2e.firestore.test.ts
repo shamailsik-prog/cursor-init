@@ -208,8 +208,8 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001-FU1: court-ops acknowled
       const rows = await ackRowsOf(x.firmId)
       expect(rows.map((r) => r.id).sort()).toEqual([ackId(x.firmId, "follow_up", f), ackId(x.firmId, "workflow", w)].sort())
       const byType = Object.fromEntries(rows.map((r) => [String(r.queueType), r]))
-      expect(byType.follow_up).toMatchObject({ followUpId: f, documentId: null, actorId: x.uid, source: "court_ops", status: "acknowledged" })
-      expect(byType.workflow).toMatchObject({ documentId: w, followUpId: null, actorId: x.uid, source: "court_ops", status: "acknowledged" })
+      expect(byType.follow_up).toMatchObject({ followUpId: f, documentId: null, actorId: x.uid, source: "court_ops", status: "acknowledged", matterId: x.matterId })
+      expect(byType.workflow).toMatchObject({ documentId: w, followUpId: null, actorId: x.uid, source: "court_ops", status: "acknowledged", matterId: x.matterId })
       expect((await ackAuditRowsOf(x.uid)).length).toBe(2)
     }
   })

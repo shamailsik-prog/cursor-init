@@ -188,11 +188,11 @@ import {
 } from "@/platform/persistence/draftTemplateAnalytics"
 import type { TemplateSummary } from "@/services/d4-1/drafts"
 import {
-  nextCourtOpsAckRow,
   readWorkflowOpsActivityRow,
   refuseBlindCourtOpsAckWrite,
 } from "@/platform/persistence/courtOpsAcknowledgement"
 import { resolveOpenFollowUpMemory, type FollowUpResolveInput } from "@/platform/persistence/courtOpsFollowUpResolve"
+import { recordCourtOpsAckMemory, upsertFollowUpMemory } from "@/platform/persistence/courtOpsMatterBinding"
 import { MatterClosedError } from "@/platform/d1/matterDocument"
 import {
   AuditAppendConflictError,
@@ -3194,14 +3194,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
     },
     followUps: {
-      async upsert(row) {
-        const idx = store.followUps.findIndex((entry) => entry.id === row.id)
-        if (idx >= 0) {
-          store.followUps[idx] = row
-          return
-        }
-        store.followUps.push(row)
-      },
+      async upsert(row) { return upsertFollowUpMemory(store, row) },
       async resolveOpen(input) { return resolveOpenFollowUpMemory(store, input) },
       async get(id, firmId) {
         return firmScoped(store.followUps.find((row) => row.id === id), firmId)
@@ -3375,11 +3368,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       // FA-D4-001-FU1: read, decide and write with no await in between, so the memory store is as atomic as the
       // Firestore transaction.
-      async recordCourtOpsAcknowledgement(firmId, row) {
-        const next = nextCourtOpsAckRow(firmId, row, store.workflowOpsActivity.get(row.id) ?? null)
-        store.workflowOpsActivity.set(next.id, next)
-        return next
-      },
+      async recordCourtOpsAcknowledgement(firmId, row) { return recordCourtOpsAckMemory(store, firmId, row) },
       async get(id, firmId) {
         const row = firmScoped(store.workflowOpsActivity.get(id), firmId)
         return row ? readWorkflowOpsActivityRow(id, row) : null

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { FieldPath, FieldValue, Timestamp, type DocumentData, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
 import vaultConfig from "@/infra/backup/document-vault.json"
 import { adminDb } from "../admin"
+import { reachCourtOpsDeletion } from "./courtOpsDeletionReach"
 import { REGISTRY_SCOPE, bumpRegistryVersion } from "../d1/registryVersion"
 import { isSafeDocId } from "../p5/common"
 import type { JobSpec } from "../p2/enqueue"
@@ -58,6 +59,8 @@ const errorCodes = {
   legal_hold_active: "A legal hold is active on the matter; the deletion is halted.",
   purge_incomplete: "Rows of the matter remain in a store; the purge is retried.",
   store_unknown: "A store of the deletion plan is not in the inventory.",
+  court_ops_reach_capped: "Court-ops deletion reach hit its row cap before the firm's unbound rows were finished.",
+  court_ops_reach_failed: "Court-ops deletion reach failed before purge jobs were enqueued.",
 } as const
 
 type PreparePayload = { requestId: string }
@@ -297,6 +300,17 @@ async function prepareSteps(ctx: JobContext<PreparePayload>, req: Request): Prom
       tx.set(col.doc(`${requestId}_${store.name}`), { ...base, count: ids.length, parts: parts.length, idsSha256: sha256(ids), status: "pending_operator" })
     })
   }
+
+  // FA-D4-001-FU1-001: bind or report unbound court-ops rows before purge jobs can delete their parents.
+  // Reach is not one runFenced step. A page loop is many transactions, and committing a fence around the
+  // first page would skip the rest on resume. Each page commits on its own and is idempotent, so a crash
+  // retries this call (retentionTestSeam.afterCourtOpsReachPage stands in for that crash). The fenced step
+  // afterwards only re-reads the hold. A thrown reach error is not caught here: prepare fails and enqueue
+  // does not run.
+  await reachCourtOpsDeletion({ db: adminDb(), firmId, deletingMatterId: req.matterId, requestId })
+  await step(ctx as JobContext<unknown>, "court-ops-reach", async (tx) => {
+    await assertNoHold(tx, firmId, req.matterId)
+  })
 
   const groups = purgeGroups(req.plan, req.expected, typeof req.groupSize === "number" ? req.groupSize : DEFAULT_GROUP_SIZE)
   if (req.plan[OUTPUTS_KEY] === "purge") {

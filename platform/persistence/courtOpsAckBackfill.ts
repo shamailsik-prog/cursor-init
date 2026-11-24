@@ -140,7 +140,7 @@ export function formatCourtOpsAckBackfillApplyHeader(plan: CourtOpsAckBackfillPl
 /** Overtaken since planning: a rerun replans from what is stored and finishes the job. */
 export type CourtOpsAckRetryRejection = "legacy_gone" | "legacy_changed"
 /** The target turned out another firm's or malformed at apply: no rerun can fix it. */
-export type CourtOpsAckOperatorRejection = "target_foreign_firm" | "target_malformed"
+export type CourtOpsAckOperatorRejection = "target_foreign_firm" | "target_malformed" | "matter_unbound"
 export type CourtOpsAckMoveRejection = CourtOpsAckRetryRejection | CourtOpsAckOperatorRejection
 
 export type CourtOpsAckMoveOutcome =
@@ -163,13 +163,28 @@ export function decideCourtOpsAckMove(
   if (legacyStored === null || legacyStored === undefined) return { outcome: { status: "rejected", reason: "legacy_gone" } }
   const legacy = readLegacyCourtOpsAckRow(planned.from, legacyStored)
   if (!legacy || !sameRow(legacy, planned.snapshot)) return { outcome: { status: "rejected", reason: "legacy_changed" } }
-  if (targetStored === null || targetStored === undefined) return { outcome: { status: "moved" }, write: legacy }
+  if (targetStored === null || targetStored === undefined) return boundCourtOpsAckWrite({ status: "moved" }, legacy)
   if ((targetStored as { firmId?: unknown }).firmId !== planned.firmId) {
     return { outcome: { status: "rejected", reason: "target_foreign_firm" } }
   }
   const target = readCourtOpsAckRow(planned.to, targetStored)
   if (!target) return { outcome: { status: "rejected", reason: "target_malformed" } }
-  return { outcome: { status: "merged" }, write: legacy.createdAt > target.createdAt ? legacy : target }
+  const chosen = legacy.createdAt > target.createdAt ? legacy : target
+  const other = chosen === legacy ? target : legacy
+  return boundCourtOpsAckWrite({ status: "merged" }, chosen, other)
+}
+
+/** A backfill write must carry a matter id. A null row never replaces one that already names a matter. */
+function boundCourtOpsAckWrite(
+  outcome: { status: "moved" | "merged" },
+  chosen: WorkflowOpsActivityRow,
+  other?: WorkflowOpsActivityRow
+): { outcome: CourtOpsAckMoveOutcome; write?: WorkflowOpsActivityRow } {
+  const bound = (row: WorkflowOpsActivityRow | undefined) =>
+    row !== undefined && typeof row.matterId === "string" && row.matterId !== "" ? row : undefined
+  const write = bound(chosen) ?? bound(other)
+  if (!write) return { outcome: { status: "rejected", reason: "matter_unbound" } }
+  return { outcome, write }
 }
 
 const isRetryRejection = (reason: CourtOpsAckMoveRejection): reason is CourtOpsAckRetryRejection =>

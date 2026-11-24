@@ -155,6 +155,9 @@ describe("nextCourtOpsAckRow: the writer's decision inside its transaction (R6)"
 describe("memory repository workflowOpsActivity (R6, R11)", () => {
   it("records an acknowledgement at its id, and refuses (unchanged) over another firm's row", async () => {
     const store = new SpineStore()
+    // Firm-level workflow item: the acknowledgement stays matterId null (FA-D4-001-FU1-001). A matter-bound item is stamped.
+    store.documentWorkflow.set(X, { documentId: X, firmId: F, matterId: null, status: "review_required", reviewerId: null, updatedAt: 1 })
+    store.documentWorkflow.set("doc_2", { documentId: "doc_2", firmId: F, matterId: null, status: "review_required", reviewerId: null, updatedAt: 1 })
     const repos = createMemoryRepositories(store)
     const row = ackRow(F, "workflow", X)
     expect(await repos.workflowOpsActivity.recordCourtOpsAcknowledgement(F, row)).toEqual(row)
@@ -242,18 +245,36 @@ describe("backfill plan, move decision and exit code (R12, R13)", () => {
     const stored = legacy(F, "workflow", "w1", { createdAt: 300 }).data
     expect(decideCourtOpsAckMove(planned, null, null).outcome).toEqual({ status: "rejected", reason: "legacy_gone" })
     expect(decideCourtOpsAckMove(planned, { ...stored, detail: "changed" }, null).outcome).toEqual({ status: "rejected", reason: "legacy_changed" })
-    expect(decideCourtOpsAckMove(planned, stored, null)).toEqual({ outcome: { status: "moved" }, write: planned.snapshot })
     expect(decideCourtOpsAckMove(planned, stored, ackRow(G, "workflow", "w1")).outcome).toEqual({ status: "rejected", reason: "target_foreign_firm" })
     expect(decideCourtOpsAckMove(planned, stored, { ...ackRow(F, "workflow", "w1"), tags: "x" }).outcome).toEqual({
       status: "rejected",
       reason: "target_malformed",
     })
-    const earlier = ackRow(F, "workflow", "w1", { createdAt: 200, detail: "target" })
-    const later = ackRow(F, "workflow", "w1", { createdAt: 400, detail: "target" })
-    expect(decideCourtOpsAckMove(planned, stored, earlier)).toEqual({ outcome: { status: "merged" }, write: planned.snapshot })
-    expect(decideCourtOpsAckMove(planned, stored, later)).toEqual({ outcome: { status: "merged" }, write: later })
-    const tie = ackRow(F, "workflow", "w1", { createdAt: 300, detail: "target" })
-    expect(decideCourtOpsAckMove(planned, stored, tie).write).toEqual(tie)
+    const bound = planCourtOpsAckBackfill([legacy(F, "workflow", "w1", { createdAt: 300, matterId: "mat_1" })], [], new Map([["workflow:w1", F]])).moves[0]!
+    const boundStored = legacy(F, "workflow", "w1", { createdAt: 300, matterId: "mat_1" }).data
+    expect(decideCourtOpsAckMove(bound, boundStored, null)).toEqual({ outcome: { status: "moved" }, write: bound.snapshot })
+    const earlier = ackRow(F, "workflow", "w1", { createdAt: 200, detail: "target", matterId: "mat_early" })
+    const later = ackRow(F, "workflow", "w1", { createdAt: 400, detail: "target", matterId: "mat_late" })
+    expect(decideCourtOpsAckMove(bound, boundStored, earlier)).toEqual({ outcome: { status: "merged" }, write: bound.snapshot })
+    expect(decideCourtOpsAckMove(bound, boundStored, later)).toEqual({ outcome: { status: "merged" }, write: later })
+    const tie = ackRow(F, "workflow", "w1", { createdAt: 300, detail: "target", matterId: "mat_tie" })
+    expect(decideCourtOpsAckMove(bound, boundStored, tie).write).toEqual(tie)
+  })
+
+  it("WRITER-264-008: a move never writes or overwrites an acknowledgement with a null matterId", () => {
+    const planned = planCourtOpsAckBackfill([legacy(F, "workflow", "w1", { createdAt: 300 })], [], new Map([["workflow:w1", F]])).moves[0]!
+    const stored = legacy(F, "workflow", "w1", { createdAt: 300 }).data
+    const unbound = decideCourtOpsAckMove(planned, stored, null)
+    expect(unbound.outcome).toEqual({ status: "rejected", reason: "matter_unbound" })
+    expect(unbound.write).toBeUndefined()
+    const kept = ackRow(F, "workflow", "w1", { createdAt: 100, matterId: "mat_kept" })
+    const merged = decideCourtOpsAckMove(planned, stored, kept)
+    expect(merged.outcome).toEqual({ status: "merged" })
+    expect(merged.write).toEqual(kept)
+    const stamped = planCourtOpsAckBackfill([legacy(F, "workflow", "w1", { createdAt: 300, matterId: "mat_1" })], [], new Map([["workflow:w1", F]])).moves[0]!
+    const newerNull = ackRow(F, "workflow", "w1", { createdAt: 900, matterId: null })
+    const keptStamped = decideCourtOpsAckMove(stamped, legacy(F, "workflow", "w1", { createdAt: 300, matterId: "mat_1" }).data, newerNull)
+    expect(keptStamped.write?.matterId).toBe("mat_1")
   })
 
   it("exit code: 0 only when clean, 1 when a rerun can finish, 2 when an operator must act (2 wins)", () => {
