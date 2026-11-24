@@ -653,7 +653,7 @@ describe.skipIf(!EMULATORS)("L5.1 autosave points", () => {
     expect(await timeline(owner, preId)).toMatchObject({ items: [{ pointSeq: 1, classification: "internal" }], nextCursor: null })
   })
 
-  it("re-checks membership, clearance, the head cursor and the draft inside the write", async () => {
+  it("refuses a non-member and a below-clearance caller at load, and inside the transaction refuses a foreign head, a non-numeric version, and a missing title", async () => {
     enable()
     const { firmId, matterId, partner } = await newMatter({ classification: "internal" })
     const associate = caller(firmId, "associate", "internal")
