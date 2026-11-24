@@ -83,6 +83,22 @@ class PatternCoversEveryMasterWrite(unittest.TestCase):
             cts.write_text("export const q = sealMasterSession(session, raw)\n", encoding="utf-8")
             self.assertIn("services/learner/sealed.cts", gate.scan(root))
 
+    def test_dynamic_require_and_relative_store_imports_are_reported(self):
+        samples = [
+            "await import('@/platform/p6/masterStore')",
+            'await import("../platform/p6/masterStore")',
+            "await import(`../../platform/p6/masterStore.ts`)",
+            "const store = require('@/platform/p6/masterStore')",
+            "const store = require('../platform/p6/masterStore')",
+            "import { InMemoryMasterStore } from '../platform/p6/masterStore'",
+            'import { InMemoryMasterStore } from "../../platform/p6/masterStore.js"',
+        ]
+        for sample in samples:
+            self.assertIsNotNone(gate.PAT.search(sample), sample)
+        self.assertIsNone(gate.PAT.search("const fs = require('node:fs')"))
+        self.assertIsNone(gate.PAT.search("await import('@/platform/p6/consolidationFlag')"))
+        self.assertIsNone(gate.PAT.search("import { learnStyle } from '../platform/p6/learningPath'"))
+
     def test_an_unrelated_insert_is_not_a_master_write(self):
         self.assertIsNone(gate.PAT.search("INSERT INTO public.users (id) VALUES ('a')"))
         self.assertIsNone(gate.PAT.search("UPDATE master SET x = 1"))

@@ -700,11 +700,11 @@ export class InMemoryMasterStore implements MasterStore {
         staged.push(item)
       },
       save: (input) => this.#saveVersion(input),
-      getProposal: (id) => this.getProposal(id),
-      getVersion: (id) => this.getVersion(id),
-      currentSnapshot: (firmId) => this.currentSnapshot(firmId),
-      currentClassification: (firmId) => this.currentClassification(firmId),
-      lockFirm: (firmId) => this.lockFirm(firmId),
+      getProposal: async (id) => this.#proposal(id),
+      getVersion: async (id) => this.#version(id),
+      currentSnapshot: async (firmId) => this.#snapshot(firmId),
+      currentClassification: async (firmId) => this.#classification(firmId),
+      lockFirm: async (firmId) => this.#firmHead(firmId),
       assertCommitShape: async (input) => {
         if (!input.proposal) return
         assertCommitProposal(this.#state.proposals.get(input.proposal.id), input.proposal)
@@ -762,9 +762,31 @@ export class InMemoryMasterStore implements MasterStore {
     return tx
   }
 
-  async lockFirm(firmId: string): Promise<string | null> {
+  #proposal(id: string): PersistedProposal | null {
+    const row = this.#state.proposals.get(id)
+    return row ? structuredClone(row) : null
+  }
+
+  #snapshot(firmId: string): MasterSnapshot {
+    return structuredClone(this.#state.heads.get(firmId) ?? EMPTY_SNAPSHOT)
+  }
+
+  #version(id: string): VersionRow | null {
+    const row = this.#state.versions.find((item) => item.id === id)
+    return row ? structuredClone(row) : null
+  }
+
+  #classification(firmId: string): Classification {
+    return this.#state.classes.get(firmId) ?? "internal"
+  }
+
+  #firmHead(firmId: string): string | null {
     const versions = this.#state.versions.filter((row) => row.firmId === firmId)
     return versions[versions.length - 1]?.id ?? null
+  }
+
+  async lockFirm(firmId: string): Promise<string | null> {
+    return this.#firmHead(firmId)
   }
 
   async casProposal(row: PersistedProposal, fromStatus: PersistedProposal["status"]): Promise<boolean> {
@@ -799,7 +821,7 @@ export class InMemoryMasterStore implements MasterStore {
   async allowDeclassify(_on: boolean): Promise<void> {}
 
   async currentClassification(firmId: string): Promise<Classification> {
-    return this.#state.classes.get(firmId) ?? "internal"
+    return this.#classification(firmId)
   }
 
   #assertRole(): void {
@@ -817,8 +839,7 @@ export class InMemoryMasterStore implements MasterStore {
   }
 
   async getProposal(id: string): Promise<PersistedProposal | null> {
-    const row = this.#state.proposals.get(id)
-    return row ? structuredClone(row) : null
+    return this.#proposal(id)
   }
 
   async saveProposal(row: PersistedProposal): Promise<void> {
@@ -842,12 +863,11 @@ export class InMemoryMasterStore implements MasterStore {
   }
 
   async getVersion(id: string): Promise<VersionRow | null> {
-    const row = this.#state.versions.find((item) => item.id === id)
-    return row ? structuredClone(row) : null
+    return this.#version(id)
   }
 
   async currentSnapshot(firmId: string): Promise<MasterSnapshot> {
-    return structuredClone(this.#state.heads.get(firmId) ?? EMPTY_SNAPSHOT)
+    return this.#snapshot(firmId)
   }
 
   async commitVersion(input: CommitVersionInput): Promise<CommitVersionResult> {

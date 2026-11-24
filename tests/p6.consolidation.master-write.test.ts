@@ -1228,4 +1228,120 @@ describe("P6 consolidation — one master writer", () => {
     expect((await memory.getProposal(pending.id))?.status).toBe("applied")
     expect(masterWriteAuditLog().some((row) => row.versionId === applied.versionId && row.outcome === "committed")).toBe(true)
   })
+
+  it("BYPASS-281-001: assigning getProposal and currentSnapshot cannot apply a pending substantive change", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    const { pending, input } = await pendingSubstantive(memory, "00000000-0000-4000-8000-000000000311", "clause.assign")
+    const realSnapshot = await memory.currentSnapshot("firmA")
+    memory.getProposal = async () => approvedLie(pending)
+    memory.currentSnapshot = async () => realSnapshot
+    await expectRefused(memory, input, pending.id)
+  })
+
+  it("BYPASS-281-001: a subclass cannot apply a pending substantive change through overridden readers", async () => {
+    const memory = new LyingStore()
+    const { pending, input } = await pendingSubstantive(memory, "00000000-0000-4000-8000-000000000312", "clause.subclass")
+    await expectRefused(memory, input, pending.id)
+  })
+
+  it("BYPASS-281-001: a prototype patch cannot apply a pending substantive change", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    const { pending, input } = await pendingSubstantive(memory, "00000000-0000-4000-8000-000000000313", "clause.proto")
+    const realSnapshot = await InMemoryMasterStore.prototype.currentSnapshot.call(memory, "firmA")
+    const originalProposal = InMemoryMasterStore.prototype.getProposal
+    const originalSnapshot = InMemoryMasterStore.prototype.currentSnapshot
+    InMemoryMasterStore.prototype.getProposal = async () => approvedLie(pending)
+    InMemoryMasterStore.prototype.currentSnapshot = async () => realSnapshot
+    try {
+      await expect(memory.commitVersion(input)).rejects.toThrow(/partner approval/)
+      expect((await originalProposal.call(memory, pending.id))?.status).toBe("pending")
+      expect(await memory.listVersions("firmA")).toEqual([])
+    } finally {
+      InMemoryMasterStore.prototype.getProposal = originalProposal
+      InMemoryMasterStore.prototype.currentSnapshot = originalSnapshot
+    }
+  })
+
+  it("TEST-281-003: the audit log does not hand back the live array", () => {
+    const live = masterWriteAuditLog()
+    const forged = {
+      action: "apply" as const,
+      firmId: "firmA",
+      proposalId: "g20",
+      actorId: "partner_b",
+      versionId: "g20-live-array",
+      outcome: "committed" as const,
+    }
+    ;(live as unknown as (typeof forged)[]).push(forged)
+    expect(masterWriteAuditLog()).not.toBe(live)
+    expect(masterWriteAuditLog().some((row) => row.versionId === "g20-live-array")).toBe(false)
+  })
 })
+
+function approvedLie(row: Awaited<ReturnType<InMemoryMasterStore["getProposal"]>> & object) {
+  return {
+    ...row,
+    status: "approved" as const,
+    decidedBy: "partner_b",
+    decidedKind: "partner" as const,
+    decidedRole: "partner" as const,
+  }
+}
+
+async function pendingSubstantive(memory: InMemoryMasterStore, id: string, entryKey: string) {
+  const pending = await memory.insertProposal({
+    id,
+    firmId: "firmA",
+    sourceModule: "15",
+    classification: "confidential",
+    changeClass: "substantive",
+    requestedClass: null,
+    partition: "mutable",
+    entryKey,
+    payload: { wording: "never approved" },
+    proposedBy: "learner-1",
+    status: "pending",
+    decidedBy: null,
+    decidedKind: null,
+    decidedRole: null,
+    declassify: false,
+    payloadHash: "pending",
+  })
+  const current = await InMemoryMasterStore.prototype.currentSnapshot.call(memory, "firmA")
+  const snapshot = nextSnapshot(current, pending)
+  const input: CommitVersionInput = {
+    firmId: "firmA",
+    proposalId: pending.id,
+    action: "apply",
+    diff: { key: pending.entryKey, partition: "mutable", before: current, after: snapshot },
+    snapshot,
+    authorId: "partner_b",
+    authorKind: "partner",
+    restoredFromVersionId: null,
+    classification: "confidential",
+    proposal: null,
+    expectedBaseVersionId: null,
+  }
+  return { pending, input }
+}
+
+async function expectRefused(memory: InMemoryMasterStore, input: CommitVersionInput, id: string) {
+  await expect(memory.commitVersion(input)).rejects.toThrow(/partner approval/)
+  expect((await InMemoryMasterStore.prototype.getProposal.call(memory, id))?.status).toBe("pending")
+  expect(await memory.listVersions("firmA")).toEqual([])
+}
+
+class LyingStore extends InMemoryMasterStore {
+  constructor() {
+    super({ role: "p6_service" })
+  }
+
+  override async getProposal(id: string) {
+    const row = await InMemoryMasterStore.prototype.getProposal.call(this, id)
+    return row ? approvedLie(row) : null
+  }
+
+  override async currentSnapshot(firmId: string) {
+    return InMemoryMasterStore.prototype.currentSnapshot.call(this, firmId)
+  }
+}

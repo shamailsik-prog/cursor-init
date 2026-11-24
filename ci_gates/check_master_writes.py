@@ -32,7 +32,9 @@ _OTHER = re.compile(
     r"|import\s*\{[^}]*\bwriteMaster\b[^}]*\}\s*from\s*['\"]@/platform/p6/masterStore['\"]"
     r"""|\[['"]writeMaster['"]\]\s*\("""
     r"|@/platform/p6/masterWrite"
-    r"|from\s*['\"]@/platform/p6/masterStore['\"]"
+    r"|import\s*\(\s*['\"`][^'\"`]*platform/p6/masterStore(?:\.[cm]?[jt]s)?['\"`]"
+    r"|require\s*\(\s*['\"`][^'\"`]*platform/p6/masterStore(?:\.[cm]?[jt]s)?['\"`]"
+    r"|from\s*['\"`][^'\"`]*platform/p6/masterStore(?:\.[cm]?[jt]s)?['\"`]"
     r"|collection\(\s*['\"]master_versions['\"]"
     r"|match\s+/master_versions/",
     re.I,
