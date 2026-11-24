@@ -301,13 +301,14 @@ describe("R6 restore regressions", () => {
     const source = await startCluster({ port: 55478, timezone: DRILL_CLUSTER_TIMEZONE })
     const target = await startCluster({ port: 55479, timezone: DRILL_CLUSTER_TIMEZONE })
     const prefix = ["docker", "exec", "-i", "pg"]
+    const envFile = path.join(wrap, "target.env")
     writeFileSync(
       path.join(wrap, "docker"),
-      "#!/bin/bash\nset -a\n. /tmp/sikander-backup-drill/m18-target.env\nset +a\nshift 3\nexec \"$@\"\n"
+      `#!/bin/bash\nset -a\n. ${envFile}\nset +a\nshift 3\nexec "$@"\n`
     )
     chmodSync(path.join(wrap, "docker"), 0o755)
     writeFileSync(
-      "/tmp/sikander-backup-drill/m18-target.env",
+      envFile,
       `PATH=${target.env.PATH}\nPGHOST=${target.env.PGHOST}\nPGPORT=${target.env.PGPORT}\nPGUSER=${target.env.PGUSER}\n`
     )
     setDockerClientPathForTests(wrap)
