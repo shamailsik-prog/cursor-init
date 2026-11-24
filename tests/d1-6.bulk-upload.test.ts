@@ -3,18 +3,22 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import * as objectStore from "@/platform/documents/documentObjectStore"
+import { uploadSessionsOf } from "@/platform/spine/bulkUploadSession"
 import { newStore, type SpineStore } from "@/platform/spine/store"
 import * as documentUpload from "@/services/d1-6/uploadDocument"
 import {
   BULK_UPLOAD_CHUNK_BYTES,
   BULK_UPLOAD_MAX_FILES,
   BULK_UPLOAD_MAX_TOTAL_BYTES,
+  BULK_UPLOAD_STAGING_TTL_MS,
   bulkDeclaredHash,
   finaliseFile,
   getUploadProgress,
   resumeUpload,
   startBulkUpload,
+  sweepExpiredBulkUploads,
   uploadChunk,
+  uploadSessionDocument,
   type BulkUploadCaller,
 } from "@/services/d1-6/bulkUpload"
 
@@ -202,7 +206,7 @@ describe("L9.1 high-speed bulk upload", () => {
       chunkCount: 1,
     })
     expect(stored[0]?.equals(bytes)).toBe(true)
-    expect(store.uploadSessions.get(started.sessionId)?.files[0]?.receivedChunks).toEqual([1])
+    expect(uploadSessionsOf(store).get(started.sessionId)?.files[0]?.receivedChunks).toEqual([1])
   })
 
   it("a cross-firm session id is refused with no leak, and so is another caller", async () => {
@@ -249,7 +253,7 @@ describe("L9.1 high-speed bulk upload", () => {
     await expect(startBulkUpload(store, "firmA", "m1", Array.from({ length: 501 }, one), caller)).rejects.toThrow(
       /file count cap/
     )
-    expect(store.uploadSessions.size).toBe(0)
+    expect(uploadSessionsOf(store).size).toBe(0)
     const full = await startBulkUpload(store, "firmA", "m1", Array.from({ length: 500 }, one), caller)
     expect(full.files).toHaveLength(500)
     await expect(
@@ -275,7 +279,7 @@ describe("L9.1 high-speed bulk upload", () => {
     await expect(
       startBulkUpload(store, "firmA", "m1", [{ ...one(), classification: "top-secret" as "confidential" }], caller)
     ).rejects.toThrow(/unknown classification/)
-    expect(store.uploadSessions.has(atCap.sessionId)).toBe(true)
+    expect(uploadSessionsOf(store).has(atCap.sessionId)).toBe(true)
   })
 
   it("finalise replay returns the same docId and does not enqueue a second OCR job", async () => {
@@ -307,13 +311,13 @@ describe("L9.1 high-speed bulk upload", () => {
       if (value === undefined) delete process.env[FLAG]
       else vi.stubEnv(FLAG, value)
       await expect(startBulkUpload(store, "firmA", "m1", input, caller)).rejects.toThrow(/bulk upload is disabled/)
-      expect(store.uploadSessions.size).toBe(0)
+      expect(uploadSessionsOf(store).size).toBe(0)
     }
     vi.stubEnv(FLAG, " TRUE ")
     const started = await startBulkUpload(store, "firmA", null, input, caller)
     vi.stubEnv(FLAG, "false")
     await expect(uploadChunk(store, started.sessionId, 0, 1, bytes, caller)).rejects.toThrow(/bulk upload is disabled/)
-    expect(store.uploadSessions.get(started.sessionId)?.files[0]?.receivedChunks).toEqual([])
+    expect(uploadSessionsOf(store).get(started.sessionId)?.files[0]?.receivedChunks).toEqual([])
     expect(store.documents.size).toBe(0)
   })
 
@@ -367,7 +371,7 @@ describe("L9.1 high-speed bulk upload", () => {
       const bytes = Buffer.from("staging-secret-bytes")
       const started = await startBulkUpload(store, "firmA", "m1", [fileOf(bytes, store, "firmA", "secret.pdf")], caller)
       await uploadChunk(store, started.sessionId, 0, 1, bytes, caller)
-      const storagePath = `fs://upload-staging/firmA/${started.sessionId}/0/1`
+      const storagePath = `fs://firmA/upload-staging/${started.sessionId}/0/1`
       const payload = readFileSync(objectStore.filesystemPathForStoragePath(storagePath))
       expect(payload.equals(bytes)).toBe(false)
       expect(objectStore.decryptDocumentObjectPayload(payload).equals(bytes)).toBe(true)
@@ -387,6 +391,93 @@ describe("L9.1 high-speed bulk upload", () => {
     const end = storeSrc.indexOf("export function resetDocumentObjectStoreForTests")
     expect(start).toBeGreaterThan(-1)
     expect(storeSrc.slice(start, end).includes("deleteDocumentObject")).toBe(false)
+  })
+
+  it("every row carries firmId, and an expired session deletes only its staging", async () => {
+    const store = newStore()
+    const original = Buffer.from("keep-this-original")
+    const kept = await documentUpload.uploadDocument(store, {
+      firmId: "firmA",
+      matterId: "m1",
+      bytes: original,
+      sourceChannel: "web",
+      classification: "internal",
+      idempotencyKey: "keep-1",
+      uploadedBy: "partner_a",
+    })
+    const bytes = Buffer.from("staging-temp")
+    const started = await startBulkUpload(store, "firmA", "m1", [fileOf(bytes, store, "firmA", "temp.pdf")], caller)
+    await uploadChunk(store, started.sessionId, 0, 1, bytes, caller)
+    const row = uploadSessionsOf(store).get(started.sessionId)
+    expect(row?.firmId).toBe("firmA")
+    expect(row?.files.every((file) => file.firmId === "firmA")).toBe(true)
+    expect(row && row.expiresAtMs - row.createdAtMs).toBe(BULK_UPLOAD_STAGING_TTL_MS)
+    expect(row?.storagePath.endsWith(`firmA/upload-staging/${started.sessionId}`)).toBe(true)
+    expect(row?.storagePath.includes("/documents/")).toBe(false)
+    const durable = uploadSessionDocument(row!)
+    expect(durable).toMatchObject({
+      collection: "upload_sessions",
+      firmId: "firmA",
+      matterId: "m1",
+      callerId: "partner_a",
+    })
+    expect(durable.storagePath).toContain("firmA/upload-staging/")
+    row!.expiresAtMs = Date.now() - 1
+    await expect(
+      getUploadProgress(store, started.sessionId, { userId: "other", firmId: "firmB" })
+    ).rejects.toThrow(/upload session refused/)
+    expect(uploadSessionsOf(store).has(started.sessionId)).toBe(true)
+    await expect(getUploadProgress(store, started.sessionId, caller)).rejects.toThrow(/bulk upload session expired/)
+    expect(uploadSessionsOf(store).has(started.sessionId)).toBe(false)
+    const chunks = await objectStore.readStagingChunks({
+      firmId: "firmA",
+      sessionId: started.sessionId,
+      fileIdx: 0,
+      chunkCount: 1,
+    })
+    expect(chunks).toEqual([null])
+    const still = await objectStore.getImmutableDocumentObject(
+      store,
+      "firmA",
+      store.documents.get(kept.docId)?.storagePath ?? "",
+      store.documents.get(kept.docId)?.contentHash ?? ""
+    )
+    expect(still.equals(original)).toBe(true)
+  })
+
+  it("sweepExpiredBulkUploads drops expired staging when the flag is off and keeps a live session", async () => {
+    const store = newStore()
+    const live = Buffer.from("live-bytes")
+    const dead = Buffer.from("dead-bytes")
+    const liveStart = await startBulkUpload(store, "firmA", "m1", [fileOf(live, store, "firmA", "live.pdf")], caller)
+    const deadStart = await startBulkUpload(store, "firmA", "m1", [fileOf(dead, store, "firmA", "dead.pdf")], caller)
+    await uploadChunk(store, liveStart.sessionId, 0, 1, live, caller)
+    await uploadChunk(store, deadStart.sessionId, 0, 1, dead, caller)
+    const deadRow = uploadSessionsOf(store).get(deadStart.sessionId)
+    expect(deadRow).toBeTruthy()
+    deadRow!.expiresAtMs = 1
+    vi.stubEnv(FLAG, "false")
+    const removed = await sweepExpiredBulkUploads(store, 1)
+    expect(removed).toBe(1)
+    expect(uploadSessionsOf(store).has(deadStart.sessionId)).toBe(false)
+    expect(uploadSessionsOf(store).has(liveStart.sessionId)).toBe(true)
+    const gone = await objectStore.readStagingChunks({
+      firmId: "firmA",
+      sessionId: deadStart.sessionId,
+      fileIdx: 0,
+      chunkCount: 1,
+    })
+    expect(gone).toEqual([null])
+    const kept = await objectStore.readStagingChunks({
+      firmId: "firmA",
+      sessionId: liveStart.sessionId,
+      fileIdx: 0,
+      chunkCount: 1,
+    })
+    expect(kept[0]?.equals(live)).toBe(true)
+    await expect(startBulkUpload(store, "firmA", "m1", [fileOf(live, store, "firmA", "again.pdf")], caller)).rejects.toThrow(
+      /disabled|refused/
+    )
   })
 
   it.skip("isLooseUploadBlocked", () => {

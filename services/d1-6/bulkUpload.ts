@@ -1,7 +1,12 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { PublicError } from "@/platform/http/publicError"
 import * as objectStore from "@/platform/documents/documentObjectStore"
-import type { BulkUploadFileRow, BulkUploadFileState, BulkUploadSessionRow } from "@/platform/spine/bulkUploadSession"
+import {
+  uploadSessionsOf,
+  type BulkUploadFileRow,
+  type BulkUploadFileState,
+  type BulkUploadSessionRow,
+} from "@/platform/spine/bulkUploadSession"
 import type { DocumentRecord, SpineStore } from "@/platform/spine/store"
 import * as documentUpload from "@/services/d1-6/uploadDocument"
 
@@ -23,6 +28,14 @@ export const BULK_UPLOAD_MAX_TOTAL_BYTES = 8 * 1024 * 1024 * 1024
  * chunk is the remainder, and is shorter unless the file size divides evenly.
  */
 export const BULK_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+
+/**
+ * Staging chunks expire this long after the session starts. The matter-deletion
+ * saga tombstones only `objects:documents`, so this prefix has no deletion reach
+ * there. Expiry runs when the session is next touched and when
+ * `sweepExpiredBulkUploads` runs. No scheduler is wired in this wave.
+ */
+export const BULK_UPLOAD_STAGING_TTL_MS = 24 * 60 * 60 * 1000
 
 const SAFE_SEGMENT = /^[A-Za-z0-9_-]+$/
 const SHA256_HEX = /^[0-9a-f]{64}$/
@@ -83,13 +96,71 @@ function heldDocument(
   return undefined
 }
 
-function requireSession(store: SpineStore, sessionId: string, caller: BulkUploadCaller): BulkUploadSessionRow {
+async function deleteSessionStaging(session: BulkUploadSessionRow): Promise<void> {
+  await objectStore.deleteStagingSession({
+    firmId: session.firmId,
+    sessionId: session.id,
+    files: session.files.map((file, fileIdx) => ({ fileIdx, chunkCount: file.chunkCount })),
+  })
+}
+
+/**
+ * Deletes staging for sessions whose `expiresAtMs` has passed, then drops the
+ * rows. Does not read or delete original documents. The flag does not gate this:
+ * turning the feature off must not keep expired chunks.
+ */
+export async function sweepExpiredBulkUploads(store: SpineStore, now: number = Date.now()): Promise<number> {
+  let removed = 0
+  for (const [id, session] of [...uploadSessionsOf(store).entries()]) {
+    if (!session.firmId || session.expiresAtMs > now) continue
+    await deleteSessionStaging(session)
+    uploadSessionsOf(store).delete(id)
+    removed += 1
+  }
+  return removed
+}
+
+async function requireSession(
+  store: SpineStore,
+  sessionId: string,
+  caller: BulkUploadCaller
+): Promise<BulkUploadSessionRow> {
   assertEnabled()
-  const session = typeof sessionId === "string" ? store.uploadSessions.get(sessionId) : undefined
+  const session = typeof sessionId === "string" ? uploadSessionsOf(store).get(sessionId) : undefined
   if (!caller || !session || session.firmId !== caller.firmId || session.callerId !== caller.userId) {
     throw new PublicError("upload session refused", "upload_session_refused")
   }
+  if (!session.firmId || session.files.some((file) => file.firmId !== session.firmId)) {
+    throw new PublicError("bulk upload refused", "bulk_upload_refused")
+  }
+  if (session.expiresAtMs <= Date.now()) {
+    await deleteSessionStaging(session)
+    uploadSessionsOf(store).delete(session.id)
+    throw new PublicError("bulk upload session expired", "bulk_upload_expired")
+  }
   return session
+}
+
+/** The durable row shape. `collection` is the inventoried name; every row carries `firmId`. */
+export function uploadSessionDocument(session: BulkUploadSessionRow): {
+  collection: string
+  firmId: string
+  matterId: string | null
+  callerId: string
+  storagePath: string
+  expiresAtMs: number
+} {
+  if (!session.firmId || session.files.some((file) => file.firmId !== session.firmId)) {
+    throw new PublicError("bulk upload refused", "bulk_upload_refused")
+  }
+  return {
+    collection: objectStore.UPLOAD_SESSIONS_COLLECTION,
+    firmId: session.firmId,
+    matterId: session.matterId,
+    callerId: session.callerId,
+    storagePath: session.storagePath,
+    expiresAtMs: session.expiresAtMs,
+  }
 }
 
 function recordChunk(file: BulkUploadFileRow, chunkIdx: number): void {
@@ -142,6 +213,7 @@ export async function startBulkUpload(
   if (!caller || typeof firmId !== "string" || caller.firmId !== firmId) {
     throw new PublicError("bulk upload refused", "bulk_upload_refused")
   }
+  await sweepExpiredBulkUploads(store)
   if (!SAFE_SEGMENT.test(firmId) || !SAFE_SEGMENT.test(caller.userId)) {
     throw new PublicError("bulk upload refused", "bulk_upload_refused")
   }
@@ -180,6 +252,7 @@ export async function startBulkUpload(
     const held = heldDocument(store, firmId, matterId, file.sha256)
     const classification: Classification = file.classification
     rows.push({
+      firmId,
       name: file.name,
       size: file.size,
       sha256: file.sha256,
@@ -192,7 +265,17 @@ export async function startBulkUpload(
     })
   }
   const id = store.id("ups")
-  store.uploadSessions.set(id, { id, firmId, matterId, callerId: caller.userId, files: rows })
+  const now = Date.now()
+  uploadSessionsOf(store).set(id, {
+    id,
+    firmId,
+    matterId,
+    callerId: caller.userId,
+    storagePath: objectStore.stagingSessionStoragePath(firmId, id),
+    createdAtMs: now,
+    expiresAtMs: now + BULK_UPLOAD_STAGING_TTL_MS,
+    files: rows,
+  })
   return {
     sessionId: id,
     files: rows.map((file, fileIdx) => ({
@@ -211,7 +294,7 @@ export async function uploadChunk(
   bytes: Buffer,
   caller: BulkUploadCaller
 ): Promise<{ state: BulkUploadFileState }> {
-  const session = requireSession(store, sessionId, caller)
+  const session = await requireSession(store, sessionId, caller)
   const file = requireFile(session, fileIdx)
   if (file.state === "deduped" || file.state === "finalised" || file.state === "failed") {
     throw new PublicError("bulk upload chunk refused", "bulk_upload_chunk_refused")
@@ -250,7 +333,7 @@ export async function resumeUpload(
   sessionId: string,
   caller: BulkUploadCaller
 ): Promise<{ files: Array<{ fileIdx: number; missingChunks: number[] }> }> {
-  const session = requireSession(store, sessionId, caller)
+  const session = await requireSession(store, sessionId, caller)
   return {
     files: session.files.map((file, fileIdx) => ({
       fileIdx,
@@ -265,7 +348,7 @@ export async function finaliseFile(
   fileIdx: number,
   caller: BulkUploadCaller
 ): Promise<{ docId: string; reused: boolean }> {
-  const session = requireSession(store, sessionId, caller)
+  const session = await requireSession(store, sessionId, caller)
   const file = requireFile(session, fileIdx)
   if ((file.state === "finalised" || file.state === "deduped") && file.docId) {
     return { docId: file.docId, reused: true }
@@ -334,7 +417,7 @@ export async function getUploadProgress(
     docId?: string
   }>
 }> {
-  const session = requireSession(store, sessionId, caller)
+  const session = await requireSession(store, sessionId, caller)
   return {
     sessionId: session.id,
     files: session.files.map((file, fileIdx) => ({

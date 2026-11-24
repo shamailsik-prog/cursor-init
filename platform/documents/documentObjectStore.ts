@@ -403,9 +403,16 @@ export async function restoreDocumentObjectFile(
   await writeFile(filePath, payload, { flag: "wx" })
 }
 
+/**
+ * Firestore collection for L9.1 session rows (`firestore:upload_sessions`).
+ * Every row carries `firmId`. The path field the inventory reads is `storagePath`.
+ */
+export const UPLOAD_SESSIONS_COLLECTION = "upload_sessions"
+
 // L9.1 upload-staging. Chunks are ciphertext in the same AES-GCM format as
-// originals. They live under upload-staging/<firmId>/<sessionId>/<fileIdx>/<chunkIdx>
-// and are never written on a document storage path.
+// originals. The key is <firmId>/upload-staging/<sessionId>/<fileIdx>/<chunkIdx>
+// so the inventory scan sees the prefix `upload-staging`. A document path is
+// <firmId>/documents/<docId>/vN and is never passed to these helpers.
 const stagingMemory = new Map<string, Buffer>()
 
 function assertStagingPath(storagePath: string): void {
@@ -415,8 +422,8 @@ function assertStagingPath(storagePath: string): void {
   }
   const segments = storagePath.slice(scheme.length).split("/")
   // Originals are firmId/documents/docId/vN (four segments). Staging is five,
-  // and the first segment is the literal prefix, so a document path cannot match.
-  if (segments.length !== 5 || segments[0] !== "upload-staging") {
+  // and the second segment is the literal prefix, so a document path cannot match.
+  if (segments.length !== 5 || segments[1] !== "upload-staging") {
     throw new Error("staging path is not under upload-staging/")
   }
   if (segments.some((segment) => !SAFE_SEGMENT.test(segment))) {
@@ -431,9 +438,17 @@ function stagingChunkPath(firmId: string, sessionId: string, fileIdx: number, ch
   if (!Number.isSafeInteger(fileIdx) || fileIdx < 0 || !Number.isSafeInteger(chunkIdx) || chunkIdx < 1) {
     throw new Error("staging chunk index failed validation")
   }
-  const storagePath = `${activeStorageScheme()}upload-staging/${firmId}/${sessionId}/${fileIdx}/${chunkIdx}`
+  const storagePath = `${activeStorageScheme()}${firmId}/upload-staging/${sessionId}/${fileIdx}/${chunkIdx}`
   assertStagingPath(storagePath)
   return storagePath
+}
+
+/** Session prefix stored on the upload_sessions row (`storagePath`). Not a chunk and not a document. */
+export function stagingSessionStoragePath(firmId: string, sessionId: string): string {
+  if (!SAFE_SEGMENT.test(firmId) || !SAFE_SEGMENT.test(sessionId)) {
+    throw new Error("staging identity failed path safety validation")
+  }
+  return `${activeStorageScheme()}${firmId}/upload-staging/${sessionId}`
 }
 
 function isMissingStaging(err: unknown): boolean {
