@@ -102,15 +102,13 @@ function allowsNotApplicable(line: string): boolean {
   return NOT_APPLICABLE.test(line)
 }
 
-const CONTINUATION = /^(of|for|to|in|on|with|under|from)\b/i
-
 /**
  * A named-document line that lists more than one document becomes one item per
  * document. Commas, " and ", and " / " are separators.
  * PARTNER-RULING-PENDING: may become judgment | (warrant OR jail roll)
  * A trailing "annexed" applies to each part. "annexed and indexed" is one bundle.
- * "and of the appellate court" stays on the previous document. A shared
- * "Certified copy of" is copied onto each part.
+ * "and of the appellate court" is its own document. A shared "Certified copy of"
+ * or "Certified copies of" is copied onto each part.
  */
 function splitNamedLine(line: string): string[] {
   const annexed = /\bannexed\b/i.test(line)
@@ -119,28 +117,21 @@ function splitNamedLine(line: string): string[] {
     .split(/\s*,\s*|\s+\/\s+|\s+and\s+/i)
     .map((part) => part.trim())
     .filter((part) => part !== "")
-  const folded = foldContinuations(pieces)
-  if (folded.length <= 1) return [line]
+  if (pieces.length <= 1) return [line]
   const suffix = annexed ? " annexed" : ""
-  return withSharedCertifiedCopy(line, folded).map((part) => `${part.replace(/\s+annexed\s*$/i, "").trim()}${suffix}`)
-}
-
-function foldContinuations(parts: string[]): string[] {
-  const folded: string[] = []
-  for (const part of parts) {
-    if (folded.length > 0 && CONTINUATION.test(part)) folded[folded.length - 1] = `${folded[folded.length - 1]} and ${part}`
-    else folded.push(part)
-  }
-  return folded
+  return withSharedCertifiedCopy(line, pieces).map((part) => `${part.replace(/\s+annexed\s*$/i, "").trim()}${suffix}`)
 }
 
 function withSharedCertifiedCopy(original: string, parts: string[]): string[] {
-  if (!/\bcertified copy of\b/i.test(original)) return parts
-  const withThe = /\bcertified copy of the\b/i.test(original)
+  const plural = /\bcertified copies of\b/i.test(original)
+  const singular = /\bcertified copy of\b/i.test(original)
+  if (!plural && !singular) return parts
+  const head = plural ? "Certified copies of" : "Certified copy of"
+  const withThe = plural || /\bcertified copy of the\b/i.test(original)
   return parts.map((part) => {
-    if (/\bcertified copy\b/i.test(part)) return part
-    const rest = part.replace(/^the\s+/i, "")
-    return withThe ? `Certified copy of the ${rest}` : `Certified copy of ${rest}`
+    if (/\bcertified cop(?:y|ies)\b/i.test(part)) return part
+    const rest = part.replace(/^(?:of|for|to|in|on|with|under|from)\s+/i, "").replace(/^the\s+/i, "")
+    return withThe ? `${head} the ${rest}` : `${head} ${rest}`
   })
 }
 

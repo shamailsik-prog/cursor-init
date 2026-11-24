@@ -103,22 +103,41 @@ const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:
 const MIN_ISO_YEAR = 1900
 const MAX_ISO_YEAR = 2100
 
+/** The written calendar day, checked in UTC so an offset cannot move it. */
+function calendarRoundTrip(year: number, month: number, day: number): boolean {
+  const utc = new Date(Date.UTC(year, month - 1, day))
+  return utc.getUTCFullYear() === year && utc.getUTCMonth() + 1 === month && utc.getUTCDate() === day
+}
+
+function validClock(hour: number, minute: number, second: number): boolean {
+  return hour <= 23 && minute <= 59 && second <= 59
+}
+
+function validOffset(offset: string): boolean {
+  if (offset === "Z") return true
+  const match = /^[+-](\d{2}):(\d{2})$/.exec(offset)
+  if (match === null) return false
+  return Number(match[1]) <= 23 && Number(match[2]) <= 59
+}
+
 /**
- * A calendar date, or a time with seconds and a timezone, whose UTC year, month
- * and day are the same numbers written in the string, inside 1900..2100.
- * Date-only values round-trip through `toISOString().slice(0, 10)`.
+ * A real ISO date in 1900..2100. The written year, month and day round-trip
+ * through `Date.UTC`. The clock and the offset are checked on their own, so a
+ * +05:00 time before 05:00 still counts.
  */
 function isRealIsoDate(value: string): boolean {
   const match = ISO_DATE.exec(value)
   if (match === null) return false
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return false
   const year = Number(match[1])
   const month = Number(match[2])
   const day = Number(match[3])
+  if (!calendarRoundTrip(year, month, day)) return false
   if (year < MIN_ISO_YEAR || year > MAX_ISO_YEAR) return false
-  if (value.length === 10) return parsed.toISOString().slice(0, 10) === value
-  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() + 1 === month && parsed.getUTCDate() === day
+  if (value.length === 10) return true
+  const clock = /T(\d{2}):(\d{2}):(\d{2})/.exec(value)
+  if (clock === null || !validClock(Number(clock[1]), Number(clock[2]), Number(clock[3]))) return false
+  const offset = value.endsWith("Z") ? "Z" : value.slice(-6)
+  return validOffset(offset)
 }
 
 function classified(documentTypeId: unknown):
