@@ -3,6 +3,9 @@ import { canonicalPayload } from "@/platform/p6/masterStore"
 /** Marker on a sealed learning payload. The master body is `l46After`, not this envelope. */
 export const LEARNING_BASELINE = "baseline" as const
 
+/** Only a proposal whose source module is L4.6 is a learning envelope. Shape alone is not. */
+export const LEARNING_SOURCE_MODULE = "L4.6"
+
 export type LearningBaselinePayload = {
   l46: typeof LEARNING_BASELINE
   l46BeforeMissing: boolean
@@ -25,9 +28,17 @@ export function isLearningBaseline(payload: unknown): payload is LearningBaselin
   return record.l46 === LEARNING_BASELINE && typeof record.l46BeforeMissing === "boolean" && "l46Before" in record && "l46After" in record
 }
 
-/** Body that a sealed apply writes. A learning envelope contributes `l46After` only. */
-export function masterBody(payload: unknown): unknown {
-  return isLearningBaseline(payload) ? payload.l46After : payload
+/** A learning envelope only when the proposal was sealed by L4.6 and the payload has the baseline fields. */
+export function learningEnvelope(payload: unknown, sourceModule: string): LearningBaselinePayload | null {
+  if (sourceModule !== LEARNING_SOURCE_MODULE || !isLearningBaseline(payload)) return null
+  return payload
+}
+
+/** Body that a sealed apply writes. An L4.6 envelope contributes `l46After` only, including null. Any other payload is stored whole. */
+export function masterBody(payload: unknown, sourceModule: string): unknown {
+  const envelope = learningEnvelope(payload, sourceModule)
+  if (!envelope) return payload
+  return envelope.l46After
 }
 
 /** True when the live entry is the baseline the learner recorded. A missing entry matches only a missing before. */
@@ -37,9 +48,13 @@ export function baselineMatchesLive(live: unknown | undefined, before: unknown):
   return canonicalPayload(live) === canonicalPayload(before)
 }
 
-/** Non-learning payloads are not baseline-checked. A learning envelope must still match. */
-export function sealedBaselineMatches(live: unknown | undefined, payload: unknown): boolean {
-  if (!isLearningBaseline(payload)) return true
+/**
+ * Non-L4.6 payloads are not baseline-checked, even when they have the envelope shape.
+ * An L4.6 payload that is not an envelope does not match.
+ */
+export function sealedBaselineMatches(live: unknown | undefined, payload: unknown, sourceModule: string): boolean {
+  if (sourceModule !== LEARNING_SOURCE_MODULE) return true
+  if (!isLearningBaseline(payload)) return false
   if (payload.l46BeforeMissing) return live === undefined
   return baselineMatchesLive(live, payload.l46Before)
 }

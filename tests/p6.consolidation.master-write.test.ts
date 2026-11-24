@@ -1308,7 +1308,7 @@ describe("P6 consolidation — one master writer", () => {
     const learning = await memory.insertProposal({
       id: "00000000-0000-4000-8000-000000000287",
       firmId: "firmA",
-      sourceModule: "l46",
+      sourceModule: "L4.6",
       classification: "confidential",
       changeClass: "substantive",
       requestedClass: null,

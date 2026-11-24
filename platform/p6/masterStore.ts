@@ -6,6 +6,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import pg from "pg"
 import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
+import { LEARNING_DURABLE_VOID_ERROR } from "@/platform/p6/learning/durableVoid"
 import type { MasterWriteAuditEntry, MasterWriteSession, StagedMasterWrite } from "@/platform/p6/masterWrite"
 
 export type MasterSnapshot = {
@@ -410,6 +411,11 @@ type RawWrite = {
   currentClassification(firmId: string): Promise<Classification>
   lockFirm(firmId: string): Promise<string | null>
   assertCommitShape(input: CommitVersionInput): Promise<void>
+  /**
+   * True only for the in-memory store. Absent on Postgres, so an L4.6 seal is refused.
+   * W2-DURABLE-VOID: a pending → rejected migration is required before this can be set on a durable store.
+   */
+  allowsLearningSeal?: boolean
 }
 
 const sealedHandles = new WeakMap<object, RawWrite>()
@@ -534,12 +540,19 @@ async function assertStoredWrite(
   if (!input.proposalId) throw new Error("proposal not found")
   const stored = await raw.getProposal(input.proposalId)
   if (!stored || stored.firmId !== input.firmId) throw new Error("commit is bound to the proposal")
-  const { sealedBaselineMatches } = await import("@/platform/p6/learning/baseline")
+  const { LEARNING_SOURCE_MODULE, masterBody, sealedBaselineMatches } = await import("@/platform/p6/learning/baseline")
+  if (stored.sourceModule === LEARNING_SOURCE_MODULE && raw.allowsLearningSeal !== true) {
+    throw new Error(LEARNING_DURABLE_VOID_ERROR)
+  }
+  const { isSealedVoid } = await import("@/platform/p6/learning/sealedVoid")
   const { LearningStaleError } = await import("@/platform/p6/learning/stale")
-  if (!sealedBaselineMatches(current.entries[stored.entryKey]?.body, stored.payload)) {
+  if (isSealedVoid(stored.id)) throw new Error("sealed proposal is void")
+  const liveBody = current.entries[stored.entryKey]?.body
+  if (!sealedBaselineMatches(liveBody, stored.payload, stored.sourceModule)) {
     throw new LearningStaleError()
   }
-  const liveClass = rules.effectiveClass(stored.requestedClass, current.entries[stored.entryKey]?.body, stored.payload)
+  const writtenBody = masterBody(stored.payload, stored.sourceModule)
+  const liveClass = rules.effectiveClass(stored.requestedClass, liveBody, writtenBody)
   const substantive = liveClass === "substantive" || stored.changeClass === "substantive"
   const expected = rules.nextSnapshot(current, stored)
   if (!sameDocument(input.snapshot, expected) || !sameDocument(input.diff.after, input.snapshot)) {
@@ -727,6 +740,7 @@ export class InMemoryMasterStore implements MasterStore {
       getVersion: async (id) => this.#version(id),
       currentSnapshot: async (firmId) => this.#snapshot(firmId),
       currentClassification: async (firmId) => this.#classification(firmId),
+      allowsLearningSeal: true,
       lockFirm: async (firmId) => this.#firmHead(firmId),
       assertCommitShape: async (input) => {
         if (!input.proposal) return
@@ -1076,6 +1090,8 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
 
     async insertProposal(row) {
       assertNewProposal(row)
+      const { LEARNING_SOURCE_MODULE } = await import("@/platform/p6/learning/baseline")
+      if (row.sourceModule === LEARNING_SOURCE_MODULE) throw new Error(LEARNING_DURABLE_VOID_ERROR)
       await withRole(async (client) => {
         const existing = await client.query(`SELECT 1 FROM change_proposals WHERE id = $1`, [row.id])
         if ((existing.rowCount ?? 0) > 0) throw new Error(`proposal id already exists: ${row.id}`)
@@ -1353,7 +1369,7 @@ async function readClassification(client: pg.PoolClient, firmId: string): Promis
 function commitError(error: unknown): Error {
   if (
     error instanceof Error &&
-    /did not commit|non-P6 writer refused|master version conflict|proposal already has a version|declassify|frozen|proposedBy is immutable|proposal not found|version not found|approval is not a direct status change|proposal status transition is refused|commit is bound to the proposal|proposer key missing|partner approval|approver must differ|cosmetic proposal is not pending|proposal is already applied|learning proposal is stale|master session is closed/.test(
+    /did not commit|non-P6 writer refused|master version conflict|proposal already has a version|declassify|frozen|proposedBy is immutable|proposal not found|version not found|approval is not a direct status change|proposal status transition is refused|commit is bound to the proposal|proposer key missing|partner approval|approver must differ|cosmetic proposal is not pending|proposal is already applied|learning proposal is stale|sealed proposal is void|learning_requires_durable_void|master session is closed/.test(
       error.message,
     )
   ) {

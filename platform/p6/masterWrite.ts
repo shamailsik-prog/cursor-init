@@ -81,7 +81,7 @@ export function nextSnapshot(before: MasterSnapshot, row: PersistedProposal): Ma
       [row.entryKey]: {
         partition: "mutable",
         key: row.entryKey,
-        body: masterBody(row.payload),
+        body: masterBody(row.payload, row.sourceModule),
         classification: row.classification,
       },
     },
