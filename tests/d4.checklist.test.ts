@@ -59,7 +59,7 @@ function mandatoryTicks(checklist: KnownChecklist, except: readonly string[] = [
     .map((entry) => ({ itemId: entry.id, by: "clerk", at: "2026-11-24T00:00:00.000Z" }))
 }
 
-const ITEM_KEYS = ["autoTickWired", "completion", "id", "kind", "label", "mandatory", "sourceLines"]
+const ITEM_KEYS = ["autoTickWired", "completion", "conditional", "id", "kind", "label", "mandatory", "sourceLines"]
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -132,14 +132,9 @@ describe("getChecklistForType (L5.4, every verified id)", () => {
 
     for (const type of [suit, petition, application]) {
       const checklist = asKnown(type.id)
-      expect(checklist.items.filter((entry) => entry.mandatory).map((entry) => entry.id)).toEqual([
-        "pleading",
-        "annexures",
-        "verification",
-        "vakalatnama",
-        "index_docket",
-        "court_fee",
-      ])
+      const core = ["pleading", "annexures", "verification", "vakalatnama", "index_docket", "court_fee"]
+      const mandatoryIds = checklist.items.filter((entry) => entry.mandatory).map((entry) => entry.id)
+      expect(mandatoryIds.filter((id) => core.includes(id))).toEqual(core)
       expect(item(checklist, "pleading").label).toBe(`Pleading: ${type.name}`)
       expect(item(checklist, "annexures").sourceLines).toContain(type.annexureRule)
       expect(item(checklist, "verification").sourceLines).toEqual(
@@ -178,7 +173,11 @@ describe("getChecklistForType (L5.4, every verified id)", () => {
     expect(nazir.annexureRule).not.toMatch(/\bindex/i)
     const nazirList = asKnown(nazir.id)
     expect(item(nazirList, "verification").mandatory).toBe(true)
-    expect(item(asKnown("bail_cancellation"), "vakalatnama").mandatory).toBe(false)
+    expect(item(asKnown("bail_cancellation"), "vakalatnama")).toMatchObject({
+      label: "Vakalatnama on file if counsel",
+      conditional: true,
+      mandatory: true,
+    })
     expect(nazirList.items.some((entry) => entry.id === "court_fee")).toBe(false)
     expect(nazirList.items.some((entry) => entry.id === "index_docket")).toBe(false)
 
@@ -206,7 +205,7 @@ describe("getChecklistForType (L5.4, every verified id)", () => {
     const affidavitList = asKnown(affidavit.id)
     expect(affidavitList.items.some((entry) => entry.kind === "pleading")).toBe(false)
     expect(item(affidavitList, "verification").mandatory).toBe(true)
-    expect(item(affidavitList, "annexures").mandatory).toBe(false)
+    expect(item(affidavitList, "annexures")).toMatchObject({ mandatory: true, conditional: true })
     expect(item(affidavitList, "annexures").sourceLines).toContain(affidavit.annexureRule)
   })
 
@@ -253,6 +252,216 @@ describe("getReadiness and blockIfIncomplete", () => {
     const blocked = blockIfIncomplete(type.id, produced)
     expect(blocked.blocked).toBe(true)
     expect(blocked.missingMandatory).toEqual(readiness.missingMandatory)
+  })
+
+  function partsFrom(checklist: KnownChecklist, line: string): ChecklistItem[] {
+    return checklist.items.filter((entry) => entry.kind === "annexures" && entry.sourceLines.includes(line))
+  }
+
+  function withoutItem(checklist: KnownChecklist, holdOut: string): Produced {
+    const annexureIds: string[] = []
+    const manualTicks: ManualTick[] = []
+    let affidavitId: string | undefined
+    for (const entry of checklist.items) {
+      if (!entry.mandatory || entry.id === holdOut) continue
+      if (entry.completion === "annexures") annexureIds.push(entry.id)
+      else if (entry.completion === "affidavit") affidavitId = "aff-1"
+      else manualTicks.push({ itemId: entry.id, by: "clerk", at: "2026-11-24T00:00:00.000Z" })
+    }
+    return { affidavitId, annexureIds, manualTicks }
+  }
+
+  it("splits a cheque, dishonour memo and notice into three items and leaves each one out", () => {
+    const line = "Cheque, dishonour memo and notice annexed"
+    const checklist = asKnown("cheque_dishonour_complaint_489f")
+    const parts = partsFrom(checklist, line)
+    expect(parts.map((entry) => entry.label)).toEqual(["Cheque annexed", "dishonour memo annexed", "notice annexed"])
+    expect(new Set(parts.map((entry) => entry.id)).size).toBe(3)
+    for (const part of parts) {
+      const produced = withoutItem(checklist, part.id)
+      const readiness = getReadiness(checklist.documentTypeId, produced)
+      expect(readiness.known).toBe(true)
+      if (!readiness.known) continue
+      expect(readiness.readyToFile, part.label).toBe(false)
+      expect(readiness.missingMandatory, part.label).toEqual([part.id])
+      const siblings = readiness.items.filter((entry) => parts.some((item) => item.id === entry.id))
+      expect(siblings.filter((entry) => entry.done)).toHaveLength(2)
+      expect(siblings.find((entry) => entry.id === part.id)?.done).toBe(false)
+    }
+    const onlyFirst: Produced = { annexureIds: [parts[0].id] }
+    const firstOnly = getReadiness(checklist.documentTypeId, onlyFirst)
+    expect(firstOnly.known).toBe(true)
+    if (!firstOnly.known) return
+    const closed = firstOnly.items.filter((entry) => parts.some((item) => item.id === entry.id) && entry.done)
+    expect(closed).toHaveLength(1)
+  })
+
+  it("splits an impugned judgment and warrant from the jail roll and leaves each one out", () => {
+    const line = "Impugned judgment and warrant / jail roll annexed"
+    const checklist = asKnown("conviction_appeal")
+    const parts = partsFrom(checklist, line)
+    expect(parts.map((entry) => entry.label)).toEqual(["Impugned judgment and warrant annexed", "jail roll annexed"])
+    for (const part of parts) {
+      const readiness = getReadiness(checklist.documentTypeId, withoutItem(checklist, part.id))
+      expect(readiness.known).toBe(true)
+      if (!readiness.known) continue
+      expect(readiness.readyToFile, part.label).toBe(false)
+      expect(readiness.missingMandatory, part.label).toContain(part.id)
+      expect(readiness.items.find((entry) => entry.id === part.id)?.done).toBe(false)
+    }
+  })
+
+  it("a criminal revision keeps the certified copy of the impugned order", () => {
+    const type = getDocumentType("criminal_revision")!
+    const checklist = asKnown(type.id)
+    const copy = checklist.items.find(
+      (entry) => entry.kind === "annexures" && /\bcertified\b/i.test(entry.label) && /\bimpugned\b/i.test(entry.label)
+    )
+    expect(copy).toBeDefined()
+    expect(copy?.sourceLines).toContain(type.annexureRule)
+  })
+
+  it("the criminal revision certified copy is mandatory", () => {
+    const checklist = asKnown("criminal_revision")
+    const copy = checklist.items.find(
+      (entry) => entry.kind === "annexures" && /\bcertified\b/i.test(entry.label) && /\bimpugned\b/i.test(entry.label)
+    )
+    expect(copy?.mandatory).toBe(true)
+  })
+
+  it("keeps a certified copy of the impugned order beside the judgment on acquittal, conviction and sentence appeals", () => {
+    for (const id of ["acquittal_appeal", "conviction_appeal", "sentence_appeal"]) {
+      const checklist = asKnown(id)
+      const copy = checklist.items.find(
+        (entry) => entry.kind === "annexures" && /\bcertified\b/i.test(entry.label) && /\bimpugned\b/i.test(entry.label)
+      )
+      expect(copy, id).toBeDefined()
+      expect(copy?.mandatory, id).toBe(true)
+      expect(copy?.conditional, id).toBe(false)
+    }
+  })
+
+  it("the record relied on stays its own mandatory annexure", () => {
+    for (const id of ["civil_appeal", "criminal_revision", "conviction_appeal"]) {
+      const record = asKnown(id).items.find((entry) => /\brecord relied on\b/i.test(entry.label))
+      expect(record, id).toMatchObject({ mandatory: true, kind: "annexures" })
+    }
+  })
+
+  it("an open conditional blocks, and a not-applicable tick with who and when unblocks", () => {
+    const appeal = asKnown("civil_appeal")
+    const condonation = appeal.items.find((entry) => entry.label === "Condonation application if delayed")
+    const limitation = appeal.items.find((entry) => entry.label === "Impugned order date and limitation computed (Module 44)")
+    expect(condonation).toMatchObject({ conditional: true, mandatory: true })
+    expect(limitation).toMatchObject({ conditional: true, mandatory: true })
+    const open = getReadiness(appeal.documentTypeId, withoutItem(appeal, condonation!.id))
+    expect(open.known).toBe(true)
+    if (!open.known) return
+    expect(open.readyToFile).toBe(false)
+    expect(open.missingMandatory).toContain(condonation!.id)
+
+    const waived = getReadiness(appeal.documentTypeId, {
+      ...withoutItem(appeal, condonation!.id),
+      manualTicks: [
+        ...withoutItem(appeal, condonation!.id).manualTicks!,
+        { itemId: condonation!.id, by: "clerk", at: "2026-11-24T00:00:00.000Z", notApplicable: true },
+      ],
+    })
+    expect(waived.known).toBe(true)
+    if (!waived.known) return
+    expect(waived.readyToFile).toBe(true)
+    expect(waived.items.find((entry) => entry.id === condonation!.id)).toMatchObject({
+      done: true,
+      completedBy: "not_applicable",
+      actor: { by: "clerk", at: "2026-11-24T00:00:00.000Z" },
+    })
+
+    const counsel = asKnown("bail_cancellation")
+    const vakalatnama = item(counsel, "vakalatnama")
+    expect(vakalatnama.label).toBe("Vakalatnama on file if counsel")
+    expect(vakalatnama.conditional).toBe(true)
+    const counselOpen = getReadiness(counsel.documentTypeId, withoutItem(counsel, vakalatnama.id))
+    expect(counselOpen.known).toBe(true)
+    if (!counselOpen.known) return
+    expect(counselOpen.readyToFile).toBe(false)
+    const counselWaived = getReadiness(counsel.documentTypeId, {
+      ...withoutItem(counsel, vakalatnama.id),
+      manualTicks: [
+        ...(withoutItem(counsel, vakalatnama.id).manualTicks ?? []),
+        { itemId: vakalatnama.id, by: "clerk", at: "2026-11-24", notApplicable: true },
+      ],
+    })
+    expect(counselWaived.known).toBe(true)
+    if (!counselWaived.known) return
+    expect(counselWaived.readyToFile).toBe(true)
+
+    const exhibitType = asKnown("affidavit")
+    const exhibits = item(exhibitType, "annexures")
+    expect(exhibits.conditional).toBe(true)
+    const exhibitOpen = getReadiness(exhibitType.documentTypeId, withoutItem(exhibitType, exhibits.id))
+    expect(exhibitOpen.known).toBe(true)
+    if (!exhibitOpen.known) return
+    expect(exhibitOpen.readyToFile).toBe(false)
+    expect(exhibitOpen.missingMandatory).toContain(exhibits.id)
+
+    let condonationCount = 0
+    let counselCount = 0
+    let exhibitCount = 0
+    let limitationCount = 0
+    for (const type of listDocumentTypes({})) {
+      const checklist = getChecklistForType(type.id)
+      if (!checklist.known) continue
+      for (const entry of checklist.items) {
+        if (entry.label === "Condonation application if delayed") {
+          condonationCount += 1
+          expect(entry, type.id).toMatchObject({ conditional: true, mandatory: true })
+        }
+        if (entry.label === "Vakalatnama on file if counsel") {
+          counselCount += 1
+          expect(entry, type.id).toMatchObject({ conditional: true, mandatory: true })
+        }
+        if (entry.kind !== "pleading" && /\blimitation\b/i.test(entry.label)) {
+          limitationCount += 1
+          expect(entry, type.id).toMatchObject({ conditional: true, mandatory: true })
+        }
+      }
+      if (/\bif any\b/i.test(type.annexureRule) && /\bexhibits?\b/i.test(type.annexureRule)) {
+        exhibitCount += 1
+        expect(item(checklist, "annexures"), type.id).toMatchObject({ conditional: true, mandatory: true })
+      }
+    }
+    expect(condonationCount).toBe(10)
+    expect(counselCount).toBe(21)
+    expect(exhibitCount).toBe(6)
+    expect(limitationCount).toBeGreaterThan(0)
+  })
+
+  it("rejects a not-applicable tick with no who or when, or with an invalid date", () => {
+    const appeal = asKnown("civil_appeal")
+    const condonation = appeal.items.find((entry) => entry.label === "Condonation application if delayed")!
+    const base = withoutItem(appeal, condonation.id)
+    for (const tick of [
+      { itemId: condonation.id, by: " ", at: "2026-11-24T00:00:00.000Z", notApplicable: true },
+      { itemId: condonation.id, by: "clerk", at: "  ", notApplicable: true },
+      { itemId: condonation.id, by: "clerk", at: "not-a-date", notApplicable: true },
+    ]) {
+      const readiness = getReadiness(appeal.documentTypeId, { ...base, manualTicks: [...(base.manualTicks ?? []), tick] })
+      expect(readiness.known).toBe(true)
+      if (!readiness.known) continue
+      expect(readiness.readyToFile, tick.at).toBe(false)
+      expect(readiness.missingMandatory, tick.at).toContain(condonation.id)
+    }
+    const suit = asKnown("civil_suit")
+    const dated = getReadiness("civil_suit", {
+      manualTicks: [{ itemId: "pleading", by: "clerk", at: "not-a-date" }],
+    })
+    expect(dated.known).toBe(true)
+    if (!dated.known) return
+    expect(dated.items.find((entry) => entry.id === "pleading")?.done).toBe(false)
+    expect(suit.items.find((entry) => /Limitation checked/i.test(entry.label))).toMatchObject({
+      conditional: true,
+      mandatory: true,
+    })
   })
 
   it("one annexure id does not tick every mandatory annexure", () => {
@@ -327,7 +536,7 @@ describe("getReadiness and blockIfIncomplete", () => {
     expect(readiness.items.find((entry) => entry.id === copy?.id)?.label).toBe("Certified copy of the order disobeyed")
   })
 
-  it("treats an unconditional annexed line as a required annexure and leaves a conditional exhibit optional", () => {
+  it("treats an unconditional annexed line as a required annexure and keeps a conditional exhibit fail-closed", () => {
     const conditional = /\bif any\b|\bwhere applicable\b|\bas applicable\b/i
     for (const type of listDocumentTypes({})) {
       const annexed = type.checklist.filter((line) => /\bannexed\b/i.test(line) && !conditional.test(line))
@@ -348,7 +557,7 @@ describe("getReadiness and blockIfIncomplete", () => {
       const row = getDocumentType(id)!
       expect(row.annexureRule).toMatch(/\bif any\b/i)
       expect(row.checklist.some((line) => /\bannexed\b/i.test(line))).toBe(false)
-      expect(item(asKnown(id), "annexures").mandatory).toBe(false)
+      expect(item(asKnown(id), "annexures")).toMatchObject({ mandatory: true, conditional: true })
     }
     const applicable = itemsForDocumentType({
       ...getDocumentType("affidavit")!,
@@ -357,7 +566,7 @@ describe("getReadiness and blockIfIncomplete", () => {
       checklist: ["Exhibits where applicable"],
       annexureRule: "Exhibits where applicable",
     })
-    expect(applicable.find((entry) => entry.id === "annexures")).toMatchObject({ mandatory: false })
+    expect(applicable.find((entry) => entry.id === "annexures")).toMatchObject({ mandatory: true, conditional: true })
     const decree = itemsForDocumentType({
       ...getDocumentType("affidavit")!,
       id: "decree_copy",
@@ -369,7 +578,7 @@ describe("getReadiness and blockIfIncomplete", () => {
       mandatory: true,
       completion: "annexures",
     })
-    expect(decree.find((entry) => entry.id === "annexures")?.mandatory).toBe(false)
+    expect(decree.find((entry) => entry.id === "annexures")).toMatchObject({ mandatory: true, conditional: true })
   })
 
   it("a missing mandatory item is not ready to file, and names that item", () => {
@@ -452,12 +661,11 @@ describe("getReadiness and blockIfIncomplete", () => {
     expect(sworn.known).toBe(true)
     if (!sworn.known) return
     expect(sworn.readyToFile).toBe(true)
-    expect(item(asKnown("bail_cancellation"), "vakalatnama")).toMatchObject({ mandatory: false })
+    expect(item(asKnown("bail_cancellation"), "vakalatnama")).toMatchObject({ conditional: true, mandatory: true })
     const particulars = asKnown("criminal_revision").items.find((entry) => entry.label === "FIR / complaint / judgment particulars as applicable")
-    expect(particulars?.mandatory).toBe(false)
+    expect(particulars).toMatchObject({ conditional: true, mandatory: true })
     const limitation = asKnown("civil_appeal").items.find((entry) => /date and limitation/i.test(entry.label))
-    expect(limitation?.mandatory).toBe(false)
-    expect(limitation?.kind).toBe("type_specific")
+    expect(limitation).toMatchObject({ conditional: true, mandatory: true, kind: "type_specific" })
   })
 
   it("does not auto-tick the index from a docket id while the L5.5 seam is unwired", () => {
@@ -571,13 +779,16 @@ describe("getReadiness and blockIfIncomplete", () => {
       manualTicks: [
         { itemId: "__proto__", by: "x", at: "t" },
         { itemId: "constructor", by: "x", at: "t" },
-        { itemId: "pleading", by: "first", at: "t1" },
-        { itemId: "pleading", by: "second", at: "t2" },
+        { itemId: "pleading", by: "first", at: "2026-11-24T00:00:00.000Z" },
+        { itemId: "pleading", by: "second", at: "2026-11-24T01:00:00.000Z" },
       ],
     })
     expect(readiness.known).toBe(true)
     if (!readiness.known) return
-    expect(readiness.items.find((entry) => entry.id === "pleading")?.actor).toEqual({ by: "second", at: "t2" })
+    expect(readiness.items.find((entry) => entry.id === "pleading")?.actor).toEqual({
+      by: "second",
+      at: "2026-11-24T01:00:00.000Z",
+    })
     expect(({} as { polluted?: string }).polluted).toBeUndefined()
   })
 })

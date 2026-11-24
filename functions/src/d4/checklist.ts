@@ -32,6 +32,8 @@ export type ManualTick = {
   itemId: string
   by: string
   at: string
+  /** Closes a conditional item only. Ignored on an item that is not conditional. */
+  notApplicable?: boolean
 }
 
 /** What has already been produced. There is no fee input: the fee tick is manual. An annexure id ticks only the annexure item with that same id. */
@@ -63,7 +65,7 @@ export type ReadinessProgress = {
 
 export type ReadinessItem = ChecklistItem & {
   done: boolean
-  completedBy: "manual" | "affidavit" | "annexures" | "docket" | null
+  completedBy: "manual" | "affidavit" | "annexures" | "docket" | "not_applicable" | null
   actor: { by: string; at: string } | null
 }
 
@@ -95,7 +97,16 @@ export type BlockResult = {
   missingMandatory: string[]
 }
 
-type Actor = { by: string; at: string }
+type Actor = { by: string; at: string; notApplicable: boolean }
+
+/** A calendar date, or a time with seconds and a timezone, that parses to that same calendar day. */
+function isRealIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2}))?$/.test(value)) return false
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return false
+  if (value.length === 10) return parsed.toISOString().slice(0, 10) === value
+  return true
+}
 
 function classified(documentTypeId: unknown):
   | { kind: "empty" }
@@ -154,8 +165,8 @@ function ticksOf(produced: Produced): Map<string, Actor> {
     const itemId = text(tick.itemId)
     const by = text(tick.by)
     const at = text(tick.at)
-    if (itemId === null || by === null || at === null) continue
-    ticks.set(itemId, { by, at })
+    if (itemId === null || by === null || at === null || !isRealIsoDate(at)) continue
+    ticks.set(itemId, { by, at, notApplicable: tick.notApplicable === true })
   }
   return ticks
 }
@@ -176,7 +187,10 @@ function settle(item: ChecklistItem, produced: Produced, ticks: Map<string, Acto
   if (item.completion === "docket" && DOCKET_AUTO_TICK_WIRED && text(produced.docketId) !== null) {
     return { ...item, done: true, completedBy: "docket", actor: null }
   }
-  if (manual !== null) return { ...item, done: true, completedBy: "manual", actor: manual }
+  if (manual !== null && manual.notApplicable && item.conditional) {
+    return { ...item, done: true, completedBy: "not_applicable", actor: { by: manual.by, at: manual.at } }
+  }
+  if (manual !== null && !manual.notApplicable) return { ...item, done: true, completedBy: "manual", actor: { by: manual.by, at: manual.at } }
   return { ...item, done: false, completedBy: null, actor: null }
 }
 

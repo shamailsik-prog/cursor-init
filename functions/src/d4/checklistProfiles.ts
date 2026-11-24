@@ -50,6 +50,11 @@ export type ChecklistItem = {
   /** Annexure ids and the affidavit id tick those items. The docket id does not, until L5.5. */
   autoTickWired: boolean
   sourceLines: string[]
+  /**
+   * A conditional stays open, and blocks filing, until the document is produced
+   * or an explicit not-applicable tick records who and when.
+   */
+  conditional: boolean
 }
 
 function unique(lines: readonly string[]): string[] {
@@ -84,8 +89,31 @@ function annexureItemId(line: string, used: Set<string>): string {
   return id
 }
 
+/** A judgment or warrant does not stand in for the certified copy of the impugned order. */
 function coversImpugned(items: readonly ChecklistItem[]): boolean {
-  return items.some((item) => IMPUGNED_DOCUMENT.test(item.label) && !COMPUTATION.test(item.label))
+  return items.some((item) => /\bcertified\b/i.test(item.label) && /\bimpugned\b/i.test(item.label) && !COMPUTATION.test(item.label))
+}
+
+const FAIL_CLOSED = /\blimitation\b|\bif any\b|\bwhere applicable\b|\bas applicable\b|\bif counsel\b|\bif delayed\b/i
+
+function isFailClosed(line: string): boolean {
+  return FAIL_CLOSED.test(line)
+}
+
+/**
+ * A named-document line that lists more than one document becomes one item per
+ * document. " / " is the separator in "judgment and warrant / jail roll", so
+ * "and" inside that pair stays one document. A comma or "and" splits the rest.
+ * A trailing "annexed" applies to each part. "annexed and indexed" is one bundle.
+ */
+function splitNamedLine(line: string): string[] {
+  const annexed = /\bannexed\b/i.test(line)
+  const body = line.replace(/\s+and indexed\s*$/i, "").replace(/\s+annexed\s*$/i, "").trim()
+  const pieces = body.includes(" / ") ? body.split(/\s+\/\s+/) : body.split(/\s*,\s*|\s+and\s+/i)
+  const cleaned = pieces.map((part) => part.trim()).filter((part) => part !== "")
+  if (cleaned.length <= 1) return [line]
+  const suffix = annexed ? " annexed" : ""
+  return cleaned.map((part) => `${part.replace(/\s+annexed\s*$/i, "").trim()}${suffix}`)
 }
 
 type ClauseKind = "skip" | "conditional" | "impugned" | "record" | "generic"
@@ -142,7 +170,7 @@ function consumed(line: string): boolean {
   )
 }
 
-function annexureItem(id: string, label: string, mandatory: boolean, sourceLines: string[]): ChecklistItem {
+function annexureItem(id: string, label: string, mandatory: boolean, sourceLines: string[], conditional = false): ChecklistItem {
   return {
     id,
     kind: "annexures",
@@ -151,17 +179,20 @@ function annexureItem(id: string, label: string, mandatory: boolean, sourceLines
     completion: "annexures",
     autoTickWired: true,
     sourceLines,
+    conditional,
   }
 }
 
 /**
  * The filing items for one verified row, in the spec's order, then the row's other
  * checklist lines. Each mandatory annexure is its own item. An annexure id ticks
- * only the item whose id it is. "if any", "where applicable" and "as applicable"
- * stay optional. A certified copy, impugned order, judgment, decree, annexed
- * document or affidavit is mandatory without those phrases. "Affidavit if facts
- * asserted" is mandatory. "Vakalatnama if counsel" stays optional. The Module 44
- * limitation line stays optional: it is the computation, not the certified copy.
+ * only the item whose id it is. "if any", "where applicable", "as applicable",
+ * "if counsel" and "if delayed" stay conditional, and so does a limitation line.
+ * A conditional blocks until the document is produced or an explicit
+ * not-applicable tick records who and when. A certified copy, impugned order,
+ * judgment, decree or annexed document is mandatory without those phrases.
+ * "Affidavit if facts asserted" is mandatory. "judgment and warrant / jail roll"
+ * is two documents. One annexure id ticks one item.
  * Other non-slot lines stay visible and do not block filing.
  */
 export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
@@ -178,14 +209,17 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
       completion: "manual",
       autoTickWired: false,
       sourceLines: [type.name],
+      conditional: false,
     })
     used.add("pleading")
   }
 
   for (const line of lines) {
     if (!isSeparateDocument(line)) continue
-    const id = annexureItemId(line, used)
-    items.push(annexureItem(id, line, true, [line]))
+    for (const part of splitNamedLine(line)) {
+      const id = annexureItemId(part, used)
+      items.push(annexureItem(id, part, true, [line]))
+    }
   }
 
   const clauses = type.annexureRule
@@ -221,8 +255,9 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
   if (markingOnly && bundle) {
     bundle.sourceLines = unique([...bundle.sourceLines, type.annexureRule])
   } else if (genericLines.length > 0 || genericClauses.length > 0 || conditionalClauses.length > 0) {
-    const mandatory =
+    const unconditional =
       genericLines.some((line) => !EXPLICIT.test(line)) || (genericLines.length === 0 && genericClauses.length > 0)
+    const conditional = !unconditional && (conditionalClauses.length > 0 || genericLines.some((line) => isFailClosed(line)))
     const label =
       genericLines.find((line) => !EXPLICIT.test(line)) ??
       genericLines[0] ??
@@ -230,7 +265,7 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
       conditionalClauses[0] ??
       type.annexureRule
     const ruleOnItem = genericClauses.length > 0 || conditionalClauses.length > 0 ? type.annexureRule : null
-    items.push(annexureItem("annexures", label, mandatory, sources(genericLines, ruleOnItem)))
+    items.push(annexureItem("annexures", label, unconditional || conditional, sources(genericLines, ruleOnItem), conditional))
     used.add("annexures")
   }
 
@@ -245,35 +280,43 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
       completion: "affidavit",
       autoTickWired: true,
       sourceLines: sources(affidavitLines, affidavitRule),
+      conditional: false,
     })
     used.add("verification")
   }
 
   const vakalatnamaLines = linesMatching(lines, VAKALATNAMA)
   if (vakalatnamaLines.length > 0) {
+    const conditional = vakalatnamaLines.every((line) => isFailClosed(line))
     items.push({
       id: "vakalatnama",
       kind: "vakalatnama",
       label: vakalatnamaLines[0] ?? "Vakalatnama",
-      mandatory: mandatoryFrom(vakalatnamaLines, null, LOOSE),
+      mandatory: conditional || mandatoryFrom(vakalatnamaLines, null, LOOSE),
       completion: "manual",
       autoTickWired: false,
       sourceLines: vakalatnamaLines,
+      conditional,
     })
     used.add("vakalatnama")
   }
 
   const indexLines = linesMatching(lines, INDEX)
   const indexRule = ruleIf(type, INDEX)
+  const indexClause = type.annexureRule
+    .split(";")
+    .map((clause) => clause.replace(/^\s*then\s+/i, "").trim())
+    .find((clause) => INDEX.test(clause))
   if (indexLines.length > 0 || indexRule !== null) {
     items.push({
       id: "index_docket",
       kind: "index_docket",
-      label: indexLines[0] ?? indexRule ?? "Index",
+      label: indexLines[0] ?? indexClause ?? "Index",
       mandatory: mandatoryFrom(indexLines, indexRule, LOOSE),
       completion: "docket",
       autoTickWired: false,
       sourceLines: sources(indexLines, indexRule),
+      conditional: false,
     })
     used.add("index_docket")
   }
@@ -288,6 +331,7 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
       completion: "manual",
       autoTickWired: false,
       sourceLines: feeLines,
+      conditional: false,
     })
     used.add("court_fee")
   }
@@ -299,14 +343,16 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
   for (const line of lines) {
     if (consumed(line)) continue
     const id = specificId(line, used)
+    const conditional = isFailClosed(line)
     items.push({
       id,
       kind: "type_specific",
       label: line,
-      mandatory: false,
+      mandatory: conditional,
       completion: "manual",
       autoTickWired: false,
       sourceLines: [line],
+      conditional,
     })
   }
 
