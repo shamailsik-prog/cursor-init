@@ -8,6 +8,7 @@
 import { closeSync, constants, openSync, readdirSync, readFileSync } from "node:fs"
 import { extname, join, relative, sep } from "node:path"
 import type { Classification } from "@/platform/p1/types"
+import { masterBody } from "@/platform/p6/learning/baseline"
 import {
   canonicalPayload,
   masterWriteAuditLog,
@@ -80,7 +81,7 @@ export function nextSnapshot(before: MasterSnapshot, row: PersistedProposal): Ma
       [row.entryKey]: {
         partition: "mutable",
         key: row.entryKey,
-        body: row.payload,
+        body: masterBody(row.payload),
         classification: row.classification,
       },
     },

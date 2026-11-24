@@ -8,6 +8,8 @@
 
 import { randomUUID } from "node:crypto"
 import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
+import { masterBody, sealedBaselineMatches } from "@/platform/p6/learning/baseline"
+import { LearningStaleError } from "@/platform/p6/learning/stale"
 import { effectiveClass, nextSnapshot } from "@/platform/p6/masterWrite"
 import {
   normalizeActorKey,
@@ -115,7 +117,8 @@ async function persistProposal(proposal: ChangeProposal, store: MasterStore): Pr
   }
   const before = await store.currentSnapshot(proposal.firmId)
   const requested = proposal.changeClass ?? null
-  const changeClass = effectiveClass(requested, before.entries[entryKey]?.body, proposal.payload)
+  const liveBody = before.entries[entryKey]?.body
+  const changeClass = effectiveClass(requested, liveBody, masterBody(proposal.payload))
   const row: PersistedProposal = {
     id: randomUUID(),
     firmId: proposal.firmId,
@@ -218,7 +221,9 @@ export async function applyChange(proposalId: string, store: MasterStore): Promi
     const base = await tx.lockFirm(row.firmId)
     const before = await tx.currentSnapshot(row.firmId)
     const existing = before.entries[row.entryKey]
-    const changeClass = effectiveClass(row.requestedClass, existing?.body, row.payload)
+    if (!sealedBaselineMatches(existing?.body, row.payload)) throw new LearningStaleError()
+    const writtenBody = masterBody(row.payload)
+    const changeClass = effectiveClass(row.requestedClass, existing?.body, writtenBody)
     assertNoDowngrade(existing?.classification, row.classification, row.declassify)
     let authorId: string
     let authorKind: "partner" | "system"
