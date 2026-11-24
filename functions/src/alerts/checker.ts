@@ -51,6 +51,8 @@ export const CHECK_MAX_PAGES = 5
 export const CHECKER_BUDGET_MS = 40_000
 /** Stop raising this long after the budget so `passIndex` still advances before the 60 s timeout. */
 export const CHECKER_RAISE_SLACK_MS = 10_000
+/** `ops_alert.pass_failed` code when specs already built are left unraised at that ceiling. */
+export const CHECKER_RAISE_BUDGET = "raise_budget"
 /**
  * `ops_alert.pass_failed` code when the row a run would save has no order-field value. The cursor is not written
  * (FA-260-R2-001). A stored null is a value and uses the id-only cursor instead.
@@ -351,6 +353,7 @@ export type CheckerOptions = { now?: () => number; passes?: readonly CheckPass[]
  * counted. The scheduled run rotates which pass leads (`passIndex`). A caller that names `passes` keeps that order and
  * does not move the index (the paging tests pin one pass). The budget stops the next page and the next pass. Specs
  * already built are raised until `CHECKER_RAISE_SLACK_MS` past the budget, so the pass index still advances inside the 60 s timeout.
+ * specs past the raise ceiling are logged ops_alert.pass_failed with pass raise, code raise_budget and the dropped count (FA-260-R5-001).
  */
 export async function runAlertChecker(opts: CheckerOptions = {}): Promise<{ raised: string[] }> {
   const now = opts.now ?? Date.now
@@ -377,11 +380,18 @@ export async function runAlertChecker(opts: CheckerOptions = {}): Promise<{ rais
       logRegisteredError("ops_alert.pass_failed", { pass, code: errorCode(err) })
       continue
     }
-    for (const spec of specs) {
-      if (wall() - started >= CHECKER_BUDGET_MS + CHECKER_RAISE_SLACK_MS) break
+    let dropped = 0
+    for (let i = 0; i < specs.length; i++) {
+      if (wall() - started >= CHECKER_BUDGET_MS + CHECKER_RAISE_SLACK_MS) {
+        dropped = specs.length - i
+        break
+      }
+      const spec = specs[i]
+      if (spec === undefined) continue
       const id = await raiseAlertBestEffort(spec, nowMs)
       if (id !== null) raised.push(id)
     }
+    if (dropped > 0) logRegisteredError("ops_alert.pass_failed", { pass: "raise", code: CHECKER_RAISE_BUDGET, dropped })
   }
   if (rotate) {
     try {

@@ -3,6 +3,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest"
 import shippedPolicy from "@/infra/retention/policy.json"
 import inventory from "@/infra/retention/inventory.json"
 import { canonicalMatterDocument } from "@/platform/d1/matterDocument"
+import { UPLOAD_SESSIONS_COLLECTION, putStagingChunk, readStagingChunks } from "@/platform/documents/uploadStagingStore"
 import { adminDb } from "../src/admin"
 import { ROUTES, createRouter } from "../src/http/router"
 import { sha256 } from "../src/retention/acks"
@@ -12,6 +13,7 @@ import { runJobTask } from "../src/p2/worker"
 import { apiErrorOf, viaApi, ApiError } from "./api"
 import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
 import { deleteFirmScopedData } from "./firmCleanup"
+import { documentObjectTestKey } from "./documentObjectTestKey"
 import { FakeClock, testDeps } from "./jobs"
 
 /**
@@ -293,6 +295,40 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     expect(await exists("matter_members", `${f.matterId}_${f.A.uid}`)).toBe(true)
     const refusalAudit = await adminDb().collection("audit_log").where("firmId", "==", f.firmId).where("action", "==", "retention.request_deletion").get()
     expect(refusalAudit.docs.map((d) => d.get("reason"))).toContain("legal_hold_policy")
+  })
+
+  it("purges upload-staging for the deleted matter and leaves another matter's chunks", async () => {
+    process.env.SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY = documentObjectTestKey()
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const gone = Buffer.from("staging-of-deleted-matter")
+    const stays = Buffer.from("staging-of-other-matter")
+    await putStagingChunk({ firmId: f.firmId, matterId: f.matterId, sessionId: "ups_gone", fileIdx: 0, chunkIdx: 1, bytes: gone })
+    await putStagingChunk({ firmId: f.firmId, matterId: f.otherMatterId, sessionId: "ups_stay", fileIdx: 0, chunkIdx: 1, bytes: stays })
+    await adminDb().collection(UPLOAD_SESSIONS_COLLECTION).doc("ups_gone").set({
+      firmId: f.firmId,
+      matterId: f.matterId,
+      callerId: f.P.uid,
+      storagePath: `upload-staging/${f.firmId}/${f.matterId}/ups_gone`,
+      expiresAtMs: Date.now() + 60_000,
+      files: [{ firmId: f.firmId, name: "a.pdf" }],
+    })
+    await adminDb().collection(UPLOAD_SESSIONS_COLLECTION).doc("ups_stay").set({
+      firmId: f.firmId,
+      matterId: f.otherMatterId,
+      callerId: f.P.uid,
+      storagePath: `upload-staging/${f.firmId}/${f.otherMatterId}/ups_stay`,
+      expiresAtMs: Date.now() + 60_000,
+      files: [{ firmId: f.firmId, name: "b.pdf" }],
+    })
+    await requestAndApprove(f)
+    const clock = new FakeClock(Date.now())
+    const outcomes = await drain(f.firmId, clock)
+    expect(outcomes.every((o) => o === "done")).toBe(true)
+    expect((await adminDb().collection(UPLOAD_SESSIONS_COLLECTION).doc("ups_gone").get()).exists).toBe(false)
+    expect((await adminDb().collection(UPLOAD_SESSIONS_COLLECTION).doc("ups_stay").get()).exists).toBe(true)
+    expect(await readStagingChunks({ firmId: f.firmId, matterId: f.matterId, sessionId: "ups_gone", fileIdx: 0, chunkCount: 1 })).toEqual([null])
+    expect((await readStagingChunks({ firmId: f.firmId, matterId: f.otherMatterId, sessionId: "ups_stay", fileIdx: 0, chunkCount: 1 }))[0]?.equals(stays)).toBe(true)
   })
 
   it("the saga purges every matter store, acknowledges every inventoried store and finishes; other matters and firms are untouched", async () => {

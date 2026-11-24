@@ -1,4 +1,5 @@
 import { resetDocumentObjectStoreForTests } from "@/platform/documents/documentObjectStore"
+import { resetUploadStagingForTests } from "@/platform/documents/uploadStagingStore"
 import { newStore, type SpineStore } from "@/platform/spine/store"
 
 /**
@@ -65,5 +66,6 @@ export function getRuntimeStore(): SpineStore {
 
 export function resetRuntimeStoreForTests(): void {
   resetDocumentObjectStoreForTests()
+  resetUploadStagingForTests()
   runtimeStore = buildSeededStore()
 }

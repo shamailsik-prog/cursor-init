@@ -1121,6 +1121,7 @@ describe("index exports", () => {
       "alertEscalator",
       "api",
       "auditOutboxReconciler",
+      "bulkUploadStagingSweep",
       "d1AutoConfirmTick",
       "d1ConflictClientWritten",
       "d1ConflictIndexChunkWritten",
@@ -1175,6 +1176,7 @@ describe("index exports", () => {
       "alertChecker",
       "retentionApplyTick",
       "retentionDeletionWatch",
+      "bulkUploadStagingSweep",
     ])
       expect([name, mod[name]?.__endpoint?.region]).toEqual([name, ["asia-south1"]])
   })

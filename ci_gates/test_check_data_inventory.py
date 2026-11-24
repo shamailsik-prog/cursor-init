@@ -422,14 +422,15 @@ class RuntimeCheck(unittest.TestCase):
         self.assertEqual(gate.check_runtime_collections(["matters"], inventory), [])
 
 
-# Wave-1 stores the deletion saga will read. Four stay pending on F42 until their writers land.
-# Landed, with no pending flag (ME I1): draft_autosave_points (W1-L51), whatsapp_outbound_keys
-# (W1-Q14R3), and evidence_items plus custody_events (W1-Q08B). The evidence stores were already
-# inventoried on 7ae1a33f (matter_content, field matterId); Q08B does not append a duplicate.
-# A pending flag on a store the tree now names is a note, and the pin must not keep demanding it.
-# `validatePolicy(policy, inventory())` in functions/test/f42-retention.units.test.ts loads this
-# same file; this pin is what makes that call see them.
-WAVE1_NEW = (
+# Wave-1 stores the deletion saga will read. Two stay pending on F42 until their writers land.
+# Landed, with no pending flag (ME I1), one tuple: draft_autosave_points (W1-L51),
+# whatsapp_outbound_keys (W1-Q14R3), upload_sessions and upload-staging (W1-L91), and
+# evidence_items plus custody_events (W1-Q08B). The evidence stores were already inventoried on
+# 7ae1a33f (matter_content, field matterId); Q08B does not append a duplicate and does not re-pend
+# a landed store. A pending flag on a store the tree now names is a note, and the pin must not keep
+# demanding it. `validatePolicy(policy, inventory())` in functions/test/f42-retention.units.test.ts
+# loads this same file.
+WAVE1_PENDING = (
     {
         "id": "firestore:intakes",
         "kind": "firestore",
@@ -448,26 +449,8 @@ WAVE1_NEW = (
         "key": {"kind": "field", "field": "matterId"},
         "pending": "F42",
     },
-    {
-        "id": "firestore:upload_sessions",
-        "kind": "firestore",
-        "name": "upload_sessions",
-        "profile": "job_record",
-        "key": {"kind": "field", "field": "matterId"},
-        "pending": "F42",
-    },
-    {
-        "id": "objects:upload-staging",
-        "kind": "objectPrefix",
-        "name": "upload-staging",
-        "profile": "vault_object",
-        "key": {"kind": "objects", "via": "firestore:upload_sessions", "pathField": "storagePath"},
-        "pending": "F42",
-    },
 )
-# Landed writers, one tuple. draft_autosave_points (W1-L51): matter-deletion key stays matterId.
-# whatsapp_outbound_keys (W1-Q14R3): same profile and TTL clock, without pending.
-# evidence_items and custody_events (W1-Q08B): already inventoried, matter_content, field matterId.
+# One tuple. Main's landed stores, the two W1-L91 stores, and the two Q08B stores. pending is absent.
 WAVE1_LANDED = (
     {
         "id": "firestore:draft_autosave_points",
@@ -483,6 +466,20 @@ WAVE1_LANDED = (
         "profile": "operational_ttl",
         "key": {"kind": "none"},
         "ageField": {"field": "expiresAt", "type": "timestamp"},
+    },
+    {
+        "id": "firestore:upload_sessions",
+        "kind": "firestore",
+        "name": "upload_sessions",
+        "profile": "job_record",
+        "key": {"kind": "field", "field": "matterId"},
+    },
+    {
+        "id": "objects:upload-staging",
+        "kind": "objectPrefix",
+        "name": "upload-staging",
+        "profile": "vault_object",
+        "key": {"kind": "objects", "via": "firestore:upload_sessions", "pathField": "storagePath"},
     },
     {
         "id": "firestore:evidence_items",
@@ -502,13 +499,13 @@ WAVE1_LANDED = (
 
 
 class Wave1Stores(unittest.TestCase):
-    """W1-INV: wave-1 stores are inventoried before their writers land. Four remain pending."""
+    """W1-INV pin. Two stores remain pending. Landed stores, including Q08B and W1-L91, are not."""
 
     def test_new_wave1_stores_are_pending_f42_with_their_deletion_keys(self) -> None:
         inventory = gate.load_json(ROOT, gate.INVENTORY)
         by_id = {s["id"]: s for s in inventory["stores"]}
         self.assertEqual(len(by_id), len(inventory["stores"]), "duplicate store id")
-        for expected in (*WAVE1_NEW, *WAVE1_LANDED):
+        for expected in (*WAVE1_PENDING, *WAVE1_LANDED):
             store = by_id.get(expected["id"])
             self.assertIsNotNone(store, expected["id"])
             for field, value in expected.items():
@@ -516,10 +513,11 @@ class Wave1Stores(unittest.TestCase):
             self.assertNotIn(store["name"], {s["name"] for s in inventory["stores"] if s["id"] != store["id"]})
         for expected in WAVE1_LANDED:
             self.assertNotIn("pending", by_id[expected["id"]], expected["id"])
-        self.assertEqual(len(WAVE1_NEW), 4)
+        self.assertEqual(len(WAVE1_PENDING), 2)
         # The object prefix points at the session store this same inventory registers.
         via = by_id["objects:upload-staging"]["key"]["via"]
         self.assertEqual(by_id[via]["kind"], "firestore")
+        self.assertNotIn("pending", by_id[via])
         findings = gate.check_inventory(ROOT, inventory, gate.load_json(ROOT, gate.POLICY))
         self.assertEqual(findings, [], msg="\n".join(f.message for f in findings))
 

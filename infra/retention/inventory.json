@@ -436,8 +436,8 @@
     {"id": "firestore:intakes", "kind": "firestore", "name": "intakes", "profile": "matter_record", "key": {"kind": "field", "field": "matterId"}, "anonymise": {"matterId": null}, "pending": "F42"},
     {"id": "firestore:intake_messages", "kind": "firestore", "name": "intake_messages", "profile": "matter_content", "key": {"kind": "field", "field": "matterId"}, "pending": "F42"},
     {"id": "firestore:draft_autosave_points", "kind": "firestore", "name": "draft_autosave_points", "profile": "matter_content", "key": {"kind": "field", "field": "matterId"}},
-    {"id": "firestore:upload_sessions", "kind": "firestore", "name": "upload_sessions", "profile": "job_record", "key": {"kind": "field", "field": "matterId"}, "pending": "F42"},
-    {"id": "objects:upload-staging", "kind": "objectPrefix", "name": "upload-staging", "profile": "vault_object", "key": {"kind": "objects", "via": "firestore:upload_sessions", "pathField": "storagePath"}, "pending": "F42"},
+    {"id": "firestore:upload_sessions", "kind": "firestore", "name": "upload_sessions", "profile": "job_record", "key": {"kind": "field", "field": "matterId"}},
+    {"id": "objects:upload-staging", "kind": "objectPrefix", "name": "upload-staging", "profile": "vault_object", "key": {"kind": "objects", "via": "firestore:upload_sessions", "pathField": "storagePath"}},
     {"id": "firestore:whatsapp_outbound_keys", "kind": "firestore", "name": "whatsapp_outbound_keys", "profile": "operational_ttl", "key": {"kind": "none"}, "ageField": {"field": "expiresAt", "type": "timestamp"}}
   ]
 }
