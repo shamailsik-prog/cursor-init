@@ -99,6 +99,21 @@ class PatternCoversEveryMasterWrite(unittest.TestCase):
         self.assertIsNone(gate.PAT.search("await import('@/platform/p6/consolidationFlag')"))
         self.assertIsNone(gate.PAT.search("import { learnStyle } from '../platform/p6/learningPath'"))
 
+    def test_normalised_store_import_spellings_are_reported(self):
+        samples = [
+            "import { InMemoryMasterStore } from '@/platform/p6/./masterStore'",
+            'await import("@/platform/p6/learning/../masterStore")',
+            "const store = require('../platform/p6/./masterStore.ts')",
+            'import { writeMaster } from "@/platform/p6/foo/../masterStore.js"',
+            "await import(`@/platform/p6/./masterStore`)",
+            "import '@/platform/p6/./masterStore'",
+            "from '../../platform/p6/masterStore/../../p6/masterStore'",
+        ]
+        for sample in samples:
+            self.assertIsNotNone(gate.PAT.search(sample), sample)
+        self.assertIsNone(gate.PAT.search("import { learnStyle } from '@/platform/p6/./learningPath'"))
+        self.assertIsNone(gate.PAT.search("await import('@/platform/p6/masterStorefront')"))
+
     def test_an_unrelated_insert_is_not_a_master_write(self):
         self.assertIsNone(gate.PAT.search("INSERT INTO public.users (id) VALUES ('a')"))
         self.assertIsNone(gate.PAT.search("UPDATE master SET x = 1"))

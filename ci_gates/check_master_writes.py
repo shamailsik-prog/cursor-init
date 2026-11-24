@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """master-write-guard — only P6 may write master tables / master_versions."""
-import re, pathlib, sys
+import posixpath, re, pathlib, sys
 
 ALLOWED_PREFIXES = (
     "platform/p6/",
@@ -32,9 +32,6 @@ _OTHER = re.compile(
     r"|import\s*\{[^}]*\bwriteMaster\b[^}]*\}\s*from\s*['\"]@/platform/p6/masterStore['\"]"
     r"""|\[['"]writeMaster['"]\]\s*\("""
     r"|@/platform/p6/masterWrite"
-    r"|import\s*\(\s*['\"`][^'\"`]*platform/p6/masterStore(?:\.[cm]?[jt]s)?['\"`]"
-    r"|require\s*\(\s*['\"`][^'\"`]*platform/p6/masterStore(?:\.[cm]?[jt]s)?['\"`]"
-    r"|from\s*['\"`][^'\"`]*platform/p6/masterStore(?:\.[cm]?[jt]s)?['\"`]"
     r"|collection\(\s*['\"]master_versions['\"]"
     r"|match\s+/master_versions/",
     re.I,
@@ -54,10 +51,39 @@ def _protected(verb: str, token: str) -> bool:
     return name == "change_proposals" or name.startswith("master_")
 
 
+_SPECIFIER = re.compile(
+    r"""(?:(?<!\.)\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*|\bfrom\s+)['"`]([^'"`]+)['"`]"""
+)
+_STORE_EXTENSIONS = (".mjs", ".cjs", ".mts", ".cts", ".tsx", ".jsx", ".ts", ".js")
+
+
+def names_master_store(spec: str) -> bool:
+    text = spec.strip()
+    if text.startswith("@/"):
+        text = text[2:]
+    text = text.split("?", 1)[0].split("#", 1)[0]
+    text = posixpath.normpath(text)
+    for ext in _STORE_EXTENSIONS:
+        if text.endswith(ext):
+            text = text[: -len(ext)]
+            break
+    return text == "platform/p6/masterStore" or text.endswith("/platform/p6/masterStore")
+
+
+def store_import(text: str):
+    for hit in _SPECIFIER.finditer(text):
+        if names_master_store(hit.group(1)):
+            return hit
+    return None
+
+
 def matches(text: str):
     other = _OTHER.search(text)
     if other:
         return other
+    imported = store_import(text)
+    if imported:
+        return imported
     for hit in _WRITE.finditer(text):
         if _protected(hit.group(1), hit.group(2)):
             return hit
