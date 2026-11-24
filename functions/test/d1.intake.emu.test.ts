@@ -19,6 +19,7 @@ import {
   routeIntake,
   type IntakeClassifier,
 } from "../src/d1/intake/ops"
+import { anonymiseApplied, retentionTestSeam } from "../src/retention/config"
 import { anonymiseUnpromotedIntakes } from "../src/retention/unpromotedIntake"
 import { routeByRules } from "../src/d1/intake/route"
 import { reconcileNameIndex } from "../src/d1/conflict/nameIndex"
@@ -36,6 +37,7 @@ import { registryRecorder } from "./setup/registryWriteRecorder"
 const FLAG = "SIKANDER_FLAG_D1_INTAKE"
 const resolveReview = viaApi<{ result: string; hits: Array<{ outcome: string; type: string; review?: unknown }> }>("resolveReviewItem")
 const waive = viaApi<{ decision: string }>("recordPartnerWaiver")
+const getResult = viaApi<{ subjects: Array<{ role: string; name: string; keys: Record<string, string> }> }>("getConflictResult")
 const NOTE20 = "Same person on the role-crossing hit."
 const NOTE50 = "Partner waiver: the clients are not adverse in substance, informed consent is on file."
 
@@ -44,6 +46,8 @@ const claims = (firmId: string, role: string, clearanceLevel = "privileged-restr
 afterEach(() => {
   delete process.env[FLAG]
   intakeTestSeam.afterClaim = undefined
+  intakeTestSeam.beforeMutate = undefined
+  retentionTestSeam.honourUnpromotedLegalHold = undefined
 })
 
 describe("intake flag, classifier and routing (no emulator)", () => {
@@ -116,6 +120,13 @@ describe("intake flag, classifier and routing (no emulator)", () => {
     expect(twice).toEqual(once)
     expect(routeByRules({ practiceArea: null, followUp: false }, rules)).toEqual({ queue: "follow_up", assigneeId: null })
     expect(routeByRules({ practiceArea: "criminal", followUp: true }, rules)).toEqual({ queue: "follow_up", assigneeId: null })
+  })
+
+  it("reads a dotted anonymise key from the literal field or the nested path", () => {
+    const fields = { text: null, "prospect.name": null, "prospect.phone": null, "prospect.email": null, "prospect.opposingParties": null }
+    expect(anonymiseApplied({ text: null, "prospect.name": null, "prospect.phone": null, "prospect.email": null, "prospect.opposingParties": null }, fields)).toBe(true)
+    expect(anonymiseApplied({ text: null, prospect: { name: null, phone: null, email: null, opposingParties: null } }, fields)).toBe(true)
+    expect(anonymiseApplied({ text: "Secret enquiry", prospect: { name: null, phone: null, email: null, opposingParties: null } }, fields)).toBe(false)
   })
 })
 
@@ -566,8 +577,263 @@ describe.skipIf(!EMULATORS)("client intake (emulator)", () => {
     expect((await adminDb().collection("intakes").doc(promoted.intakeId).get()).get("prospect.name")).toBe("Promoted Prospect")
     expect((await adminDb().collection("intakes").doc(outsider.intakeId).get()).get("text")).toBe("Other firm secret")
     expect(done.matterId).toBeTruthy()
+    const again = await anonymiseUnpromotedIntakes({ firmId, olderThanMs: Date.now() - 24 * 60 * 60 * 1000 })
+    expect(again).toEqual({ intakes: 0, messages: 0 })
+  }, 60_000)
+
+  it("a confidential partner cannot read a privileged intake's identities through getConflictResult", async () => {
+    const firmId = await newFirm()
+    const top = await asCaller(firmId, "partner", "privileged-restricted")
+    const low = await asCaller(firmId, "partner", "confidential")
+    const seed = await createIntake(top.caller, { text: "Please file a civil suit", prospect: prospect("Seed Client"), classification: "confidential" })
+    const registered = await promoteToClient(top.caller, seed.intakeId, { confirmedBy: top.uid })
+    const matter = adminDb().collection("matters").doc()
+    await matter.set({
+      firmId,
+      clientId: registered.clientId,
+      matterNo: "NHS/2026/0012",
+      title: "Earlier matter",
+      stage: "pre_filing",
+      status: "live",
+      conflictCheckId: registered.conflictCheckId,
+      classification: "confidential",
+    })
+    await adminDb().collection("matter_parties").add({
+      firmId,
+      matterId: matter.id,
+      role: "opposing",
+      name: "Privileged Prospect",
+      keys: {},
+      matterClassification: "confidential",
+      matterStatus: "live",
+      classification: "confidential",
+    })
+    await reconcileNameIndex(firmId)
+    const phone = "03007654321"
+    const cnic = "4210112345671"
+    const intake = await createIntake(top.caller, {
+      text: "Privileged instructions for counsel",
+      classification: "privileged",
+      prospect: prospect("Privileged Prospect", { phone, email: "privileged@example.test", opposingParties: [{ name: "Nargis Opponent", cnic }] }),
+    })
+    const blocked = await promoteToClient(top.caller, intake.intakeId, { confirmedBy: top.uid }).then(
+      () => {
+        throw new Error("expected the unresolved conflict to block")
+      },
+      (err: unknown) => err as IntakeRefusal
+    )
+    expect(blocked).toMatchObject({ status: 409, code: "conflict_blocked" })
+    const checkId = blocked.conflictCheckId as string
+    const seen = await getResult({ token: top.token, data: { firmId, checkId } } as never)
+    const seenText = JSON.stringify(seen.subjects)
+    expect(seenText).toContain("Privileged Prospect")
+    expect(seenText).toContain("Nargis Opponent")
+    expect(seenText).toContain("+923007654321")
+    expect(seenText).toContain(cnic)
+    const leaked = await getResult({ token: low.token, data: { firmId, checkId } } as never).then(
+      (body) => JSON.stringify(body),
+      (err: unknown) => err as { status?: number; code?: string; message?: string }
+    )
+    expect(leaked).toMatchObject({ status: 403, code: "exceeds_own_clearance" })
+    expect(JSON.stringify(leaked)).not.toContain("Privileged Prospect")
+    expect(JSON.stringify(leaked)).not.toContain("Nargis Opponent")
+    expect(JSON.stringify(leaked)).not.toContain(cnic)
+  }, 60_000)
+
+  it("classify during promotion cannot reopen the intake or lower its label", async () => {
+    const firmId = await newFirm()
+    const { caller, uid } = await asCaller(firmId, "partner")
+    const intake = await createIntake(caller, {
+      text: "Please file a civil suit",
+      classification: "privileged",
+      prospect: prospect("Race Prospect"),
+    })
+    const held = holdBeforeMutate()
+    const raced = classifyIntake(caller, intake.intakeId)
+    expect(await held.ready()).toBe(true)
+    const promoted = await promoteToClient(caller, intake.intakeId, { confirmedBy: uid })
+    held.release()
+    await expect(raced).rejects.toMatchObject({ status: 409, code: "already_promoted" })
+    const stored = await getIntakeThread(caller, intake.intakeId)
+    expect(stored.intake).toMatchObject({ status: "promoted", matterId: promoted.matterId, classification: "privileged" })
+  }, 60_000)
+
+  it("route during promotion cannot assign the intake after it is promoted", async () => {
+    const firmId = await newFirm()
+    const { caller, uid } = await asCaller(firmId, "partner")
+    const intake = await createIntake(caller, { text: "Please file a civil suit", prospect: prospect("Route Race"), classification: "confidential" })
+    const held = holdBeforeMutate()
+    const raced = routeIntake(caller, intake.intakeId, [{ practiceArea: "civil", assigneeId: uid }])
+    expect(await held.ready()).toBe(true)
+    const promoted = await promoteToClient(caller, intake.intakeId, { confirmedBy: uid })
+    held.release()
+    await expect(raced).rejects.toMatchObject({ status: 409, code: "already_promoted" })
+    const stored = await getIntakeThread(caller, intake.intakeId)
+    expect(stored.intake).toMatchObject({ status: "promoted", matterId: promoted.matterId, assigneeId: null })
+  }, 60_000)
+
+  it("close during promotion opens no matter", async () => {
+    const firmId = await newFirm()
+    const { caller, uid } = await asCaller(firmId, "partner")
+    const intake = await createIntake(caller, { text: "Please file a civil suit", prospect: prospect("Close Race"), classification: "confidential" })
+    intakeTestSeam.afterClaim = async () => {
+      await closeIntake(caller, intake.intakeId, "The enquirer withdrew.")
+    }
+    await expect(promoteToClient(caller, intake.intakeId, { confirmedBy: uid })).rejects.toMatchObject({ status: 409, code: "intake_closed" })
+    expect(await counts(firmId)).toEqual({ clients: 0, checks: 0, matters: 0 })
+    const stored = await getIntakeThread(caller, intake.intakeId)
+    expect(stored.intake.status).toBe("closed")
+    expect(stored.intake.matterId).toBeNull()
+  }, 60_000)
+
+  it("one anonymised intake does not fail the firm's list, and a direct read is not found", async () => {
+    const firmId = await newFirm()
+    const { caller } = await asCaller(firmId, "partner")
+    const secret = await createIntake(caller, { text: "Secret enquiry", prospect: prospect("Farid Secret") })
+    const live = await createIntake(caller, { text: "Please file a civil suit", prospect: prospect("Live Prospect") })
+    await anonymiseUnpromotedIntakes({ firmId, intakeId: secret.intakeId })
+    const listed = await listIntakes(caller)
+    expect(listed.items.map((row) => row.intakeId)).toEqual([live.intakeId])
+    expect(JSON.stringify(listed)).not.toContain("Farid Secret")
+    expect(JSON.stringify(listed)).not.toContain("Secret enquiry")
+    await expect(getIntakeThread(caller, secret.intakeId)).rejects.toMatchObject({ status: 404, code: "not_found" })
+  }, 60_000)
+
+  it("a dotted anonymise key stored as a literal field is already anonymised", async () => {
+    const firmId = await newFirm()
+    const id = uniq("intake")
+    await adminDb().collection("intakes").doc(id).set({
+      firmId,
+      matterId: null,
+      text: null,
+      "prospect.name": null,
+      "prospect.phone": null,
+      "prospect.email": null,
+      "prospect.opposingParties": null,
+      createdAt: Timestamp.fromMillis(Date.now() - 10 * 24 * 60 * 60 * 1000),
+    })
+    const swept = await anonymiseUnpromotedIntakes({ firmId, olderThanMs: Date.now() })
+    expect(swept.intakes).toBe(0)
+  }, 60_000)
+
+  it("the class-wide legal hold guard stops the unpromoted sweep", async () => {
+    const firmId = await newFirm()
+    const { caller } = await asCaller(firmId, "partner")
+    const intake = await createIntake(caller, { text: "Hold this enquiry", prospect: prospect("Held Prospect") })
+    const past = Timestamp.fromMillis(Date.now() - 10 * 24 * 60 * 60 * 1000)
+    await adminDb().collection("intakes").doc(intake.intakeId).update({ createdAt: past })
+    retentionTestSeam.honourUnpromotedLegalHold = true
+    const swept = await anonymiseUnpromotedIntakes({ firmId, olderThanMs: Date.now() })
+    expect(swept).toEqual({ intakes: 0, messages: 0 })
+    expect((await adminDb().collection("intakes").doc(intake.intakeId).get()).get("text")).toBe("Hold this enquiry")
+    expect((await adminDb().collection("intakes").doc(intake.intakeId).get()).get("prospect.name")).toBe("Held Prospect")
+  }, 60_000)
+
+  it("guard: createIntake(null) is 400 invalid_subjects", async () => {
+    const firmId = await newFirm()
+    const { caller } = await asCaller(firmId, "partner")
+    await expect(createIntake(caller, null as never)).rejects.toMatchObject({ status: 400, code: "invalid_subjects" })
+    expect((await adminDb().collection("intakes").where("firmId", "==", firmId).get()).size).toBe(0)
+  }, 60_000)
+
+  it("guard: an unusable email is refused and writes no intake", async () => {
+    const firmId = await newFirm()
+    const { caller } = await asCaller(firmId, "associate")
+    await expect(createIntake(caller, { text: "Please call", prospect: prospect("Email Prospect", { email: "not-an-email" }) })).rejects.toMatchObject({ status: 400, code: "invalid_subjects" })
+    expect((await adminDb().collection("intakes").where("firmId", "==", firmId).get()).size).toBe(0)
+  }, 60_000)
+
+  it("guard: an opposing CNIC that does not normalise is refused", async () => {
+    const firmId = await newFirm()
+    const { caller } = await asCaller(firmId, "associate")
+    await expect(createIntake(caller, {
+      text: "Please call",
+      prospect: prospect("Cnic Prospect", { opposingParties: [{ name: "Other Side", cnic: "12" }] }),
+    })).rejects.toMatchObject({ status: 400, code: "invalid_subjects" })
+    expect((await adminDb().collection("intakes").where("firmId", "==", firmId).get()).size).toBe(0)
+  }, 60_000)
+
+  it("guard: a classification above the caller is refused", async () => {
+    const firmId = await newFirm()
+    const { caller } = await asCaller(firmId, "associate", "internal")
+    await expect(createIntake(caller, { text: "Please file a civil suit", classification: "privileged", prospect: prospect("Too High") })).rejects.toMatchObject({ status: 403, code: "exceeds_own_clearance" })
+    expect((await adminDb().collection("intakes").where("firmId", "==", firmId).get()).size).toBe(0)
+  }, 60_000)
+
+  it("guard: an empty enquiry is refused", async () => {
+    const firmId = await newFirm()
+    const { caller } = await asCaller(firmId, "associate")
+    await expect(createIntake(caller, { text: "   ", prospect: prospect("Blank Text") })).rejects.toMatchObject({ status: 400, code: "invalid_subjects" })
+    expect((await adminDb().collection("intakes").where("firmId", "==", firmId).get()).size).toBe(0)
+  }, 60_000)
+
+  it("guard: a close reason over 500 characters is refused and the intake stays open", async () => {
+    const firmId = await newFirm()
+    const { caller } = await asCaller(firmId, "partner")
+    const intake = await createIntake(caller, { text: "Please file a civil suit", prospect: prospect("Long Reason") })
+    await expect(closeIntake(caller, intake.intakeId, "x".repeat(501))).rejects.toMatchObject({ status: 400, code: "invalid_subjects" })
+    expect((await getIntakeThread(caller, intake.intakeId)).intake.status).toBe("open")
+  }, 60_000)
+
+  it("guard: routeIntake rejects a rules value that is not an array", async () => {
+    const firmId = await newFirm()
+    const { caller } = await asCaller(firmId, "partner")
+    const intake = await createIntake(caller, { text: "Please file a civil suit", prospect: prospect("Bad Rules") })
+    await expect(routeIntake(caller, intake.intakeId, null as never)).rejects.toMatchObject({ status: 400, code: "invalid_subjects" })
+    expect((await getIntakeThread(caller, intake.intakeId)).intake.status).toBe("open")
+  }, 60_000)
+
+  it("guard: a clerk cannot promote an intake", async () => {
+    const firmId = await newFirm()
+    const { caller, uid } = await asCaller(firmId, "clerk")
+    const partner = await asCaller(firmId, "partner")
+    const intake = await createIntake(partner.caller, { text: "Please file a civil suit", prospect: prospect("Clerk Target"), classification: "internal" })
+    const before = await counts(firmId)
+    await expect(promoteToClient(caller, intake.intakeId, { confirmedBy: uid })).rejects.toMatchObject({ status: 400, code: "confirmation_required" })
+    expect(await counts(firmId)).toEqual(before)
+  }, 60_000)
+
+  it("guard: a rule whose assignee is a clerk goes to the follow-up queue", async () => {
+    const firmId = await newFirm()
+    const partner = await asCaller(firmId, "partner")
+    const clerk = await asCaller(firmId, "clerk")
+    const intake = await createIntake(partner.caller, { text: "Please file a civil suit", prospect: prospect("Clerk Assignee") })
+    const routed = await routeIntake(partner.caller, intake.intakeId, [{ practiceArea: "civil", assigneeId: clerk.uid }])
+    expect(routed).toMatchObject({ queue: "follow_up", assigneeId: null, status: "follow_up" })
+  }, 60_000)
+
+  it("guard: classify and route of a closed intake leave it closed", async () => {
+    const firmId = await newFirm()
+    const { caller, uid } = await asCaller(firmId, "partner")
+    const intake = await createIntake(caller, { text: "Please file a civil suit", prospect: prospect("Closed Again") })
+    await closeIntake(caller, intake.intakeId, "Withdrawn")
+    await expect(classifyIntake(caller, intake.intakeId)).rejects.toMatchObject({ status: 409, code: "intake_closed" })
+    await expect(routeIntake(caller, intake.intakeId, [{ practiceArea: "civil", assigneeId: uid }])).rejects.toMatchObject({ status: 409, code: "intake_closed" })
+    expect((await getIntakeThread(caller, intake.intakeId)).intake).toMatchObject({ status: "closed", assigneeId: null })
+  }, 60_000)
+
+  it("guard: classify does not lower a privileged intake to internal", async () => {
+    const firmId = await newFirm()
+    const { caller } = await asCaller(firmId, "partner")
+    const intake = await createIntake(caller, { text: "Please file a civil suit", classification: "privileged", prospect: prospect("Still Privileged") })
+    const classified = await classifyIntake(caller, intake.intakeId)
+    expect(classified.classification).toBe("privileged")
+    expect((await adminDb().collection("intakes").doc(intake.intakeId).get()).get("classification")).toBe("privileged")
   }, 60_000)
 })
+
+function holdBeforeMutate(): { release: () => void; ready: () => Promise<boolean> } {
+  let release: () => void = () => {}
+  let entered = false
+  const hold = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  intakeTestSeam.beforeMutate = async () => {
+    entered = true
+    await hold
+  }
+  return { release, ready: () => waitFor(async () => entered) }
+}
 
 async function waitFor(ready: () => Promise<boolean>): Promise<boolean> {
   for (let i = 0; i < 50; i += 1) {

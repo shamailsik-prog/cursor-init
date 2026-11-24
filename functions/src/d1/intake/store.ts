@@ -135,10 +135,18 @@ function withinClearance(data: DocumentData | undefined, clearance: Classificati
   return isKnownClassification(data?.classification) && rankOf(data.classification) <= rankOf(clearance)
 }
 
+/** An anonymised row has its text or prospect name cleared. It is absent, not a firm-wide 409. */
+function anonymisedIntake(data: DocumentData): boolean {
+  if (data.text === null) return true
+  const prospect = data.prospect
+  if (!prospect || typeof prospect !== "object" || Array.isArray(prospect)) return false
+  return (prospect as { name?: unknown }).name === null
+}
+
 export async function readIntake(firmId: string, intakeId: string, clearance: Classification): Promise<IntakeRecord | null> {
   assertEnabled()
   const data = (await intakes().doc(intakeId).get()).data()
-  if (!data || data.firmId !== firmId || !withinClearance(data, clearance)) return null
+  if (!data || data.firmId !== firmId || !withinClearance(data, clearance) || anonymisedIntake(data)) return null
   return intakeFrom(intakeId, firmId, data)
 }
 
@@ -148,7 +156,7 @@ export async function listFirmIntakes(firmId: string, clearance: Classification)
   const items: IntakeRecord[] = []
   for (const doc of snap.docs) {
     const data = doc.data()
-    if (!withinClearance(data, clearance)) continue
+    if (!withinClearance(data, clearance) || anonymisedIntake(data)) continue
     const row = intakeFrom(doc.id, firmId, data)
     if (row) items.push(row)
   }
@@ -183,17 +191,57 @@ export async function insertIntake(row: IntakeWrite, messageText: string): Promi
   return stored
 }
 
-export async function patchIntake(firmId: string, intakeId: string, clearance: Classification, patch: Partial<IntakeWrite>): Promise<IntakeRecord> {
+const CLAIM_TTL_MS = 120_000
+
+function liveClaim(data: DocumentData): boolean {
+  const existing = data.promotionClaim as { token?: unknown } | undefined
+  const at = data.promotionClaimAt
+  const age = at instanceof Timestamp ? Date.now() - at.toMillis() : 0
+  return Boolean(existing && typeof existing.token === "string" && age < CLAIM_TTL_MS)
+}
+
+/**
+ * One transactional write. `mutate` (classify, route, close) refuses a promoted row and a live
+ * promotion claim, except a close, which may record `closed` so the in-flight promotion can see
+ * it and stop. `promotion` is the claim owner's write: it refuses a row a close already won.
+ * A patch never lowers the stored classification.
+ */
+export async function patchIntake(
+  firmId: string,
+  intakeId: string,
+  clearance: Classification,
+  patch: Partial<IntakeWrite>,
+  mode: "mutate" | "promotion" = "mutate"
+): Promise<IntakeRecord> {
   assertEnabled()
-  const current = await readIntake(firmId, intakeId, clearance)
-  if (!current) throw new HttpError(404, "not_found")
-  await intakes().doc(intakeId).update(JSON.parse(JSON.stringify(patch)) as Partial<IntakeWrite>)
+  const ref = intakes().doc(intakeId)
+  await adminDb().runTransaction(async (tx) => {
+    const data = (await tx.get(ref)).data()
+    if (!data || data.firmId !== firmId || !withinClearance(data, clearance) || anonymisedIntake(data)) {
+      throw new HttpError(404, "not_found")
+    }
+    if (mode === "mutate") {
+      if (data.status === "promoted") throw new HttpError(409, "already_promoted")
+      if (data.status === "closed") throw new HttpError(409, "intake_closed")
+      if (liveClaim(data) && patch.status !== "closed") throw new HttpError(409, "promotion_in_progress")
+    } else if (data.status === "closed") {
+      throw new HttpError(409, "intake_closed")
+    }
+    const body = JSON.parse(JSON.stringify(patch)) as Record<string, unknown>
+    if (
+      typeof body.classification === "string" &&
+      isKnownClassification(data.classification) &&
+      isKnownClassification(body.classification) &&
+      rankOf(body.classification) < rankOf(data.classification)
+    ) {
+      body.classification = data.classification
+    }
+    tx.update(ref, body)
+  })
   const stored = await readIntake(firmId, intakeId, clearance)
   if (!stored) throw new HttpError(404, "not_found")
   return stored
 }
-
-const CLAIM_TTL_MS = 120_000
 
 export type PromotionClaim = { token: string; uid: string }
 

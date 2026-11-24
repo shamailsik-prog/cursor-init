@@ -15,8 +15,12 @@ import { CHECK_VALIDITY_MS, openMatterOp } from "../matter/ops"
 import { claimPromotion, patchIntake, readIntake, releasePromotionClaim, stampMessageMatter } from "./store"
 import type { IntakeRecord, PromoteResult, WaiverRef } from "./types"
 
-/** Test-only hold after the claim and before a check or a client is created. Unset in production. */
-export const intakeTestSeam: { afterClaim?: () => Promise<void> } = {}
+/**
+ * Test-only seams. Unset in production.
+ * `afterClaim` holds after the claim and before a check or a client is created.
+ * `beforeMutate` holds classify, route and close after they have read the row and before they patch it.
+ */
+export const intakeTestSeam: { afterClaim?: () => Promise<void>; beforeMutate?: () => Promise<void> } = {}
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -81,7 +85,7 @@ async function loadCheck(checkId: string, firmId: string): Promise<DocumentData>
 
 async function remember(caller: Caller, intake: IntakeRecord, checkId: string): Promise<void> {
   if (intake.conflictCheckId === checkId) return
-  await patchIntake(intake.firmId, intake.intakeId, caller.clearanceLevel, { conflictCheckId: checkId })
+  await patchIntake(intake.firmId, intake.intakeId, caller.clearanceLevel, { conflictCheckId: checkId }, "promotion")
 }
 
 /**
@@ -137,7 +141,7 @@ async function finish(intake: IntakeRecord, caller: Caller, clientId: string, ma
     confirmedBy: caller.uid,
     waiver: ref,
     followUp: false,
-  })
+  }, "promotion")
   await stampMessageMatter(intake.firmId, intake.intakeId, matterId)
   return resultOf(saved, clientId, matterId, checkId, ref)
 }
@@ -180,9 +184,16 @@ async function promotedResult(caller: Caller, intakeId: string): Promise<Promote
   return resultOf(fresh, fresh.clientId, fresh.matterId, fresh.conflictCheckId, fresh.waiver)
 }
 
-async function runPromotion(caller: Caller, intake: IntakeRecord): Promise<PromoteResult> {
+async function stillOpen(caller: Caller, intakeId: string): Promise<IntakeRecord> {
+  const fresh = await readIntake(caller.firmId, intakeId, caller.clearanceLevel)
+  if (!fresh) throw new HttpError(404, "not_found")
+  if (fresh.status === "closed") throw new HttpError(409, "intake_closed")
+  return fresh
+}
+
+async function runPromotion(caller: Caller, loaded: IntakeRecord): Promise<PromoteResult> {
   if (process.env.NODE_ENV !== "production") await intakeTestSeam.afterClaim?.()
-  if (intake.status === "closed") throw new HttpError(409, "intake_closed")
+  let intake = await stillOpen(caller, loaded.intakeId)
   if (intake.status === "promoted" && intake.clientId && intake.matterId && intake.conflictCheckId) {
     await stampMessageMatter(intake.firmId, intake.intakeId, intake.matterId)
     return resultOf(intake, intake.clientId, intake.matterId, intake.conflictCheckId, intake.waiver)
@@ -190,6 +201,7 @@ async function runPromotion(caller: Caller, intake: IntakeRecord): Promise<Promo
   if (rankOf(intake.classification) > rankOf(caller.clearanceLevel)) throw new HttpError(403, "exceeds_own_clearance")
   if (intake.prospect.type === null) throw new HttpError(409, "follow_up_required")
   if (!intake.prospect.phone) throw new HttpError(400, "invalid_subjects")
+  const phone = intake.prospect.phone
   if (intake.prospect.opposingParties.length < 1) throw new HttpError(409, "opposing_required")
 
   let checkId = intake.conflictCheckId
@@ -197,12 +209,12 @@ async function runPromotion(caller: Caller, intake: IntakeRecord): Promise<Promo
     const loaded = await raiseFloor(checkId, intake.classification, await loadCheck(checkId, caller.firmId))
     const boundAlready = typeof loaded.boundMatterId === "string" && loaded.boundMatterId !== ""
     if (!boundAlready && unusable(loaded)) {
-      await patchIntake(intake.firmId, intake.intakeId, caller.clearanceLevel, { conflictCheckId: null })
+      await patchIntake(intake.firmId, intake.intakeId, caller.clearanceLevel, { conflictCheckId: null }, "promotion")
       checkId = null
     }
   }
   if (!checkId) {
-    const keys: Record<string, string> = { phone: intake.prospect.phone }
+    const keys: Record<string, string> = { phone }
     const screened = await callFirm(runConflictCheckOp, caller, {
       client: { name: intake.prospect.name, keys },
       opposingParties: intake.prospect.opposingParties.map((party) => (party.cnic ? { name: party.name, keys: { cnic: party.cnic } } : { name: party.name })),
@@ -225,21 +237,23 @@ async function runPromotion(caller: Caller, intake: IntakeRecord): Promise<Promo
   if (!cleared) throw new IntakeRefusal(409, "conflict_blocked", checkId)
 
   const label = labelFor(intake, row, caller)
+  intake = await stillOpen(caller, intake.intakeId)
   let clientId = intake.clientId
   if (!clientId) {
     const registered: RegisterResult = await callFirm(registerClientOp, caller, {
       name: intake.prospect.name,
       type: intake.prospect.type,
-      primaryMobile: intake.prospect.phone,
+      primaryMobile: phone,
       classification: label,
       ...(intake.prospect.type === "company" ? { companyName: intake.prospect.name } : {}),
       ...(intake.prospect.email ? { email: intake.prospect.email } : {}),
     })
     clientId = registered.clientId
-    await patchIntake(intake.firmId, intake.intakeId, caller.clearanceLevel, { clientId, conflictCheckId: checkId })
+    await patchIntake(intake.firmId, intake.intakeId, caller.clearanceLevel, { clientId, conflictCheckId: checkId }, "promotion")
   }
 
   await attachClientId(checkId, clientId, row.subjects)
+  intake = await stillOpen(caller, intake.intakeId)
   const courtId = intake.court?.status === "ok" ? intake.court.courtId : undefined
   const opened = await openOrFind(caller, checkId, intake.prospect.name, label, courtId)
   return finish(intake, caller, opened.clientId, opened.matterId, checkId, cleared.waiver, label)

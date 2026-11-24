@@ -8,7 +8,7 @@ import { parseName } from "../validate"
 import { normaliseCnic, normalisePhone } from "../conflict/normalise"
 import { isClientType, keywordIntakeClassifier } from "./classify"
 import { intakeEnabled } from "./flag"
-import { promoteIntake } from "./promote"
+import { intakeTestSeam, promoteIntake } from "./promote"
 import { routeByRules } from "./route"
 import { insertIntake, listFirmIntakes, listMessages, patchIntake, readIntake, type IntakeWrite } from "./store"
 import type { ClassifyOutput, CreateIntakeInput, IntakeClassifier, IntakeMessage, IntakeRecord, OpposingParty, PromoteResult, Prospect, RouteRule } from "./types"
@@ -129,8 +129,13 @@ function withClassification(intake: IntakeRecord, output: ClassifyOutput, status
   }
 }
 
+async function beforeMutate(): Promise<void> {
+  if (process.env.NODE_ENV !== "production") await intakeTestSeam.beforeMutate?.()
+}
+
 export async function createIntake(caller: Caller, input: CreateIntakeInput, classifier: IntakeClassifier = keywordIntakeClassifier): Promise<IntakeRecord> {
   assertEnabled()
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw invalid()
   await assertStaff(caller)
   const text = textOf(input.text)
   const suppliedType = input.prospect?.type
@@ -189,6 +194,7 @@ export async function classifyIntake(caller: Caller, intakeId: string, classifie
   if (intake.status === "promoted") throw new HttpError(409, "already_promoted")
   const courtRef = intake.court ? { raw: intake.court.raw, courtId: intake.court.courtId } : undefined
   const output = apply(intake.text, intake.prospect, courtRef, classifier)
+  await beforeMutate()
   return patchIntake(caller.firmId, intake.intakeId, caller.clearanceLevel, withClassification(intake, output, output.followUp ? "follow_up" : "open"))
 }
 
@@ -213,6 +219,7 @@ export async function routeIntake(caller: Caller, intakeId: string, rules: reado
   if (intake.status === "closed") throw new HttpError(409, "intake_closed")
   if (intake.status === "promoted") throw new HttpError(409, "already_promoted")
   const decision = routeByRules({ practiceArea: intake.practiceArea, followUp: intake.followUp }, await lawyerAssignees(caller.firmId, rules))
+  await beforeMutate()
   return patchIntake(caller.firmId, intake.intakeId, caller.clearanceLevel, {
     status: decision.queue === "lawyer" ? "routed" : "follow_up",
     queue: decision.queue,
@@ -233,6 +240,7 @@ export async function closeIntake(caller: Caller, intakeId: string, reason?: str
     if (closeReason.length > 500) throw invalid()
     if (closeReason === "") closeReason = null
   }
+  await beforeMutate()
   return patchIntake(caller.firmId, intake.intakeId, caller.clearanceLevel, { status: "closed", closeReason, queue: null, assigneeId: null })
 }
 

@@ -187,6 +187,9 @@ export const runConflictCheckOp: FirmOperation<DisclosedCheck> = {
 /**
  * getConflictResult(?checkId=) → the check as the reader may see it. Readable by its requester
  * or a partner of the same firm; anyone else, another firm or a missing id → 404 not_found.
+ * A caller cleared below the check's classification → 403 exceeds_own_clearance, before any
+ * subject (prospect name, phone, opponent name, opponent CNIC) is returned. Knowing the id
+ * from audit_log is not a clearance.
  */
 export const getConflictResultOp: FirmOperation<DisclosedCheck> = {
   auth: "firm",
@@ -201,10 +204,7 @@ export const getConflictResultOp: FirmOperation<DisclosedCheck> = {
     if (!isSafeDocId(checkId)) throw new HttpError(400, "invalid_query")
     audit.target = `conflict_checks/${checkId}`
     const row = (await checks().doc(checkId).get()).data()
-    if (!row || row.firmId !== caller.firmId || (row.requestedBy !== caller.uid && caller.role !== "partner")) {
-      throw new HttpError(404, "not_found")
-    }
-    const stored = storedCheck(checkId, row)
+    const stored = gateCheck(caller, checkId, row)
     const members = await memberMatters(caller, matterIdsOf(stored))
     await audit.allow()
     return discloseFor(caller, stored, members)

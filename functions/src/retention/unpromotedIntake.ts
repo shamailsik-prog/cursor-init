@@ -1,6 +1,6 @@
 import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { adminDb } from "../admin"
-import { inventory, type InventoryStore } from "./config"
+import { activePolicy, anonymiseApplied, inventory, retentionClassOf, retentionTestSeam, type InventoryStore } from "./config"
 
 /**
  * Firm-scoped reach for an intake that has no matter yet (L2, L5). The matter-deletion query
@@ -34,17 +34,18 @@ function ageMs(data: DocumentData): number | null {
   return null
 }
 
-function readPath(data: DocumentData, field: string): unknown {
-  let cur: unknown = data
-  for (const part of field.split(".")) {
-    if (!cur || typeof cur !== "object") return undefined
-    cur = (cur as Record<string, unknown>)[part]
-  }
-  return cur
+function alreadyApplied(data: DocumentData, fields: Record<string, string | number | null>): boolean {
+  return anonymiseApplied(data, fields)
 }
 
-function alreadyApplied(data: DocumentData, fields: Record<string, string | number | null>): boolean {
-  return Object.entries(fields).every(([field, value]) => readPath(data, field) === value)
+/**
+ * TODO(W1-Q09A): honour the class-wide legal hold once it is wired for this sweep.
+ * The shipped policy keeps matter_record and matter_content on legalHold while their action
+ * stays retain, so the hold is not a deletion block yet. The seam turns the guard on.
+ */
+function classHoldBlocks(store: InventoryStore): boolean {
+  if (process.env.NODE_ENV === "production" || retentionTestSeam.honourUnpromotedLegalHold !== true) return false
+  return activePolicy().classes[retentionClassOf(store)]?.legalHold === true
 }
 
 function selected(data: DocumentData, spec: UnpromotedSweep, intakeId?: string): boolean {
@@ -72,8 +73,11 @@ async function sweep(collection: string, spec: UnpromotedSweep, fields: Record<s
 
 /** Anonymise unpromoted intake rows and their messages. A promoted row is left as it is. */
 export async function anonymiseUnpromotedIntakes(spec: UnpromotedSweep): Promise<{ intakes: number; messages: number }> {
-  const intakes = named(storeOf("firestore:intakes"), INTAKE_PII)
-  const messages = named(storeOf("firestore:intake_messages"), MESSAGE_PII)
+  const intakeStore = storeOf("firestore:intakes")
+  const messageStore = storeOf("firestore:intake_messages")
+  if (classHoldBlocks(intakeStore) || classHoldBlocks(messageStore)) return { intakes: 0, messages: 0 }
+  const intakes = named(intakeStore, INTAKE_PII)
+  const messages = named(messageStore, MESSAGE_PII)
   return {
     intakes: await sweep("intakes", spec, intakes, "doc"),
     messages: await sweep("intake_messages", spec, messages, "intakeId"),

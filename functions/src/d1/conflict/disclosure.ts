@@ -8,8 +8,9 @@ import type { Hit, IdentityBasis, Outcome, Subject } from "./match"
  * `matterNo`, `matterClassification`) only for a matter they are a member of and cleared for;
  * a partner sees it when their clearance covers the matter's classification. Otherwise those
  * fields read "restricted". A hit with no matter shows its classification only to a reader
- * cleared for it. Outcome, hit count, subject, hit role, conflict type, identity basis and matched
- * name are always shown; a hit's internal candidate id never is. The partner waiver is shown to a
+ * cleared for it. Outcome, hit count, hit role, conflict type, identity basis and matched
+ * name are always shown. Subject name and identity keys are shown only to a reader cleared for
+ * the check's classification. A hit's internal candidate id never is. The partner waiver is shown to a
  * reader cleared for the check's classification. No rule number is ever part of a check.
  */
 
@@ -83,6 +84,7 @@ export function discloseFor(reader: Reader, check: StoredCheck, memberMatterIds:
   const bound = check.boundMatterId
   // The bound matter's classification is not on the check; a non-member non-partner never sees its id.
   const boundVisible = bound === null || reader.role === "partner" || memberMatterIds.has(bound)
+  const maySeeSubjects = cleared(reader, check.classification)
   return {
     checkId: check.checkId,
     requestedBy: check.requestedBy,
@@ -92,10 +94,11 @@ export function discloseFor(reader: Reader, check: StoredCheck, memberMatterIds:
     stale: check.stale,
     boundMatterId: boundVisible ? bound : RESTRICTED,
     hitCount: hits.length,
-    subjects: check.subjects,
+    // Intake-derived identity (name, phone, CNIC) is not readable below the check's label.
+    subjects: maySeeSubjects ? check.subjects : check.subjects.map((subject) => ({ role: subject.role, name: RESTRICTED, keys: {} })),
     hits,
     createdAt: check.createdAt ?? null,
-    ...(cleared(reader, check.classification) ? { waiver: check.waiver ?? null } : {}),
+    ...(maySeeSubjects ? { waiver: check.waiver ?? null } : {}),
   }
 }
 
