@@ -17,14 +17,14 @@ Only evidence on that row. There is no generic suit list for a type that names n
 | Item | Evidence on the row | Mandatory when | How it ticks |
 | --- | --- | --- | --- |
 | Pleading | Posture is writ, application, appeal, originating pleading, or responsive pleading | Always, for those postures | Manual tick |
-| Annexures | `annexureRule` or a checklist line names an annexure or an exhibit | The evidence is not conditional | Annexure ids, or a manual tick |
+| Annexures | `annexureRule` or a checklist line names an annexure, an exhibit, or says a document is annexed | The evidence is not conditional. An unconditional "annexed" line overrides a conditional exhibit rule. "if any" and "where applicable" stay optional | Annexure ids, or a manual tick |
 | Verification | The row names an affidavit or a verification | The checklist line is not conditional. "Affidavit if facts asserted" stays optional. A family annexure rule does not override that line | Affidavit id, or a manual tick |
 | Vakalatnama | A checklist line names it | The line is not conditional | Manual tick |
 | Index / docket | The row says indexed, index, or docket | The evidence is not conditional | Manual tick only |
 | Court fee | A checklist line names the court fee | The line is not conditional | Manual tick only. The line is copied. No figure is computed (E-15, OR-3) |
 | Other checklist lines | Whatever the slots did not take | Never. They stay visible so the row is not dropped | Manual tick |
 
-Conditional means the evidencing checklist line (or the rule, when no checklist line exists) contains "if", including "if any".
+Conditional means the evidencing checklist line (or the rule, when no checklist line exists) contains "if", including "if any", or "where applicable". A checklist line that states an attachment with no such phrase, such as "Death certificate annexed", makes the annexure item mandatory even when the family rule says "Exhibits, if any".
 
 A notice, a memo, or a translation whose row names none of the slots is `{ known: false }` with reason `no_filing_profile` on readiness and on the refusal. An empty or whitespace id is `empty_document_type`. Any other unknown id, including a padded real id, is `unknown_type`. `readyToFile` is false in all three.
 

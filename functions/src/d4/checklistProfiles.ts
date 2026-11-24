@@ -12,12 +12,13 @@ import type { DocumentType } from "./doctypes"
 export const FILING_POSTURES = new Set(["writ", "application", "appeal", "originating_pleading", "responsive_pleading"])
 
 const AFFIDAVIT = /\baffidavits?\b|\bverification\b/i
-const ANNEXURE = /\bannexures?\b/i
+const ANNEXURE = /\bannexures?\b|\bannexed\b/i
 const EXHIBIT = /\bexhibits?\b/i
 const VAKALATNAMA = /\bvakalatnama\b/i
 const INDEX = /\bindex(?:ed|ing)?\b|\bdocket\b/i
 const COURT_FEE = /\bcourt fee\b/i
-const CONDITIONAL = /\bif\b/i
+/** "if any" matches `if`. "where applicable" is the other conditional exhibit phrase. */
+const CONDITIONAL = /\bif\b|\bwhere applicable\b/i
 
 export type ChecklistItemKind =
   | "pleading"
@@ -87,8 +88,10 @@ function consumed(line: string): boolean {
 
 /**
  * The filing items for one verified row, in the spec's order, then the row's other
- * checklist lines. Conditional evidence ("if", "if any") is not mandatory: the row
- * itself makes that accompaniment conditional. Lines that are not one of the filing
+ * checklist lines. Conditional evidence ("if", "if any", "where applicable") is not
+ * mandatory. An unconditional "annexed" line is an annexure and overrides a
+ * conditional exhibit rule, as "Death certificate annexed" does against
+ * "Exhibits, if any". Lines that are not one of the filing
  * slots stay on the list so the row is not dropped, and they do not block filing.
  * Blocking on them would re-do the citation gate and the F06 review checklist.
  */
@@ -118,7 +121,7 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
     items.push({
       id: "annexures",
       kind: "annexures",
-      label: annexChecklist[0] ?? annexRule ?? type.annexureRule,
+      label: annexChecklist.find((line) => !CONDITIONAL.test(line)) ?? annexChecklist[0] ?? annexRule ?? type.annexureRule,
       mandatory: mandatoryFrom(annexChecklist, annexRule),
       completion: "annexures",
       autoTickWired: true,

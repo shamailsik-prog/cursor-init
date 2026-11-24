@@ -19,6 +19,7 @@ import {
   type ManualTick,
   type Produced,
 } from "@/functions/src/d4/checklist"
+import { itemsForDocumentType } from "@/functions/src/d4/checklistProfiles"
 import { getDocumentType, listDocumentTypes, type DocumentType } from "@/functions/src/d4/doctypes"
 
 const root = process.cwd()
@@ -236,6 +237,55 @@ describe("getChecklistForType (L5.4, every verified id)", () => {
 })
 
 describe("getReadiness and blockIfIncomplete", () => {
+  it("an affidavit id alone does not make a heirship affidavit ready without the death certificate", () => {
+    const type = getDocumentType("heirship_affidavit")!
+    expect(type.checklist).toContain("Death certificate annexed")
+    expect(type.annexureRule).toMatch(/\bif any\b/i)
+    const produced = { affidavitId: "aff-1" }
+    const readiness = getReadiness(type.id, produced)
+    expect(readiness.known).toBe(true)
+    if (!readiness.known) return
+    expect(readiness.readyToFile).toBe(false)
+    const missing = readiness.items.filter((entry) => readiness.missingMandatory.includes(entry.id))
+    expect(missing.map((entry) => entry.label)).toContain("Death certificate annexed")
+    expect(missing.every((entry) => entry.mandatory)).toBe(true)
+    const blocked = blockIfIncomplete(type.id, produced)
+    expect(blocked.blocked).toBe(true)
+    expect(blocked.missingMandatory).toEqual(readiness.missingMandatory)
+  })
+
+  it("treats an unconditional annexed line as a required annexure and leaves a conditional exhibit optional", () => {
+    const conditional = /\bif\b|\bwhere applicable\b/i
+    for (const type of listDocumentTypes({})) {
+      const annexed = type.checklist.filter((line) => /\bannexed\b/i.test(line) && !conditional.test(line))
+      if (annexed.length === 0) continue
+      const checklist = asKnown(type.id)
+      const slot = item(checklist, "annexures")
+      expect(slot.mandatory, type.id).toBe(true)
+      for (const line of annexed) {
+        expect(slot.sourceLines, `${type.id} ${line}`).toContain(line)
+        expect(
+          checklist.items.some((entry) => entry.kind === "type_specific" && entry.sourceLines.includes(line)),
+          type.id
+        ).toBe(false)
+      }
+    }
+    for (const id of ["affidavit", "statutory_declaration", "affidavit_in_evidence", "affidavit_of_service", "guardianship_affidavit"]) {
+      const row = getDocumentType(id)!
+      expect(row.annexureRule).toMatch(/\bif any\b/i)
+      expect(row.checklist.some((line) => /\bannexed\b/i.test(line))).toBe(false)
+      expect(item(asKnown(id), "annexures").mandatory).toBe(false)
+    }
+    const applicable = itemsForDocumentType({
+      ...getDocumentType("affidavit")!,
+      id: "exhibits_where_applicable",
+      name: "Exhibits where applicable",
+      checklist: ["Exhibits where applicable"],
+      annexureRule: "Exhibits where applicable",
+    })
+    expect(applicable.find((entry) => entry.id === "annexures")).toMatchObject({ mandatory: false })
+  })
+
   it("a missing mandatory item is not ready to file, and names that item", () => {
     const checklist = asKnown("civil_suit")
     const produced: Produced = { manualTicks: mandatoryTicks(checklist, ["court_fee"]) }
