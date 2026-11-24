@@ -53,6 +53,7 @@ describe("L5.5 label-slot grammar", () => {
     "Refer to D.",
     "Reliance is placed on D.",
     "Annexure FIR-1 is the copy.",
+    "See Annexure A - Plaint É.",
   ]
 
   it("refuses Annexure PPC when relies reaches the head", async () => {
@@ -127,7 +128,6 @@ describe("L5.5 label-slot grammar", () => {
     "Esp. D.",
     "Etc. D.",
     "cf. DEFGH.",
-    "See Annexure A - Plaint É.",
     "Annexures relate to the FIR.",
     "Annexures relate to section 302 PPC.",
     "The annexures are governed by the CPC.",
