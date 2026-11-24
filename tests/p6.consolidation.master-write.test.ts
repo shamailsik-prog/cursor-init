@@ -7,12 +7,18 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
+import pg from "pg"
+import { learningBaselinePayload } from "@/platform/p6/learning/baseline"
+import { LearningStaleError } from "@/platform/p6/learning/stale"
 import {
+  createPgMasterStore,
   InMemoryMasterStore,
   writeMaster,
   type CommitVersionInput,
   type MasterSession,
+  type MasterSnapshot,
   type MasterStore,
+  type VersionRow,
 } from "@/platform/p6/masterStore"
 import { applyChange, approveProposal, proposeChange, rollbackMaster, type ApprovalActor } from "@/platform/p6/proposeChange"
 import {
@@ -1228,4 +1234,343 @@ describe("P6 consolidation — one master writer", () => {
     expect((await memory.getProposal(pending.id))?.status).toBe("applied")
     expect(masterWriteAuditLog().some((row) => row.versionId === applied.versionId && row.outcome === "committed")).toBe(true)
   })
+
+  it("BYPASS-281-001: assigning getProposal and currentSnapshot cannot apply a pending substantive change", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    const { pending, input } = await pendingSubstantive(memory, "00000000-0000-4000-8000-000000000311", "clause.assign")
+    const realSnapshot = await memory.currentSnapshot("firmA")
+    memory.getProposal = async () => approvedLie(pending)
+    memory.currentSnapshot = async () => realSnapshot
+    await expectRefused(memory, input, pending.id)
+  })
+
+  it("BYPASS-281-001: a subclass cannot apply a pending substantive change through overridden readers", async () => {
+    const memory = new LyingStore()
+    const { pending, input } = await pendingSubstantive(memory, "00000000-0000-4000-8000-000000000312", "clause.subclass")
+    await expectRefused(memory, input, pending.id)
+  })
+
+  it("BYPASS-281-001: a prototype patch cannot apply a pending substantive change", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    const { pending, input } = await pendingSubstantive(memory, "00000000-0000-4000-8000-000000000313", "clause.proto")
+    const realSnapshot = await InMemoryMasterStore.prototype.currentSnapshot.call(memory, "firmA")
+    const originalProposal = InMemoryMasterStore.prototype.getProposal
+    const originalSnapshot = InMemoryMasterStore.prototype.currentSnapshot
+    InMemoryMasterStore.prototype.getProposal = async () => approvedLie(pending)
+    InMemoryMasterStore.prototype.currentSnapshot = async () => realSnapshot
+    try {
+      await expect(memory.commitVersion(input)).rejects.toThrow(/partner approval/)
+      expect((await originalProposal.call(memory, pending.id))?.status).toBe("pending")
+      expect(await memory.listVersions("firmA")).toEqual([])
+    } finally {
+      InMemoryMasterStore.prototype.getProposal = originalProposal
+      InMemoryMasterStore.prototype.currentSnapshot = originalSnapshot
+    }
+  })
+
+  it("BYPASS-287-001: two fresh firms do not share a mutable empty snapshot", async () => {
+    const pgStore = createPgMasterStore(emptyFirmPool())
+    const left = await pgStore.currentSnapshot("firm-fresh-a")
+    const right = await pgStore.currentSnapshot("firm-fresh-b")
+    expect(left).not.toBe(right)
+    expect(Object.isFrozen(left)).toBe(true)
+    expect(Object.isFrozen(left.entries)).toBe(true)
+    expect(() => {
+      left.entries["unproposed"] = {
+        partition: "mutable",
+        key: "unproposed",
+        body: { leaked: true },
+        classification: "confidential",
+      }
+    }).toThrow(TypeError)
+    expect(Object.keys(right.entries)).toEqual([])
+    expect(Object.keys((await pgStore.currentSnapshot("firm-fresh-a")).entries)).toEqual([])
+    expect(Object.keys((await pgStore.currentSnapshot("firm-fresh-b")).entries)).toEqual([])
+  })
+
+  it("a stale approved learning change sent to commitVersion cannot overwrite a later partner change", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    const seeded = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "seed",
+        classification: "confidential",
+        payload: { clause: "X" },
+        proposedBy: "seed-author",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.notice",
+      },
+      memory,
+    )
+    await approveProposal(seeded.id, { actorId: "seed-partner", kind: "partner", role: "partner" }, memory)
+    await applyChange(seeded.id, memory)
+    const learning = await memory.insertProposal({
+      id: "00000000-0000-4000-8000-000000000287",
+      firmId: "firmA",
+      sourceModule: "l46",
+      classification: "confidential",
+      changeClass: "substantive",
+      requestedClass: null,
+      partition: "mutable",
+      entryKey: "clause.notice",
+      payload: learningBaselinePayload({ clause: "X" }, { clause: "Y" }),
+      proposedBy: "learner-1",
+      status: "pending",
+      decidedBy: null,
+      decidedKind: null,
+      decidedRole: null,
+      declassify: false,
+      payloadHash: "pending",
+    })
+    await approveProposal(learning.id, PARTNER, memory)
+    const moved = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "partner-desk",
+        classification: "confidential",
+        payload: { clause: "Z" },
+        proposedBy: "other-author",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.notice",
+      },
+      memory,
+    )
+    await approveProposal(moved.id, { actorId: "partner_z", kind: "partner", role: "partner" }, memory)
+    await applyChange(moved.id, memory)
+    const stored = await memory.getProposal(learning.id)
+    const current = await memory.currentSnapshot("firmA")
+    const snapshot = nextSnapshot(current, stored!)
+    await expect(
+      memory.commitVersion({
+        firmId: "firmA",
+        proposalId: stored!.id,
+        action: "apply",
+        diff: { key: stored!.entryKey, partition: "mutable", before: current, after: snapshot },
+        snapshot,
+        authorId: "partner_b",
+        authorKind: "partner",
+        restoredFromVersionId: null,
+        classification: "confidential",
+        proposal: null,
+        expectedBaseVersionId: (await memory.listVersions("firmA")).at(-1)?.id ?? null,
+      }),
+    ).rejects.toBeInstanceOf(LearningStaleError)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.notice"]?.body).toEqual({ clause: "Z" })
+    expect((await memory.getProposal(learning.id))?.status).toBe("approved")
+  })
+
+  it("TEST-287-003: public currentSnapshot and getVersion cannot steer the sealed writer", async () => {
+    const snapshotStore = new ReaderHole()
+    const kept = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.keep",
+        payload: { wording: "beta" },
+        proposedBy: "learner-1",
+      },
+      snapshotStore,
+    )
+    await approveProposal(kept.id, PARTNER, snapshotStore)
+    await applyChange(kept.id, snapshotStore)
+    const attack = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.keep",
+        payload: { wording: "attacker" },
+        proposedBy: "learner-1",
+      },
+      snapshotStore,
+    )
+    await approveProposal(attack.id, PARTNER, snapshotStore)
+    const storedAttack = await snapshotStore.getProposal(attack.id)
+    const empty: MasterSnapshot = { entries: {} }
+    const attacked = nextSnapshot(empty, storedAttack!)
+    snapshotStore.lieSnapshot = empty
+    await expect(
+      snapshotStore.commitVersion({
+        firmId: "firmA",
+        proposalId: storedAttack!.id,
+        action: "apply",
+        diff: { key: storedAttack!.entryKey, partition: "mutable", before: empty, after: attacked },
+        snapshot: attacked,
+        authorId: "partner_b",
+        authorKind: "partner",
+        restoredFromVersionId: null,
+        classification: "confidential",
+        proposal: null,
+        expectedBaseVersionId: (await snapshotStore.listVersions("firmA")).at(-1)?.id ?? null,
+      }),
+    ).rejects.toThrow(/bound to the proposal/)
+    expect((await InMemoryMasterStore.prototype.currentSnapshot.call(snapshotStore, "firmA")).entries["clause.keep"]?.body).toEqual({
+      wording: "beta",
+    })
+
+    const versionStore = new ReaderHole()
+    const original = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.keep",
+        payload: { wording: "beta" },
+        proposedBy: "learner-1",
+      },
+      versionStore,
+    )
+    await approveProposal(original.id, PARTNER, versionStore)
+    const applied = await applyChange(original.id, versionStore)
+    const real = await versionStore.getVersion(applied.versionId)
+    const forged: MasterSnapshot = {
+      entries: {
+        "clause.keep": {
+          partition: "mutable",
+          key: "clause.keep",
+          body: { wording: "forged rollback" },
+          classification: "confidential",
+        },
+      },
+    }
+    versionStore.lieVersion = { ...real!, snapshot: forged }
+    const before = await InMemoryMasterStore.prototype.currentSnapshot.call(versionStore, "firmA")
+    await expect(
+      versionStore.commitVersion({
+        firmId: "firmA",
+        proposalId: null,
+        action: "rollback",
+        diff: { key: "*", partition: "mutable", before, after: forged },
+        snapshot: forged,
+        authorId: "partner_b",
+        authorKind: "partner",
+        restoredFromVersionId: applied.versionId,
+        classification: "confidential",
+        proposal: null,
+        expectedBaseVersionId: applied.versionId,
+      }),
+    ).rejects.toThrow(/bound to the proposal/)
+    expect((await InMemoryMasterStore.prototype.currentSnapshot.call(versionStore, "firmA")).entries["clause.keep"]?.body).toEqual({
+      wording: "beta",
+    })
+  })
+
+  it("TEST-281-003: the audit log does not hand back the live array", () => {
+    const live = masterWriteAuditLog()
+    const forged = {
+      action: "apply" as const,
+      firmId: "firmA",
+      proposalId: "g20",
+      actorId: "partner_b",
+      versionId: "g20-live-array",
+      outcome: "committed" as const,
+    }
+    ;(live as unknown as (typeof forged)[]).push(forged)
+    expect(masterWriteAuditLog()).not.toBe(live)
+    expect(masterWriteAuditLog().some((row) => row.versionId === "g20-live-array")).toBe(false)
+  })
 })
+
+function approvedLie(row: Awaited<ReturnType<InMemoryMasterStore["getProposal"]>> & object) {
+  return {
+    ...row,
+    status: "approved" as const,
+    decidedBy: "partner_b",
+    decidedKind: "partner" as const,
+    decidedRole: "partner" as const,
+  }
+}
+
+async function pendingSubstantive(memory: InMemoryMasterStore, id: string, entryKey: string) {
+  const pending = await memory.insertProposal({
+    id,
+    firmId: "firmA",
+    sourceModule: "15",
+    classification: "confidential",
+    changeClass: "substantive",
+    requestedClass: null,
+    partition: "mutable",
+    entryKey,
+    payload: { wording: "never approved" },
+    proposedBy: "learner-1",
+    status: "pending",
+    decidedBy: null,
+    decidedKind: null,
+    decidedRole: null,
+    declassify: false,
+    payloadHash: "pending",
+  })
+  const current = await InMemoryMasterStore.prototype.currentSnapshot.call(memory, "firmA")
+  const snapshot = nextSnapshot(current, pending)
+  const input: CommitVersionInput = {
+    firmId: "firmA",
+    proposalId: pending.id,
+    action: "apply",
+    diff: { key: pending.entryKey, partition: "mutable", before: current, after: snapshot },
+    snapshot,
+    authorId: "partner_b",
+    authorKind: "partner",
+    restoredFromVersionId: null,
+    classification: "confidential",
+    proposal: null,
+    expectedBaseVersionId: null,
+  }
+  return { pending, input }
+}
+
+async function expectRefused(memory: InMemoryMasterStore, input: CommitVersionInput, id: string) {
+  await expect(memory.commitVersion(input)).rejects.toThrow(/partner approval/)
+  expect((await InMemoryMasterStore.prototype.getProposal.call(memory, id))?.status).toBe("pending")
+  expect(await memory.listVersions("firmA")).toEqual([])
+}
+
+function emptyFirmPool(): pg.Pool {
+  const client = {
+    query: async () => ({ rows: [], rowCount: 0 }),
+    release() {},
+  }
+  return { connect: async () => client } as unknown as pg.Pool
+}
+
+class ReaderHole extends InMemoryMasterStore {
+  lieSnapshot: MasterSnapshot | null = null
+  lieVersion: VersionRow | null = null
+
+  constructor() {
+    super({ role: "p6_service" })
+  }
+
+  override async currentSnapshot(firmId: string) {
+    if (this.lieSnapshot) return this.lieSnapshot
+    return InMemoryMasterStore.prototype.currentSnapshot.call(this, firmId)
+  }
+
+  override async getVersion(id: string) {
+    if (this.lieVersion) return this.lieVersion
+    return InMemoryMasterStore.prototype.getVersion.call(this, id)
+  }
+}
+
+class LyingStore extends InMemoryMasterStore {
+  constructor() {
+    super({ role: "p6_service" })
+  }
+
+  override async getProposal(id: string) {
+    const row = await InMemoryMasterStore.prototype.getProposal.call(this, id)
+    return row ? approvedLie(row) : null
+  }
+
+  override async currentSnapshot(firmId: string) {
+    return InMemoryMasterStore.prototype.currentSnapshot.call(this, firmId)
+  }
+}
