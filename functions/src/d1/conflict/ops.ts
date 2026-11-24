@@ -8,7 +8,7 @@ import { requirePermission } from "../../p5/permission"
 import { assertDailyConflictOpen, consumeDailyConflict } from "../dailyLimit"
 import { parseKeys, parseName } from "../validate"
 import { discloseFor, matterIdsOf, type DisclosedCheck, type StoredCheck, type Waiver } from "./disclosure"
-import { clientKeys, runEngine } from "./engine"
+import { clientKeys, maxLabel, runEngine } from "./engine"
 import { summarise, type Hit, type Subject } from "./match"
 import { screeningRegistry } from "./screening"
 
@@ -23,6 +23,14 @@ const checks = () => adminDb().collection("conflict_checks")
 export const MAX_OPPOSING_PARTIES = 20
 
 const invalid = () => new HttpError(400, "invalid_subjects")
+
+/** An optional label the caller is cleared for. The stored check is at least this high, in the create. */
+function classificationFloor(raw: unknown, caller: Caller): ReturnType<typeof maxLabel> | undefined {
+  if (raw === undefined) return undefined
+  if (!isKnownClassification(raw)) throw invalid()
+  if (rankOf(raw) > rankOf(caller.clearanceLevel)) throw new HttpError(403, "exceeds_own_clearance")
+  return raw
+}
 
 const isObject = (v: unknown): v is Data => v !== null && typeof v === "object" && !Array.isArray(v)
 
@@ -136,7 +144,10 @@ export const runConflictCheckOp: FirmOperation<DisclosedCheck> = {
     // F37: the candidates that can hit these subjects, not the whole registry; 503 screening_unavailable (and a
     // reconciliation job) when the firm's name index cannot be trusted.
     const { registry } = await screeningRegistry(caller.firmId, subjects, subjectEntityIds, now)
-    const { hits, result, identityBasis, classification } = runEngine(registry, subjects, subjectEntityIds)
+    const { hits, result, identityBasis, classification: screened } = runEngine(registry, subjects, subjectEntityIds)
+    // The intake floor is part of this create. A later update that raises the label is a second write.
+    const floor = classificationFloor(data.classificationFloor, caller)
+    const classification = floor ? maxLabel(screened, floor) : screened
     const decision = result === "CLEAR" ? "cleared" : "pending"
 
     const db = adminDb()
@@ -187,6 +198,9 @@ export const runConflictCheckOp: FirmOperation<DisclosedCheck> = {
 /**
  * getConflictResult(?checkId=) → the check as the reader may see it. Readable by its requester
  * or a partner of the same firm; anyone else, another firm or a missing id → 404 not_found.
+ * A caller cleared below the check's classification → 403 exceeds_own_clearance, before any
+ * subject (prospect name, phone, opponent name, opponent CNIC) is returned. Knowing the id
+ * from audit_log is not a clearance.
  */
 export const getConflictResultOp: FirmOperation<DisclosedCheck> = {
   auth: "firm",
@@ -201,10 +215,7 @@ export const getConflictResultOp: FirmOperation<DisclosedCheck> = {
     if (!isSafeDocId(checkId)) throw new HttpError(400, "invalid_query")
     audit.target = `conflict_checks/${checkId}`
     const row = (await checks().doc(checkId).get()).data()
-    if (!row || row.firmId !== caller.firmId || (row.requestedBy !== caller.uid && caller.role !== "partner")) {
-      throw new HttpError(404, "not_found")
-    }
-    const stored = storedCheck(checkId, row)
+    const stored = gateCheck(caller, checkId, row)
     const members = await memberMatters(caller, matterIdsOf(stored))
     await audit.allow()
     return discloseFor(caller, stored, members)

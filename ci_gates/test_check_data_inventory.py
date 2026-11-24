@@ -422,35 +422,15 @@ class RuntimeCheck(unittest.TestCase):
         self.assertEqual(gate.check_runtime_collections(["matters"], inventory), [])
 
 
-# Wave-1 stores the deletion saga will read. Two stay pending on F42 until their writers land.
-# Landed, with no pending flag (ME I1), one tuple: draft_autosave_points (W1-L51),
-# whatsapp_outbound_keys (W1-Q14R3), upload_sessions and upload-staging (W1-L91), and
-# evidence_items plus custody_events (W1-Q08B). The evidence stores were already inventoried on
-# 7ae1a33f (matter_content, field matterId); Q08B does not append a duplicate and does not re-pend
-# a landed store. A pending flag on a store the tree now names is a note, and the pin must not keep
-# demanding it. `validatePolicy(policy, inventory())` in functions/test/f42-retention.units.test.ts
-# loads this same file.
-WAVE1_PENDING = (
-    {
-        "id": "firestore:intakes",
-        "kind": "firestore",
-        "name": "intakes",
-        "profile": "matter_record",
-        "key": {"kind": "field", "field": "matterId"},
-        # matter_record's purge-policy action is anonymise. A field key must be cleared or validatePolicy throws.
-        "anonymise": {"matterId": None},
-        "pending": "F42",
-    },
-    {
-        "id": "firestore:intake_messages",
-        "kind": "firestore",
-        "name": "intake_messages",
-        "profile": "matter_content",
-        "key": {"kind": "field", "field": "matterId"},
-        "pending": "F42",
-    },
-)
-# One tuple. Main's landed stores, the two W1-L91 stores, and the two Q08B stores. pending is absent.
+# Wave-1 stores the deletion saga will read. None stay pending. Eight have landed and their
+# pending flags are gone: draft_autosave_points (W1-L51), whatsapp_outbound_keys (W1-Q14R3),
+# upload_sessions plus upload-staging (W1-L91), evidence_items plus custody_events (W1-Q08B),
+# and intakes plus intake_messages (W1-Q09A). The evidence stores were already inventoried
+# (matter_content, field matterId); Q08B does not append a duplicate and does not re-pend a
+# landed store. A pending flag on a store the tree now names is a note, and the pin must not
+# keep demanding it. `validatePolicy(policy, inventory())` in
+# functions/test/f42-retention.units.test.ts loads this same file.
+# One tuple. pending is absent.
 WAVE1_LANDED = (
     {
         "id": "firestore:draft_autosave_points",
@@ -495,17 +475,44 @@ WAVE1_LANDED = (
         "profile": "matter_content",
         "key": {"kind": "field", "field": "matterId"},
     },
+    {
+        "id": "firestore:intakes",
+        "kind": "firestore",
+        "name": "intakes",
+        "profile": "matter_record",
+        "key": {"kind": "field", "field": "matterId"},
+        # The sweep clears these body fields. matterId stays null so a field-keyed anonymise leaves the matter query.
+        "anonymise": {
+            "matterId": None,
+            "text": None,
+            "prospect.name": None,
+            "prospect.phone": None,
+            "prospect.email": None,
+            "prospect.opposingParties": None,
+        },
+        "ageField": {"field": "createdAt", "type": "timestamp"},
+    },
+    {
+        "id": "firestore:intake_messages",
+        "kind": "firestore",
+        "name": "intake_messages",
+        "profile": "matter_content",
+        "key": {"kind": "field", "field": "matterId"},
+        "anonymise": {"matterId": None, "text": None},
+        "ageField": {"field": "createdAt", "type": "timestamp"},
+    },
 )
 
 
 class Wave1Stores(unittest.TestCase):
-    """W1-INV pin. Two stores remain pending. Landed stores, including Q08B and W1-L91, are not."""
+    """W1-INV pin (ME I1). Landed writers drop pending, including W1-L91, W1-Q08B and W1-Q09A."""
 
-    def test_new_wave1_stores_are_pending_f42_with_their_deletion_keys(self) -> None:
+    def test_landed_wave1_stores_have_no_pending_flag(self) -> None:
         inventory = gate.load_json(ROOT, gate.INVENTORY)
         by_id = {s["id"]: s for s in inventory["stores"]}
         self.assertEqual(len(by_id), len(inventory["stores"]), "duplicate store id")
-        for expected in (*WAVE1_PENDING, *WAVE1_LANDED):
+        self.assertEqual(len(WAVE1_LANDED), 8, "one tuple holds every landed wave-1 store")
+        for expected in WAVE1_LANDED:
             store = by_id.get(expected["id"])
             self.assertIsNotNone(store, expected["id"])
             for field, value in expected.items():
@@ -513,13 +520,13 @@ class Wave1Stores(unittest.TestCase):
             self.assertNotIn(store["name"], {s["name"] for s in inventory["stores"] if s["id"] != store["id"]})
         for expected in WAVE1_LANDED:
             self.assertNotIn("pending", by_id[expected["id"]], expected["id"])
-        self.assertEqual(len(WAVE1_PENDING), 2)
         # The object prefix points at the session store this same inventory registers.
         via = by_id["objects:upload-staging"]["key"]["via"]
         self.assertEqual(by_id[via]["kind"], "firestore")
         self.assertNotIn("pending", by_id[via])
-        findings = gate.check_inventory(ROOT, inventory, gate.load_json(ROOT, gate.POLICY))
+        findings, notes = gate.run(ROOT)
         self.assertEqual(findings, [], msg="\n".join(f.message for f in findings))
+        self.assertFalse(any("intakes" in note or "intake_messages" in note for note in notes), notes)
 
     def test_an_unpromoted_intake_key_is_the_matter_field_not_the_document_id(self) -> None:
         """matterId stays null until promotion, so the saga's equality query does not reach that row."""

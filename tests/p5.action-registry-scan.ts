@@ -74,9 +74,9 @@ const RESOLVED: Record<string, { actions: string[]; note: string }> = {
     ],
     note: "requirePartner(caller, action: FirmAdminAction). Sources: functions/src/p5/identity.ts:322, :391, :570, :643 and functions/src/p5/mfa.ts:108, :179.",
   },
-  "functions/src/d1/matter/ops.ts:443": {
+  "functions/src/d1/matter/ops.ts:452": {
     actions: ["matter.read", "matter.advance_stage", "matter.close"],
-    note: "gateMatter's action parameter. Sources: matter/ops.ts:466 matter.read, :565 matter.advance_stage, :612 matter.close.",
+    note: "gateMatter's action parameter. Sources: matter/ops.ts:475 matter.read, :574 matter.advance_stage, :621 matter.close.",
   },
   "functions/src/d1/entity/read.ts:73": {
     actions: ["entity.review", "entity.confirm", "entity.dispute", "entity.reject", "entity.unmerge"],

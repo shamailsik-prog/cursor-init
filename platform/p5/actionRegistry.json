@@ -2282,7 +2282,7 @@
     },
     {
       "file": "functions/src/d1/conflict/ops.ts",
-      "line": 125,
+      "line": 133,
       "via": "requirePermission",
       "binding": "literal",
       "action": "conflict.run",
@@ -2293,7 +2293,7 @@
     },
     {
       "file": "functions/src/d1/conflict/ops.ts",
-      "line": 199,
+      "line": 213,
       "via": "requirePermission",
       "binding": "literal",
       "action": "conflict.run",
@@ -2304,7 +2304,7 @@
     },
     {
       "file": "functions/src/d1/conflict/ops.ts",
-      "line": 278,
+      "line": 289,
       "via": "requirePermission",
       "binding": "literal",
       "action": "conflict.resolve_review",
@@ -2315,7 +2315,7 @@
     },
     {
       "file": "functions/src/d1/conflict/ops.ts",
-      "line": 344,
+      "line": 355,
       "via": "requirePermission",
       "binding": "literal",
       "action": "conflict.waive",
@@ -2326,7 +2326,7 @@
     },
     {
       "file": "functions/src/d1/conflict/ops.ts",
-      "line": 401,
+      "line": 412,
       "via": "requirePermission",
       "binding": "literal",
       "action": "conflict.read_trail",
@@ -2453,7 +2453,7 @@
     },
     {
       "file": "functions/src/d1/matter/ops.ts",
-      "line": 443,
+      "line": 452,
       "via": "checkPermission",
       "binding": "parameter",
       "action": null,
@@ -2462,11 +2462,11 @@
         "matter.advance_stage",
         "matter.close"
       ],
-      "note": "gateMatter's action parameter. Sources: matter/ops.ts:466 matter.read, :565 matter.advance_stage, :612 matter.close."
+      "note": "gateMatter's action parameter. Sources: matter/ops.ts:475 matter.read, :574 matter.advance_stage, :621 matter.close."
     },
     {
       "file": "functions/src/d1/matter/ops.ts",
-      "line": 466,
+      "line": 475,
       "via": "gateMatter",
       "binding": "literal",
       "action": "matter.read",
@@ -2477,7 +2477,7 @@
     },
     {
       "file": "functions/src/d1/matter/ops.ts",
-      "line": 489,
+      "line": 498,
       "via": "decide",
       "binding": "literal",
       "action": "matter.read",
@@ -2488,7 +2488,7 @@
     },
     {
       "file": "functions/src/d1/matter/ops.ts",
-      "line": 527,
+      "line": 536,
       "via": "decide",
       "binding": "literal",
       "action": "matter.read",
@@ -2499,7 +2499,7 @@
     },
     {
       "file": "functions/src/d1/matter/ops.ts",
-      "line": 565,
+      "line": 574,
       "via": "gateMatter",
       "binding": "literal",
       "action": "matter.advance_stage",
@@ -2510,7 +2510,7 @@
     },
     {
       "file": "functions/src/d1/matter/ops.ts",
-      "line": 612,
+      "line": 621,
       "via": "gateMatter",
       "binding": "literal",
       "action": "matter.close",

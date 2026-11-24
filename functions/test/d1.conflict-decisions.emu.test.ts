@@ -406,6 +406,6 @@ describe.skipIf(!EMULATORS)("waiver record (final review M3)", () => {
     expect(rows[0].data().detail).toMatchObject({ partnerId: partner.uid, requestedBy: partner.uid, note: NOTE50, clientConsent: true, consentReference: "Letter 2026-10-01" })
 
     expect((await getResult({ token: partner.token, data: { firmId, checkId } } as never)).waiver).toMatchObject(waiver)
-    expect(await getResult({ token: low.token, data: { firmId, checkId } } as never)).not.toHaveProperty("waiver")
+    expectKind(await apiErrorOf(getResult({ token: low.token, data: { firmId, checkId } } as never)), "permission-denied", "exceeds_own_clearance")
   })
 })

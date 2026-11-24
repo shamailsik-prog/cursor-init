@@ -125,6 +125,12 @@ export const retentionTestSeam: {
   failCourtOpsReach?: boolean
   courtOpsReachMaxPages?: number
   afterCourtOpsReachPage?: (page: number) => Promise<void>
+  /**
+   * Unpromoted intake sweep. Off until the class-wide legal hold is wired: the shipped policy marks
+   * matter_record and matter_content legalHold true while their action stays retain. When set, the
+   * sweep refuses to anonymise a class whose legalHold is true.
+   */
+  honourUnpromotedLegalHold?: boolean
 } = {}
 
 /** The longest store key. Some legacy collection names run to 1,500 characters, past Firestore's field-name limit. */
@@ -219,6 +225,23 @@ export function activePolicy(): RetentionPolicy {
   const p = seam ?? (shippedPolicy as unknown as RetentionPolicy)
   validatePolicy(p, inventory())
   return p
+}
+
+/** A stored anonymise value, whether the key was written as a literal dotted field or as a nested path. */
+export function readAnonymiseField(data: { [key: string]: unknown }, field: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(data, field)) return data[field]
+  let cur: unknown = data
+  for (const part of field.split(".")) {
+    if (!cur || typeof cur !== "object") return undefined
+    cur = (cur as Record<string, unknown>)[part]
+  }
+  return cur
+}
+
+/** True when every anonymise field already holds its anonymised value. A dotted key matches a literal field or a nested path. An empty map is already applied. */
+export function anonymiseApplied(data: { [key: string]: unknown } | undefined, fields: Record<string, unknown> | undefined): boolean {
+  if (!data) return false
+  return Object.entries(fields ?? {}).every(([field, value]) => readAnonymiseField(data, field) === value)
 }
 
 export function retentionClassOf(s: InventoryStore, inv: Inventory = inventory()): string {

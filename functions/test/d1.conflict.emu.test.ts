@@ -150,6 +150,28 @@ describe("discloseFor (no emulator needed)", () => {
     expect(discloseFor({ role: "partner", clearanceLevel: "confidential" }, waived, new Set())).not.toHaveProperty("waiver")
     expect(discloseFor({ role: "partner", clearanceLevel: "privileged" }, check, new Set()).waiver).toBeNull()
   })
+  it("redacts subject name and identity keys for a reader below the check's classification", () => {
+    const privileged: StoredCheck = {
+      ...check,
+      subjects: [
+        { role: "client", name: "Privileged Prospect", keys: { phone: "+923001234567" } },
+        { role: "opposing", name: "Nargis Opponent", keys: { cnic: "4210112345671" } },
+      ],
+    }
+    const low = discloseFor({ role: "partner", clearanceLevel: "confidential" }, privileged, new Set())
+    const text = JSON.stringify(low)
+    expect(text).not.toContain("Privileged Prospect")
+    expect(text).not.toContain("Nargis Opponent")
+    expect(text).not.toContain("+923001234567")
+    expect(text).not.toContain("4210112345671")
+    expect(low.subjects).toEqual([
+      { role: "client", name: "restricted", keys: {} },
+      { role: "opposing", name: "restricted", keys: {} },
+    ])
+    const high = discloseFor({ role: "partner", clearanceLevel: "privileged" }, privileged, new Set())
+    expect(JSON.stringify(high.subjects)).toContain("Privileged Prospect")
+    expect(JSON.stringify(high.subjects)).toContain("4210112345671")
+  })
 })
 
 describe("checkClassification (no emulator needed)", () => {

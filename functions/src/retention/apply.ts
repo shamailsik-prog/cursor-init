@@ -4,7 +4,7 @@ import { JobError } from "../p2/errors"
 import type { JobContext, JobHandler, JobResult } from "../p2/registry"
 import type { ScheduledJobSpec } from "../p2/scheduled"
 import { sha256 } from "./acks"
-import { RetentionConfigError, activePolicy, ageable, inventory, retentionClassOf, retentionTestSeam, storeKey, type InventoryStore, type RetentionPolicy } from "./config"
+import { RetentionConfigError, activePolicy, ageable, anonymiseApplied, inventory, retentionClassOf, retentionTestSeam, storeKey, type InventoryStore, type RetentionPolicy } from "./config"
 import { RETENTION_RUNS_COLLECTION, holdsRef } from "./model"
 
 /**
@@ -61,8 +61,7 @@ const matterOf = (t: Target, data: DocumentData, id: string): string | null => {
   return typeof v === "string" && v !== "" ? v : null
 }
 
-const alreadyAnonymised = (t: Target, data: DocumentData): boolean =>
-  Object.entries(t.store.anonymise ?? {}).every(([field, value]) => data[field] === value)
+const alreadyAnonymised = (t: Target, data: DocumentData): boolean => anonymiseApplied(data, t.store.anonymise)
 
 /** The active policy; an invalid one is a permanent failure of the run (FA-F42-R1-011). */
 function policyForRun(): RetentionPolicy {

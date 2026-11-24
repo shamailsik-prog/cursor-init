@@ -18,7 +18,7 @@ import type { JobSpec } from "../p2/enqueue"
 import { JobError } from "../p2/errors"
 import type { JobContext, JobHandler, JobResult } from "../p2/registry"
 import { type AckDetail, type AckInput, ackRefOf, requestRefOf, sha256, stageAcks } from "./acks"
-import { retentionTestSeam, storeByKey, storeKey, type InventoryStore, type RetentionLimits } from "./config"
+import { anonymiseApplied, retentionTestSeam, storeByKey, storeKey, type InventoryStore, type RetentionLimits } from "./config"
 import { instructionsIn, moveInstructions } from "./instructions"
 import { capturesFor, exportedIds, readLateIds, stageLateIds } from "./lateTraces"
 import {
@@ -381,7 +381,7 @@ function rowsQuery(store: InventoryStore, firmId: string, matterId: string) {
 
 /** Whether a row already carries the store's anonymised values (an anonymised row is done, never re-written). */
 const isAnonymised = (store: InventoryStore, data: DocumentData | undefined): boolean =>
-  data !== undefined && Object.entries(store.anonymise ?? {}).every(([field, value]) => data[field] === value)
+  anonymiseApplied(data, store.anonymise)
 
 /** Whether a stored row of the matter still needs the treatment (exists in the firm, and is not yet anonymised). */
 const pending = (store: InventoryStore, treatment: Treatment, data: DocumentData | undefined, firmId: string): data is DocumentData =>
