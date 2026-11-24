@@ -296,11 +296,15 @@ describe("getReadiness and blockIfIncomplete", () => {
     expect(closed).toHaveLength(1)
   })
 
-  it("splits an impugned judgment and warrant from the jail roll and leaves each one out", () => {
+  it("splits an impugned judgment, the warrant and the jail roll and leaves each one out", () => {
     const line = "Impugned judgment and warrant / jail roll annexed"
     const checklist = asKnown("conviction_appeal")
     const parts = partsFrom(checklist, line)
-    expect(parts.map((entry) => entry.label)).toEqual(["Impugned judgment and warrant annexed", "jail roll annexed"])
+    expect(parts.map((entry) => entry.label)).toEqual([
+      "Impugned judgment annexed",
+      "warrant annexed",
+      "jail roll annexed",
+    ])
     for (const part of parts) {
       const readiness = getReadiness(checklist.documentTypeId, withoutItem(checklist, part.id))
       expect(readiness.known).toBe(true)
@@ -353,7 +357,7 @@ describe("getReadiness and blockIfIncomplete", () => {
     const condonation = appeal.items.find((entry) => entry.label === "Condonation application if delayed")
     const limitation = appeal.items.find((entry) => entry.label === "Impugned order date and limitation computed (Module 44)")
     expect(condonation).toMatchObject({ conditional: true, mandatory: true })
-    expect(limitation).toMatchObject({ conditional: true, mandatory: true })
+    expect(limitation).toMatchObject({ conditional: false, mandatory: true })
     const open = getReadiness(appeal.documentTypeId, withoutItem(appeal, condonation!.id))
     expect(open.known).toBe(true)
     if (!open.known) return
@@ -422,7 +426,8 @@ describe("getReadiness and blockIfIncomplete", () => {
         }
         if (entry.kind !== "pleading" && /\blimitation\b/i.test(entry.label)) {
           limitationCount += 1
-          expect(entry, type.id).toMatchObject({ conditional: true, mandatory: true })
+          const explicit = /\bif any\b|\bwhere applicable\b|\bas applicable\b|\bif counsel\b|\bif delayed\b/i.test(entry.label)
+          expect(entry, type.id).toMatchObject({ conditional: explicit, mandatory: true })
         }
       }
       if (/\bif any\b/i.test(type.annexureRule) && /\bexhibits?\b/i.test(type.annexureRule)) {
@@ -459,9 +464,171 @@ describe("getReadiness and blockIfIncomplete", () => {
     if (!dated.known) return
     expect(dated.items.find((entry) => entry.id === "pleading")?.done).toBe(false)
     expect(suit.items.find((entry) => /Limitation checked/i.test(entry.label))).toMatchObject({
-      conditional: true,
+      conditional: false,
       mandatory: true,
     })
+  })
+
+  it("a not-applicable tick is not counted as a manual close of the certified copy", () => {
+    const appeal = asKnown("civil_appeal")
+    const copy = appeal.items.find(
+      (entry) => entry.kind === "annexures" && /\bcertified\b/i.test(entry.label) && /\bimpugned\b/i.test(entry.label)
+    )!
+    const held = withoutItem(appeal, copy.id)
+    const readiness = getReadiness(appeal.documentTypeId, {
+      ...held,
+      manualTicks: [...(held.manualTicks ?? []), { itemId: copy.id, by: "clerk", at: "2026-11-24T00:00:00.000Z", notApplicable: true }],
+    })
+    expect(readiness.known).toBe(true)
+    if (!readiness.known) return
+    expect(readiness.items.find((entry) => entry.id === copy.id)?.completedBy).not.toBe("manual")
+  })
+
+  it("a not-applicable tick does not close the certified copy", () => {
+    const appeal = asKnown("civil_appeal")
+    const copy = appeal.items.find(
+      (entry) => entry.kind === "annexures" && /\bcertified\b/i.test(entry.label) && /\bimpugned\b/i.test(entry.label)
+    )!
+    expect(copy.conditional).toBe(false)
+    const held = withoutItem(appeal, copy.id)
+    const readiness = getReadiness(appeal.documentTypeId, {
+      ...held,
+      manualTicks: [...(held.manualTicks ?? []), { itemId: copy.id, by: "clerk", at: "2026-11-24T00:00:00.000Z", notApplicable: true }],
+    })
+    expect(readiness.known).toBe(true)
+    if (!readiness.known) return
+    const closed = readiness.items.find((entry) => entry.id === copy.id)
+    expect(closed?.done).toBe(false)
+    expect(closed?.completedBy).toBe(null)
+    expect(readiness.readyToFile).toBe(false)
+    expect(readiness.missingMandatory).toContain(copy.id)
+  })
+
+  it("rejects a date-only day that does not round-trip", () => {
+    const dated = getReadiness("civil_suit", {
+      manualTicks: [{ itemId: "pleading", by: "clerk", at: "2026-02-31" }],
+    })
+    expect(dated.known).toBe(true)
+    if (!dated.known) return
+    expect(dated.items.find((entry) => entry.id === "pleading")?.done).toBe(false)
+  })
+
+  it("rejects an impossible calendar day and a year outside 1900 through 2100", () => {
+    const suit = asKnown("civil_suit")
+    const held = withoutItem(suit, "pleading")
+    for (const at of ["2026-02-30T00:00:00Z", "2026-02-31", "9999-12-31", "0000-01-01"]) {
+      const readiness = getReadiness("civil_suit", {
+        ...held,
+        manualTicks: [...(held.manualTicks ?? []), { itemId: "pleading", by: "clerk", at }],
+      })
+      expect(readiness.known).toBe(true)
+      if (!readiness.known) continue
+      expect(readiness.readyToFile, at).toBe(false)
+      expect(readiness.missingMandatory, at).toContain("pleading")
+      expect(readiness.items.find((entry) => entry.id === "pleading")?.done, at).toBe(false)
+    }
+    for (const at of ["1900-01-01", "2100-12-31", "2024-02-29", "2026-11-24T00:00:00.000Z"]) {
+      const readiness = getReadiness("civil_suit", {
+        ...held,
+        manualTicks: [...(held.manualTicks ?? []), { itemId: "pleading", by: "clerk", at }],
+      })
+      expect(readiness.known).toBe(true)
+      if (!readiness.known) continue
+      expect(readiness.items.find((entry) => entry.id === "pleading")?.done, at).toBe(true)
+    }
+  })
+
+  it("rejects a not-applicable tick on an unconditional limitation line", () => {
+    const rows = [
+      { id: "civil_suit", label: /Limitation checked/i },
+      { id: "constitutional_petition_199", label: /^Limitation \/ laches addressed$/i },
+      { id: "civil_appeal", label: /date and limitation computed/i },
+    ]
+    for (const row of rows) {
+      const checklist = asKnown(row.id)
+      const line = checklist.items.find((entry) => row.label.test(entry.label))
+      expect(line, row.id).toMatchObject({ mandatory: true, conditional: false })
+      const held = withoutItem(checklist, line!.id)
+      const waived = getReadiness(row.id, {
+        ...held,
+        manualTicks: [
+          ...(held.manualTicks ?? []),
+          { itemId: line!.id, by: "clerk", at: "2026-11-24T00:00:00.000Z", notApplicable: true },
+        ],
+      })
+      expect(waived.known).toBe(true)
+      if (!waived.known) continue
+      expect(waived.readyToFile, row.id).toBe(false)
+      expect(waived.missingMandatory, row.id).toContain(line!.id)
+      expect(waived.items.find((entry) => entry.id === line!.id)?.completedBy, row.id).toBe(null)
+      const produced = getReadiness(row.id, withoutItem(checklist, "none"))
+      expect(produced.known).toBe(true)
+      if (!produced.known) continue
+      expect(produced.items.find((entry) => entry.id === line!.id), row.id).toMatchObject({
+        done: true,
+        completedBy: "manual",
+      })
+    }
+    const counsel = asKnown("bail_cancellation")
+    const delay = counsel.items.find((entry) => entry.label === "Limitation / delay explained if any")!
+    expect(delay).toMatchObject({ conditional: true, mandatory: true })
+    const held = withoutItem(counsel, delay.id)
+    const waived = getReadiness(counsel.documentTypeId, {
+      ...held,
+      manualTicks: [...(held.manualTicks ?? []), { itemId: delay.id, by: "clerk", at: "2026-11-24", notApplicable: true }],
+    })
+    expect(waived.known).toBe(true)
+    if (!waived.known) return
+    expect(waived.readyToFile).toBe(true)
+    expect(waived.items.find((entry) => entry.id === delay.id)?.completedBy).toBe("not_applicable")
+  })
+
+  it("keeps a certified copy on every split part and does not leave a preposition fragment", () => {
+    const base = getDocumentType("affidavit")!
+    const decree = itemsForDocumentType({
+      ...base,
+      id: "certified_judgment_and_decree",
+      name: "Certified judgment and decree",
+      checklist: ["Certified copy of the judgment and decree annexed"],
+      annexureRule: "Exhibits, if any",
+    })
+    expect(decree.filter((entry) => entry.kind === "annexures" && entry.id !== "annexures").map((entry) => entry.label)).toEqual([
+      "Certified copy of the judgment annexed",
+      "Certified copy of the decree annexed",
+    ])
+    const courts = itemsForDocumentType({
+      ...base,
+      id: "judgment_of_two_courts",
+      name: "Judgment of two courts",
+      checklist: ["Certified copy of the judgment of the trial court and of the appellate court annexed"],
+      annexureRule: "Legal size",
+    })
+    const line = "Certified copy of the judgment of the trial court and of the appellate court annexed"
+    expect(courts.filter((entry) => entry.sourceLines.includes(line)).map((entry) => entry.label)).toEqual([line])
+  })
+
+  it("every split part of every seed row is a document name", () => {
+    const documentWord =
+      /\b(cheque|dishonour|memo|notice|judgment|warrant|jail|roll|decree|order|certificate|affidavit|copy|petition|record|exhibit|document|complaint|charge|sentence|bail|plaint|annexure)\b/i
+    let splitRows = 0
+    for (const type of listDocumentTypes({})) {
+      const checklist = getChecklistForType(type.id)
+      if (!checklist.known) continue
+      for (const line of type.checklist) {
+        const parts = checklist.items.filter(
+          (entry) => entry.kind === "annexures" && entry.sourceLines.length === 1 && entry.sourceLines[0] === line
+        )
+        if (parts.length < 2) continue
+        splitRows += 1
+        for (const entry of parts) {
+          const body = entry.label.replace(/\s+annexed\s*$/i, "").trim()
+          expect(body, `${type.id} ${entry.label}`).not.toMatch(/^(of|for|to|in|on|with|under|from|and)\b/i)
+          expect(body, `${type.id} ${entry.label}`).toMatch(documentWord)
+          if (/\bcertified copy\b/i.test(line)) expect(entry.label, type.id).toMatch(/\bcertified copy\b/i)
+        }
+      }
+    }
+    expect(splitRows).toBeGreaterThan(0)
   })
 
   it("one annexure id does not tick every mandatory annexure", () => {
@@ -665,7 +832,7 @@ describe("getReadiness and blockIfIncomplete", () => {
     const particulars = asKnown("criminal_revision").items.find((entry) => entry.label === "FIR / complaint / judgment particulars as applicable")
     expect(particulars).toMatchObject({ conditional: true, mandatory: true })
     const limitation = asKnown("civil_appeal").items.find((entry) => /date and limitation/i.test(entry.label))
-    expect(limitation).toMatchObject({ conditional: true, mandatory: true, kind: "type_specific" })
+    expect(limitation).toMatchObject({ conditional: false, mandatory: true, kind: "type_specific" })
   })
 
   it("does not auto-tick the index from a docket id while the L5.5 seam is unwired", () => {

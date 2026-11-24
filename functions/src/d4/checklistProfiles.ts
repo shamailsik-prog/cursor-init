@@ -94,26 +94,54 @@ function coversImpugned(items: readonly ChecklistItem[]): boolean {
   return items.some((item) => /\bcertified\b/i.test(item.label) && /\bimpugned\b/i.test(item.label) && !COMPUTATION.test(item.label))
 }
 
-const FAIL_CLOSED = /\blimitation\b|\bif any\b|\bwhere applicable\b|\bas applicable\b|\bif counsel\b|\bif delayed\b/i
+/** An explicit conditional may be closed with a not-applicable tick. A bare limitation line may not. */
+const NOT_APPLICABLE = /\bif any\b|\bwhere applicable\b|\bas applicable\b|\bif counsel\b|\bif delayed\b/i
+const LIMITATION = /\blimitation\b/i
 
-function isFailClosed(line: string): boolean {
-  return FAIL_CLOSED.test(line)
+function allowsNotApplicable(line: string): boolean {
+  return NOT_APPLICABLE.test(line)
 }
+
+const CONTINUATION = /^(of|for|to|in|on|with|under|from)\b/i
 
 /**
  * A named-document line that lists more than one document becomes one item per
- * document. " / " is the separator in "judgment and warrant / jail roll", so
- * "and" inside that pair stays one document. A comma or "and" splits the rest.
+ * document. Commas, " and ", and " / " are separators.
+ * PARTNER-RULING-PENDING: may become judgment | (warrant OR jail roll)
  * A trailing "annexed" applies to each part. "annexed and indexed" is one bundle.
+ * "and of the appellate court" stays on the previous document. A shared
+ * "Certified copy of" is copied onto each part.
  */
 function splitNamedLine(line: string): string[] {
   const annexed = /\bannexed\b/i.test(line)
   const body = line.replace(/\s+and indexed\s*$/i, "").replace(/\s+annexed\s*$/i, "").trim()
-  const pieces = body.includes(" / ") ? body.split(/\s+\/\s+/) : body.split(/\s*,\s*|\s+and\s+/i)
-  const cleaned = pieces.map((part) => part.trim()).filter((part) => part !== "")
-  if (cleaned.length <= 1) return [line]
+  const pieces = body
+    .split(/\s*,\s*|\s+\/\s+|\s+and\s+/i)
+    .map((part) => part.trim())
+    .filter((part) => part !== "")
+  const folded = foldContinuations(pieces)
+  if (folded.length <= 1) return [line]
   const suffix = annexed ? " annexed" : ""
-  return cleaned.map((part) => `${part.replace(/\s+annexed\s*$/i, "").trim()}${suffix}`)
+  return withSharedCertifiedCopy(line, folded).map((part) => `${part.replace(/\s+annexed\s*$/i, "").trim()}${suffix}`)
+}
+
+function foldContinuations(parts: string[]): string[] {
+  const folded: string[] = []
+  for (const part of parts) {
+    if (folded.length > 0 && CONTINUATION.test(part)) folded[folded.length - 1] = `${folded[folded.length - 1]} and ${part}`
+    else folded.push(part)
+  }
+  return folded
+}
+
+function withSharedCertifiedCopy(original: string, parts: string[]): string[] {
+  if (!/\bcertified copy of\b/i.test(original)) return parts
+  const withThe = /\bcertified copy of the\b/i.test(original)
+  return parts.map((part) => {
+    if (/\bcertified copy\b/i.test(part)) return part
+    const rest = part.replace(/^the\s+/i, "")
+    return withThe ? `Certified copy of the ${rest}` : `Certified copy of ${rest}`
+  })
 }
 
 type ClauseKind = "skip" | "conditional" | "impugned" | "record" | "generic"
@@ -187,12 +215,12 @@ function annexureItem(id: string, label: string, mandatory: boolean, sourceLines
  * The filing items for one verified row, in the spec's order, then the row's other
  * checklist lines. Each mandatory annexure is its own item. An annexure id ticks
  * only the item whose id it is. "if any", "where applicable", "as applicable",
- * "if counsel" and "if delayed" stay conditional, and so does a limitation line.
- * A conditional blocks until the document is produced or an explicit
- * not-applicable tick records who and when. A certified copy, impugned order,
- * judgment, decree or annexed document is mandatory without those phrases.
- * "Affidavit if facts asserted" is mandatory. "judgment and warrant / jail roll"
- * is two documents. One annexure id ticks one item.
+ * "if counsel" and "if delayed" stay conditional. A not-applicable tick closes
+ * only those explicit conditionals. An unconditional limitation line still
+ * blocks, and a not-applicable tick does not close it. A certified copy,
+ * impugned order, judgment, decree or annexed document is mandatory without
+ * those phrases. "Affidavit if facts asserted" is mandatory.
+ * "judgment and warrant / jail roll" is three documents. One annexure id ticks one item.
  * Other non-slot lines stay visible and do not block filing.
  */
 export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
@@ -257,7 +285,7 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
   } else if (genericLines.length > 0 || genericClauses.length > 0 || conditionalClauses.length > 0) {
     const unconditional =
       genericLines.some((line) => !EXPLICIT.test(line)) || (genericLines.length === 0 && genericClauses.length > 0)
-    const conditional = !unconditional && (conditionalClauses.length > 0 || genericLines.some((line) => isFailClosed(line)))
+    const conditional = !unconditional && (conditionalClauses.length > 0 || genericLines.some((line) => allowsNotApplicable(line)))
     const label =
       genericLines.find((line) => !EXPLICIT.test(line)) ??
       genericLines[0] ??
@@ -287,7 +315,7 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
 
   const vakalatnamaLines = linesMatching(lines, VAKALATNAMA)
   if (vakalatnamaLines.length > 0) {
-    const conditional = vakalatnamaLines.every((line) => isFailClosed(line))
+    const conditional = vakalatnamaLines.every((line) => allowsNotApplicable(line))
     items.push({
       id: "vakalatnama",
       kind: "vakalatnama",
@@ -343,12 +371,12 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
   for (const line of lines) {
     if (consumed(line)) continue
     const id = specificId(line, used)
-    const conditional = isFailClosed(line)
+    const conditional = allowsNotApplicable(line)
     items.push({
       id,
       kind: "type_specific",
       label: line,
-      mandatory: conditional,
+      mandatory: conditional || LIMITATION.test(line),
       completion: "manual",
       autoTickWired: false,
       sourceLines: [line],
