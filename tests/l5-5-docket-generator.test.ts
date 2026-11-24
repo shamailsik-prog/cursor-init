@@ -16,7 +16,7 @@ import {
   isDocketGeneratorEnabled,
 } from "@/layers/L5_5_DocketGenerator/flag"
 import { resolveFilingSet } from "@/layers/L5_5_DocketGenerator/ambiguity"
-import { assignedCitation } from "@/layers/L5_5_DocketGenerator/references"
+import { assignedCitation, scanCitations } from "@/layers/L5_5_DocketGenerator/references"
 import { contentBox, pagePoints, planDocket, WRAP_SLACK, wrapParagraph } from "@/layers/L5_5_DocketGenerator/layout"
 import { TINOS_REGULAR_WIDTHS, TINOS_UNITS_PER_EM, tnrWidth } from "@/layers/L5_5_DocketGenerator/metrics"
 import { generateDocket } from "@/layers/L5_5_DocketGenerator/service"
@@ -2271,6 +2271,89 @@ describe("L5.5 fail-closed reference allowlist", () => {
       },
       "heading opener stays out of the order",
     )
+  })
+
+  it("REF-R11-001 refuses an abbreviation, a capital run, a pipe, or an accent after a head", async () => {
+    const cited = "The petitioner relies on Annexures A, B and C."
+    const sentences = [
+      "Annexures on record, Cf. D.",
+      "Esp. D.",
+      "Etc. D.",
+      "The annexures, Cf. D, are filed.",
+      "cf. DEFGH",
+      "Annexure ABCDE is the deed.",
+      "Annexure INDEX is the deed.",
+      "Annexure DEFGH is the deed.",
+      "Annexure ABCDE|INDEX|DEFGH is the deed.",
+      "See Annexure A - cf. D.",
+      "See Annexure A - Plaint É.",
+    ]
+    for (const sentence of sentences) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body: `${cited} ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.queue.some((entry) => entry.code === "ref_unresolved"), sentence).toBe(true)
+    }
+  })
+
+  it("ORDER-R11-001 refuses a same-line heading narrative", async () => {
+    const reversed = "The petitioner relies on Annexure C, then Annexure B and Annexure A."
+    const bodies = [
+      `LIST OF ANNEXURES: ${reversed}`,
+      `Index of documents: ${reversed}`,
+      `LIST OF DOCUMENTS: ${reversed}`,
+      `list of annexures: ${reversed}`,
+      `**LIST OF ANNEXURES:** ${reversed}`,
+      `LIST OF ANNEXURES\t${reversed}`,
+      `LIST OF ANNEXURES A, B, C. ${reversed}`,
+    ]
+    for (const body of bodies) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body } })
+      expect(result.ok, JSON.stringify(body)).toBe(false)
+      expect(result.queue.some((entry) => entry.code === "order_unresolved"), JSON.stringify(body)).toBe(true)
+    }
+    const third = exhibits.annexures[1]!
+    const withThird = {
+      ...exhibits,
+      annexures: [
+        ...exhibits.annexures,
+        { ...third, assignedLabel: "P-3", metadata: { ...third.metadata, artifactId: "ex-3", label: "Map", sourceRef: "doc-map" } },
+      ],
+    }
+    enableFlag()
+    const exhibitsLine = await generateDocket({
+      ...withThird,
+      draft: { body: "LIST OF EXHIBITS: The witness proved P-1, P-3 and then P-2." },
+    })
+    expect(exhibitsLine.ok).toBe(false)
+    expect(exhibitsLine.queue.some((entry) => entry.code === "order_unresolved")).toBe(true)
+  })
+
+  it("OVER-R11-001 generates legal acronyms and an all-caps sentence", async () => {
+    const cited = "The petitioner relies on Annexures A, B and C."
+    const sentences = [
+      "Annexures relate to the FIR.",
+      "Annexures relate to section 302 PPC.",
+      "The annexures are governed by the CPC.",
+      "The annexures were produced before the SHO.",
+      "The annexures were sent to NHS Legal.",
+      "The annexures were seized under the CrPC.",
+      "THE ANNEXURES ARE TRUE COPIES.",
+      "ANNEXURES RELATE TO THE FIR.",
+    ]
+    for (const sentence of sentences) {
+      await expectGeneration({ ...petition, draft: { body: `${cited} ${sentence}` } }, sentence)
+    }
+  })
+
+  it("reads an acronym as a label only when the index assigns it", () => {
+    const prose = "Annexures relate to the FIR."
+    const open = scanCitations(prose, { family: "letter", markPrefix: null, assigned: new Set(["annex:A", "annex:B", "annex:C"]) })
+    expect(open.hits.some((hit) => hit.canonical === "FIR")).toBe(false)
+    expect(open.unparsed).toEqual([])
+    const assigned = scanCitations(prose, { family: "letter", markPrefix: null, assigned: new Set(["annex:A", "annex:FIR"]) })
+    expect(assigned.hits.some((hit) => hit.canonical === "FIR")).toBe(true)
   })
 
   it("keeps the three-dot refusal after NFKC and does not keep a U+2026 branch", () => {
