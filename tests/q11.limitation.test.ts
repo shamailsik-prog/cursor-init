@@ -1451,6 +1451,41 @@ describe("Q11 checkLimitation", () => {
     })
   })
 
+  it("FA-Q11-S12-R5-002 refuses a heading that hides a character outside the allowlist", () => {
+    const articleOnly = "LIMITATION FIXTURE. The period of limitation is three years."
+    const rows = [
+      `${RECKONING} The court \u0645\u0646\u0633\u0648\u062E.`,
+      `${RECKONING} The court \u2260 the suit.`,
+      `${RECKONING} The court \u216B.`,
+      `${RECKONING} The court 5.`,
+      `${RECKONING} The court \uFF15.`,
+      `${RECKONING} The court \u2075.`,
+    ]
+    const misses: string[] = []
+    for (const sectionText of rows) {
+      const versions = [
+        version("limitation-act-1908/article/7", articleOnly, "1908-01-01", null, 1),
+        version("limitation-act-1908/section/12", sectionText, "1908-01-01", null, 1),
+        version("limitation-act-1908/section/4", SECTION_4, "1908-01-01", null, 1),
+      ]
+      const result = assessed("2020-01-15", versions)
+      if (result.status !== "NOT_ASSESSED" || result.reason !== "reckoning_unverified" || result.deadline !== null) {
+        misses.push(`${JSON.stringify(sectionText)} => ${result.status} ${result.reason} ${result.deadline}`)
+      }
+    }
+    expect(misses).toEqual([])
+    const heading = [
+      version("limitation-act-1908/article/7", articleOnly, "1908-01-01", null, 1),
+      version("limitation-act-1908/section/12", `Q11 FIXTURE. The court read the file. ${RECKONING}`, "1908-01-01", null, 1),
+      version("limitation-act-1908/section/4", SECTION_4, "1908-01-01", null, 1),
+    ]
+    expect(assessed("2020-01-15", heading)).toMatchObject({
+      status: "ASSESSED",
+      deadline: "2023-01-15",
+      exclusionsApplied: [expect.objectContaining({ section: "12", effect: "exclude-accrual-day", statedIn: "section" })],
+    })
+  })
+
   it("FA-Q11-DIGIT-R5-001 refuses a letter-number in the period", () => {
     const rows = [
       "\u216B (3 years)",

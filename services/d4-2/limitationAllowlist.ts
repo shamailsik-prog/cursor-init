@@ -14,9 +14,12 @@
  * This engine has no contract that separates those columns.
  * [REQUIRES VERIFICATION] before any schedule row is wired.
  * An s.12 row applies the accrual-day exclusion only when every non-empty sentence
- * is the canonical reckoning or a neutral heading. A neutral heading is the fixture
- * label "Q11 FIXTURE", or a sentence whose words are all in NEUTRAL_WORDS.
- * Any other sentence yields reckoning_unverified and a null deadline.
+ * is the canonical reckoning or a neutral heading. A heading is neutral only after
+ * the fixture label "Q11 FIXTURE" and the NEUTRAL_WORDS are removed, when every
+ * remaining character is ASCII whitespace or structural punctuation (. , : ; - ( )
+ * and quotes). A digit, a symbol, a non-ASCII letter, or any other word makes the
+ * row reckoning_unverified and the deadline null. The check reads the sentence
+ * itself, not the a-z tokens wordsOf keeps.
  */
 export const CANONICAL_RECKONING =
   "in computing the period of limitation the day from which such period is to be reckoned shall be excluded"

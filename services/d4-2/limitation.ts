@@ -39,7 +39,6 @@ import {
   isCanonicalProviso,
   isCanonicalReckoning,
   NEUTRAL_WORDS,
-  normalizeSentence,
   provisoShaped,
   QUANTITY_LABELS,
   UNICODE_DASH,
@@ -640,13 +639,32 @@ function textHasCanonicalReckoning(text: string): boolean {
   return parts.some((part) => isCanonicalReckoning(part))
 }
 
-/** The section 12 fixture label. It is not statute text. */
-const FIXTURE_HEADING = "q11 fixture"
+/**
+ * What may remain after the fixture label and the allowlisted words are removed.
+ * A digit, a symbol, a non-ASCII letter, or any other mark is not in this set.
+ */
+const HEADING_PUNCTUATION = new Set([".", ",", ":", ";", "-", "(", ")", '"', "'"])
 
+function isAsciiWhitespace(char: string): boolean {
+  return char === " " || char === "\t" || char === "\n" || char === "\r" || char === "\f" || char === "\v"
+}
+
+/**
+ * A heading is neutral only when every ASCII word left after the fixture label
+ * is in NEUTRAL_WORDS, and every other character is ASCII whitespace or
+ * structural punctuation. The check reads the sentence itself. wordsOf drops
+ * digits, symbols, and non-ASCII letters, so it is not used here.
+ */
 function isNeutralHeading(sentence: string): boolean {
-  if (normalizeSentence(sentence) === FIXTURE_HEADING) return true
-  const words = wordsOf(sentence)
-  return words.length > 0 && words.every((word) => NEUTRAL_WORDS.has(word))
+  const withoutFixture = sentence.replace(/\bQ11 FIXTURE\b/gi, " ")
+  const words = withoutFixture.match(/[A-Za-z]+/g) ?? []
+  if (words.some((word) => !NEUTRAL_WORDS.has(word.toLowerCase()))) return false
+  const leftover = withoutFixture.replace(/[A-Za-z]+/g, "")
+  for (const char of leftover) {
+    if (isAsciiWhitespace(char) || HEADING_PUNCTUATION.has(char)) continue
+    return false
+  }
+  return true
 }
 
 /**
