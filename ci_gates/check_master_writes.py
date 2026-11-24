@@ -20,13 +20,19 @@ _WRITE = re.compile(
 _OTHER = re.compile(
     r"applyChange\s*\("
     r"|writeMaster\s*\("
+    r"|writeMaster\s*:"
+    r"|writeMaster\s*\.\s*call\b"
+    r"|writeMaster\s*\.\s*apply\b"
+    r"|Reflect\s*\.\s*apply\s*\(\s*writeMaster\b"
     r"|sealMasterSession\s*\("
     r"|rollbackMaster\s*\("
     r"|sessionForWrite\s*\("
     r"|\.persistVersion\s*\("
     r"|import\s*\{[^}]*\b(?:writeMaster|sealMasterSession|rollbackMaster)\s+as\b"
+    r"|import\s*\{[^}]*\bwriteMaster\b[^}]*\}\s*from\s*['\"]@/platform/p6/masterStore['\"]"
     r"""|\[['"]writeMaster['"]\]\s*\("""
     r"|@/platform/p6/masterWrite"
+    r"|from\s*['\"]@/platform/p6/masterStore['\"]"
     r"|collection\(\s*['\"]master_versions['\"]"
     r"|match\s+/master_versions/",
     re.I,
