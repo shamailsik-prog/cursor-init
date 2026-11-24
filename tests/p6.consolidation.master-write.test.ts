@@ -23,6 +23,7 @@ import {
 } from "@/platform/p6/masterWrite"
 import * as p6Index from "@/platform/p6"
 import * as storeModule from "@/platform/p6/masterStore"
+import * as writerModule from "@/platform/p6/masterWrite"
 
 const PARTNER: ApprovalActor = { actorId: "partner_b", kind: "partner", role: "partner" }
 
@@ -80,6 +81,12 @@ describe("P6 consolidation — one master writer", () => {
     expect(writerSource).not.toMatch(/INSERT INTO master_versions/)
     expect(writerSource).not.toMatch(/export (?:async )?function sealMasterSession/)
     expect(writerSource).not.toMatch(/export async function writeMaster/)
+    expect(writerSource).not.toMatch(/export function publishStagedMasterWrites/)
+    expect(writerSource).not.toMatch(/export async function runOneApply/)
+    expect(storeSource).toMatch(/#state\b/)
+    expect(storeSource).toMatch(/#rawSession\b/)
+    expect(storeSource).not.toMatch(/\bprivate (?:readonly )?state\b/)
+    expect(storeSource).not.toMatch(/\bprivate rawSession\b/)
   })
 
   it("an unapproved write refuses and does not commit", async () => {
@@ -241,7 +248,7 @@ describe("P6 consolidation — one master writer", () => {
       masterWriteViolations([
         { path: "platform/p6/masterWrite.ts", source: "export const q = `INSERT INTO master_knowledge (firm_id) VALUES ('a')`\n" },
       ]),
-    ).toEqual([])
+    ).toEqual(["platform/p6/masterWrite.ts"])
     expect(masterWriteViolations([{ path: "platform/p6/note.ts", source: "export const label = 'change_proposals'\n" }])).toEqual([])
     expect(
       masterWriteViolations([{ path: "platform/p6/seal.ts", source: "export function sneak(session, raw) { sealMasterSession(session, raw) }\n" }]),
@@ -254,6 +261,22 @@ describe("P6 consolidation — one master writer", () => {
     expect(
       masterWriteViolations([{ path: "platform/p6/bracket.ts", source: "m['writeMaster'](input, session, gate)\n" }]),
     ).toEqual(["platform/p6/bracket.ts"])
+    expect(
+      masterWriteViolations([
+        { path: "platform/p6/destructure.ts", source: "const { writeMaster: w } = await import('@/platform/p6/masterStore')\n" },
+      ]),
+    ).toEqual(["platform/p6/destructure.ts"])
+    expect(
+      masterWriteViolations([{ path: "platform/p6/call.ts", source: "writeMaster.call(null, input, session, gate)\n" }]),
+    ).toEqual(["platform/p6/call.ts"])
+    expect(
+      masterWriteViolations([{ path: "platform/p6/apply.ts", source: "writeMaster.apply(null, [input, session, gate])\n" }]),
+    ).toEqual(["platform/p6/apply.ts"])
+    expect(
+      masterWriteViolations([
+        { path: "platform/p6/reflect.ts", source: "Reflect.apply(writeMaster, null, [input, session, gate])\n" },
+      ]),
+    ).toEqual(["platform/p6/reflect.ts"])
   })
 
   it("reads a pre-existing file once and does not follow a symlink that replaces a path", () => {
@@ -990,5 +1013,219 @@ describe("P6 consolidation — one master writer", () => {
     ).rejects.toThrow(/master session is closed/)
     expect((await memory.currentSnapshot("firmA")).entries["clause.fake"]?.body).toEqual({ wording: "real" })
     expect(JSON.stringify(await memory.listVersions("firmA"))).not.toContain("ARBITRARY SNAPSHOT")
+  })
+
+  it("BYPASS-271-R3-001: in-memory internals stay unreachable, and a pending substantive proposal is not applied", async () => {
+    const memory = store()
+    const pending = await memory.insertProposal({
+      id: "00000000-0000-4000-8000-000000000301",
+      firmId: "firmA",
+      sourceModule: "15",
+      classification: "confidential",
+      changeClass: "substantive",
+      requestedClass: null,
+      partition: "mutable",
+      entryKey: "clause.private",
+      payload: { wording: "still pending" },
+      proposedBy: "learner-1",
+      status: "pending",
+      decidedBy: null,
+      decidedKind: null,
+      decidedRole: null,
+      declassify: false,
+      payloadHash: "pending",
+    })
+    const opened = memory as unknown as Record<string, unknown>
+    expect(opened.rawSession).toBeUndefined()
+    expect(opened.state).toBeUndefined()
+    expect(opened.failCommit).toBeUndefined()
+    expect(opened.gate).toBeUndefined()
+    expect(opened.dead).toBeUndefined()
+    expect(opened.assertLive).toBeUndefined()
+    expect(opened.endSession).toBeUndefined()
+    expect(opened.publicSession).toBeUndefined()
+    expect(opened.assertRole).toBeUndefined()
+    expect(opened.saveVersion).toBeUndefined()
+    expect(Reflect.get(memory, "state")).toBeUndefined()
+    expect(Reflect.get(memory, "rawSession")).toBeUndefined()
+    expect(Reflect.get(memory, "saveVersion")).toBeUndefined()
+    const names = new Set<string>()
+    for (let cursor: object | null = memory; cursor !== null; cursor = Object.getPrototypeOf(cursor)) {
+      for (const name of Object.getOwnPropertyNames(cursor)) names.add(name)
+      for (const name of Object.getOwnPropertySymbols(cursor)) names.add(String(name))
+    }
+    for (const hidden of [
+      "state",
+      "rawSession",
+      "failCommit",
+      "gate",
+      "dead",
+      "saveVersion",
+      "assertRole",
+      "publicSession",
+      "endSession",
+      "assertLive",
+    ]) {
+      expect(names.has(hidden), hidden).toBe(false)
+    }
+    opened.state = { proposals: new Map() }
+    expect(Reflect.get(memory, "state")).toEqual({ proposals: expect.any(Map) })
+    expect((await memory.getProposal(pending.id))?.payload).toEqual({ wording: "still pending" })
+    expect(() => (memory as unknown as { rawSession: (staged: unknown[]) => unknown }).rawSession([])).toThrow(TypeError)
+    const current = await memory.currentSnapshot("firmA")
+    const snapshot = nextSnapshot(current, pending)
+    await expect(
+      memory.commitVersion({
+        firmId: "firmA",
+        proposalId: pending.id,
+        action: "apply",
+        diff: { key: pending.entryKey, partition: "mutable", before: current, after: snapshot },
+        snapshot,
+        authorId: "p6",
+        authorKind: "system",
+        restoredFromVersionId: null,
+        classification: "confidential",
+        proposal: pending,
+        expectedBaseVersionId: null,
+      }),
+    ).rejects.toThrow(/partner approval/)
+    expect((await memory.getProposal(pending.id))?.status).toBe("pending")
+    expect(await memory.listVersions("firmA")).toEqual([])
+  })
+
+  it("FA-271-R3-002: the real masterWrite.ts file is scanned and is not a second writer", () => {
+    expect(scanP6MasterWriters()).toEqual([])
+    expect(masterWriteViolations([{ path: "platform/p6/masterWrite.ts", source: readFileSync("platform/p6/masterWrite.ts", "utf8") }])).toEqual(
+      [],
+    )
+  })
+
+  it("TEST-271-R3-003: export-seal, a no-op retire, and a lying session read do not commit", async () => {
+    expect("seal" in storeModule).toBe(false)
+    expect("sealMasterSession" in storeModule).toBe(false)
+    expect("seal" in writerModule).toBe(false)
+    expect("sealMasterSession" in writerModule).toBe(false)
+    const exportedSeal = (storeModule as Record<string, unknown>).seal ?? (writerModule as Record<string, unknown>).seal
+    expect(typeof exportedSeal).not.toBe("function")
+
+    const memory = store()
+    const pending = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.mutant",
+        payload: { wording: "held" },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    let finished: MasterSession | undefined
+    await memory.runExclusive(async (tx) => {
+      finished = tx
+      const stored = await tx.getProposal(pending.id)
+      const current = await tx.currentSnapshot("firmA")
+      const snapshot = nextSnapshot(current, stored!)
+      tx.getProposal = async () => ({
+        ...stored!,
+        status: "approved",
+        decidedBy: "partner_b",
+        decidedKind: "partner",
+        decidedRole: "partner",
+      })
+      await expect(
+        tx.commitVersion({
+          firmId: "firmA",
+          proposalId: pending.id,
+          action: "apply",
+          diff: { key: pending.entryKey, partition: "mutable", before: current, after: snapshot },
+          snapshot,
+          authorId: "partner_b",
+          authorKind: "partner",
+          restoredFromVersionId: null,
+          classification: "confidential",
+          proposal: null,
+          expectedBaseVersionId: await tx.lockFirm("firmA"),
+        }),
+      ).rejects.toThrow(/partner approval/)
+    })
+    expect((await memory.getProposal(pending.id))?.status).toBe("pending")
+    expect(await memory.listVersions("firmA")).toEqual([])
+
+    await approveProposal(pending.id, PARTNER, memory)
+    const stored = await memory.getProposal(pending.id)
+    const current = await memory.currentSnapshot("firmA")
+    const snapshot = nextSnapshot(current, stored!)
+    await expect(
+      writeMaster(
+        {
+          firmId: "firmA",
+          proposalId: pending.id,
+          action: "apply",
+          diff: { key: pending.entryKey, partition: "mutable", before: current, after: snapshot },
+          snapshot,
+          authorId: "partner_b",
+          authorKind: "partner",
+          restoredFromVersionId: null,
+          classification: "confidential",
+          proposal: null,
+          expectedBaseVersionId: null,
+        },
+        finished!,
+        { declassify: false },
+      ),
+    ).rejects.toThrow(/master session is closed/)
+    expect((await memory.getProposal(pending.id))?.status).toBe("approved")
+    expect(await memory.listVersions("firmA")).toEqual([])
+  })
+
+  it("AUDIT-271-R3-004: an exported publisher cannot forge a committed audit entry or mark a proposal applied", async () => {
+    const memory = store()
+    const pending = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.audit-forge",
+        payload: { wording: "real apply" },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    await approveProposal(pending.id, PARTNER, memory)
+    expect("publishStagedMasterWrites" in writerModule).toBe(false)
+    expect("publishStagedMasterWrites" in storeModule).toBe(false)
+    expect("runOneApply" in writerModule).toBe(false)
+    expect("runOneApply" in storeModule).toBe(false)
+    const forged =
+      (writerModule as Record<string, unknown>).publishStagedMasterWrites ??
+      (storeModule as Record<string, unknown>).publishStagedMasterWrites
+    const before = masterWriteAuditLog().length
+    if (typeof forged === "function") {
+      forged([
+        {
+          proposalId: pending.id,
+          entry: {
+            action: "apply",
+            firmId: "firmA",
+            proposalId: pending.id,
+            actorId: "partner_b",
+            versionId: "forged-version",
+            outcome: "committed",
+          },
+        },
+      ])
+    }
+    expect(typeof forged).not.toBe("function")
+    expect(masterWriteAuditLog().length).toBe(before)
+    expect(masterWriteAuditLog().some((row) => row.versionId === "forged-version")).toBe(false)
+    const applied = await applyChange(pending.id, memory)
+    expect(applied.masterWritten).toBe(true)
+    expect((await memory.getProposal(pending.id))?.status).toBe("applied")
+    expect(masterWriteAuditLog().some((row) => row.versionId === applied.versionId && row.outcome === "committed")).toBe(true)
   })
 })
