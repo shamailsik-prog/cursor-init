@@ -929,6 +929,91 @@ describe("Review round 1 — update/read paths, proposals, members", () => {
     })
   })
 
+  // TEST-293-001: pins for the five read mutants that survived FU-290.
+  // N03 opens an unlabeled change_proposal. N11 drops sameFirm on master_versions.
+  // N12 lets a partner skip clearance. N14/N15 lower the clearance compare by one rank
+  // on change_proposals and master_versions. Each deny has the adjacent allow.
+  describe("TEST-293-001 surviving read mutants", () => {
+    const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged" }
+    const PARTNER_RESTRICTED = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+    const ASSOC_INTERNAL = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+    const ASSOC_CONFIDENTIAL = { firmId: "firmA", role: "associate", clearanceLevel: "confidential" }
+    const CLERK = { firmId: "firmA", role: "clerk", clearanceLevel: "privileged" }
+    const INTERN = { firmId: "firmA", role: "intern", clearanceLevel: "internal" }
+    const CLIENT = { firmId: "firmA", role: "client", clearanceLevel: "privileged-restricted" }
+    const ACCOUNTS = { firmId: "firmA", role: "accounts", clearanceLevel: "privileged-restricted" }
+    const FIRM_B = { firmId: "firmB", role: "partner", clearanceLevel: "privileged" }
+    const pending = {
+      firmId: "firmA",
+      sourceModule: "p6",
+      payload: { wording: "cite" },
+      proposedBy: "t293",
+      status: "pending",
+    }
+
+    beforeAll(async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        const db = ctx.firestore()
+        await setDoc(doc(db, "change_proposals", "t293-nocls"), { ...pending })
+        await setDoc(doc(db, "change_proposals", "t293-int"), { ...pending, classification: "internal" })
+        await setDoc(doc(db, "change_proposals", "t293-conf"), { ...pending, classification: "confidential" })
+        await setDoc(doc(db, "change_proposals", "t293-restr"), { ...pending, classification: "privileged-restricted" })
+        await setDoc(doc(db, "master_versions", "t293-mv-a"), { firmId: "firmA", classification: "internal", body: "firm A mirror" })
+        await setDoc(doc(db, "master_versions", "t293-mv-conf"), { firmId: "firmA", classification: "confidential", body: "confidential mirror" })
+      })
+    })
+
+    it("N03 a change_proposal with no classification is denied for every persona", async () => {
+      const personas = [
+        ["t293-partner", PARTNER],
+        ["t293-assoc", ASSOC_INTERNAL],
+        ["t293-clerk", CLERK],
+        ["t293-intern", INTERN],
+        ["t293-client", CLIENT],
+        ["t293-accounts", ACCOUNTS],
+      ] as const
+      for (const [uid, claims] of personas) {
+        await assertFails(getDoc(doc(await authed(uid, claims), "change_proposals", "t293-nocls")))
+      }
+    })
+
+    it("N03 a partner still reads a classified proposal", async () => {
+      await assertSucceeds(getDoc(doc(await authed("t293-partner", PARTNER), "change_proposals", "t293-int")))
+    })
+
+    it("N11 a firm B user cannot get a firm A master version", async () => {
+      await assertFails(getDoc(doc(await authed("t293-firmb", FIRM_B), "master_versions", "t293-mv-a")))
+    })
+
+    it("N11 a firm A partner still reads that master version", async () => {
+      await assertSucceeds(getDoc(doc(await authed("t293-partner", PARTNER), "master_versions", "t293-mv-a")))
+    })
+
+    it("N12 a privileged partner cannot get a restricted change_proposal", async () => {
+      await assertFails(getDoc(doc(await authed("t293-partner", PARTNER), "change_proposals", "t293-restr")))
+    })
+
+    it("N12 a restricted-clearance partner still reads that proposal", async () => {
+      await assertSucceeds(getDoc(doc(await authed("t293-partner-r", PARTNER_RESTRICTED), "change_proposals", "t293-restr")))
+    })
+
+    it("N14 an internal associate cannot get a confidential change_proposal", async () => {
+      await assertFails(getDoc(doc(await authed("t293-assoc", ASSOC_INTERNAL), "change_proposals", "t293-conf")))
+    })
+
+    it("N14 a confidential associate still reads that proposal", async () => {
+      await assertSucceeds(getDoc(doc(await authed("t293-assoc-c", ASSOC_CONFIDENTIAL), "change_proposals", "t293-conf")))
+    })
+
+    it("N15 an internal associate cannot get a confidential master version", async () => {
+      await assertFails(getDoc(doc(await authed("t293-assoc", ASSOC_INTERNAL), "master_versions", "t293-mv-conf")))
+    })
+
+    it("N15 a confidential associate still reads that master version", async () => {
+      await assertSucceeds(getDoc(doc(await authed("t293-assoc-c", ASSOC_CONFIDENTIAL), "master_versions", "t293-mv-conf")))
+    })
+  })
+
   describe("documents update (#4)", () => {
     it("intern and client members cannot update", async () => {
       await assertFails(updateDoc(doc(await authed("rv-intern", INTERN), "documents", "rvDoc"), { classification: "confidential" }))
