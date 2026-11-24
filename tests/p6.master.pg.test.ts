@@ -8,9 +8,12 @@ import fs from "node:fs"
 import path from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
 import pg from "pg"
-import { createPgMasterStore, InMemoryMasterStore, type CommitVersionInput } from "@/platform/p6/masterStore"
+import { createPgMasterStore, InMemoryMasterStore, payloadDigest, type CommitVersionInput } from "@/platform/p6/masterStore"
 import * as storeModule from "@/platform/p6/masterStore"
 import { applyChange, approveProposal, proposeChange, rollbackMaster, type ApprovalActor } from "@/platform/p6/proposeChange"
+import { P6_LEARNING_FLAG } from "@/platform/p6/learning/flag"
+import { proposeLearning, type LearningDeps } from "@/platform/p6/learning/governance"
+import { InMemoryLearningLedger } from "@/platform/p6/learning/ledger"
 import { masterWriteAuditLog, nextSnapshot } from "@/platform/p6/masterWrite"
 
 const postgresUrl = process.env.SIKANDER_POSTGRES_URL?.trim()
@@ -2456,6 +2459,180 @@ suite("G3 master grants on local Postgres", () => {
         }),
       ).rejects.toThrow(/master session is closed/)
     } finally {
+      await pool.end()
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  const durableVoid = /learning_requires_durable_void \(W2-DURABLE-VOID\)/
+
+  async function openLearningDb(prefix: string): Promise<{
+    db: { name: string; url: string; client: pg.Client }
+    pool: pg.Pool
+    store: ReturnType<typeof createPgMasterStore>
+  }> {
+    const db = await freshDb(prefix)
+    const pool = new pg.Pool({ connectionString: db.url, max: 1 })
+    await db.client.query(DDL)
+    await db.client.query(ACTOR_KEY_DDL)
+    await db.client.query(`GRANT p6_service TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`)
+    return { db, pool, store: createPgMasterStore(pool) }
+  }
+
+  async function insertLearningSeal(client: pg.Client, id: string): Promise<void> {
+    const payload = {
+      l46: "baseline",
+      l46BeforeMissing: true,
+      l46After: { clause: "VOIDED LEARNING" },
+    }
+    await client.query("SET ROLE p6_service")
+    await client.query(
+      `INSERT INTO change_proposals
+         (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+          proposed_by, status, payload_hash)
+       VALUES ($1, 'firmA', 'L4.6', 'confidential', 'substantive', 'mutable', 'clause.notice',
+               $2::jsonb, 'learner-1', 'pending', $3)`,
+      [id, JSON.stringify(payload), payloadDigest(payload)],
+    )
+  }
+
+  it("GOV-291-001 proposing an L4.6 learning change on Postgres does not seal", async () => {
+    const { db, pool, store } = await openLearningDb("p6seal")
+    try {
+      const deps: LearningDeps = {
+        ledger: new InMemoryLearningLedger(),
+        posture: { g3Passed: true, learnersFlag: true },
+        store,
+        env: { [`SIKANDER_FLAG_${P6_LEARNING_FLAG}`]: "true" },
+        now: () => new Date("2026-11-24T00:00:00.000Z"),
+      }
+      await expect(
+        proposeLearning(
+          {
+            firmId: "firmA",
+            proposedBy: "learner-1",
+            source: "accepted-draft",
+            evidence: "draft accepted by the partner desk",
+            entryKey: "clause.notice",
+            classification: "confidential",
+            before: { clause: "the plaintiff" },
+            after: { clause: "the defendant" },
+          },
+          deps,
+        ),
+      ).rejects.toThrow(durableVoid)
+      await expect(
+        proposeChange(
+          {
+            firmId: "firmA",
+            sourceModule: "L4.6",
+            classification: "confidential",
+            payload: { clause: "VOIDED LEARNING" },
+            proposedBy: "learner-1",
+            changeClass: "substantive",
+            partition: "mutable",
+            entryKey: "clause.notice",
+          },
+          store,
+        ),
+      ).rejects.toThrow(durableVoid)
+      const sealed = await db.client.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM change_proposals WHERE source_module = 'L4.6'`,
+      )
+      expect(sealed.rows[0]?.n).toBe(0)
+      const other = await proposeChange(
+        {
+          firmId: "firmA",
+          sourceModule: "15",
+          classification: "confidential",
+          payload: { wording: "kept" },
+          proposedBy: "learner-1",
+          changeClass: "substantive",
+          partition: "mutable",
+          entryKey: "clause.other",
+        },
+        store,
+      )
+      expect(other.status).toBe("pending")
+      expect(other.sourceModule).toBe("15")
+    } finally {
+      await pool.end()
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  it("GOV-291-001 approveProposal refuses a hand-inserted L4.6 seal on Postgres", async () => {
+    const { db, pool, store } = await openLearningDb("p6appr")
+    const previous = process.env.SIKANDER_FLAG_P6_LEARNING
+    process.env.SIKANDER_FLAG_P6_LEARNING = "true"
+    try {
+      const id = randomUUID()
+      await insertLearningSeal(db.client, id)
+      await expect(
+        approveProposal(id, { actorId: "partner_b", kind: "partner", role: "partner" }, store),
+      ).rejects.toThrow(durableVoid)
+      const row = await db.client.query<{ status: string }>(`SELECT status FROM change_proposals WHERE id = $1`, [id])
+      expect(row.rows[0]?.status).toBe("pending")
+    } finally {
+      if (previous === undefined) delete process.env.SIKANDER_FLAG_P6_LEARNING
+      else process.env.SIKANDER_FLAG_P6_LEARNING = previous
+      await pool.end()
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  it("GOV-291-001 applyChange refuses a hand-inserted L4.6 seal on Postgres", async () => {
+    const { db, pool, store } = await openLearningDb("p6apply")
+    const previous = process.env.SIKANDER_FLAG_P6_LEARNING
+    process.env.SIKANDER_FLAG_P6_LEARNING = "true"
+    try {
+      const id = randomUUID()
+      await insertLearningSeal(db.client, id)
+      await expect(applyChange(id, store)).rejects.toThrow(durableVoid)
+      const row = await db.client.query<{ status: string; n: number }>(
+        `SELECT status, (SELECT count(*)::int FROM master_versions) AS n FROM change_proposals WHERE id = $1`,
+        [id],
+      )
+      expect(row.rows[0]).toEqual({ status: "pending", n: 0 })
+    } finally {
+      if (previous === undefined) delete process.env.SIKANDER_FLAG_P6_LEARNING
+      else process.env.SIKANDER_FLAG_P6_LEARNING = previous
+      await pool.end()
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  it("GOV-291-001 commitVersion refuses a hand-inserted L4.6 seal on Postgres", async () => {
+    const { db, pool, store } = await openLearningDb("p6commitv")
+    const previous = process.env.SIKANDER_FLAG_P6_LEARNING
+    process.env.SIKANDER_FLAG_P6_LEARNING = "true"
+    try {
+      const id = randomUUID()
+      await insertLearningSeal(db.client, id)
+      const current = await store.currentSnapshot("firmA")
+      await expect(
+        store.commitVersion({
+          firmId: "firmA",
+          proposalId: id,
+          action: "apply",
+          diff: { key: "clause.notice", partition: "mutable", before: current, after: current },
+          snapshot: current,
+          authorId: "partner_b",
+          authorKind: "partner",
+          restoredFromVersionId: null,
+          classification: "confidential",
+          proposal: null,
+          expectedBaseVersionId: null,
+        }),
+      ).rejects.toThrow(durableVoid)
+      const row = await db.client.query<{ status: string; n: number }>(
+        `SELECT status, (SELECT count(*)::int FROM master_versions) AS n FROM change_proposals WHERE id = $1`,
+        [id],
+      )
+      expect(row.rows[0]).toEqual({ status: "pending", n: 0 })
+    } finally {
+      if (previous === undefined) delete process.env.SIKANDER_FLAG_P6_LEARNING
+      else process.env.SIKANDER_FLAG_P6_LEARNING = previous
       await pool.end()
       await dropDb(db.name, db.client)
     }

@@ -76,6 +76,10 @@ Never set a provider API key (`AI_GATEWAY_API_KEY`, `VERCEL_AI_GATEWAY_API_KEY` 
 npm run eve:info   # discovered agent surface
 ```
 
+## L4.6 seals on a durable store (GOV-291-001)
+
+GOV-291-001 is closed by unreachability. The Postgres master store refuses to seal an L4.6 learning proposal, and `approveProposal`, `applyChange`, and `commitVersion` refuse an L4.6 learning seal, with `learning_requires_durable_void (W2-DURABLE-VOID)`. The refusal does not depend on `SIKANDER_FLAG_P6_LEARNING`. The in-memory store still seals, for tests. A durable void needs a pending→rejected edge in `p6_enforce_proposal_transition` (a migration), parked as W2-DURABLE-VOID. Removing the guard requires that migration.
+
 ## Non-negotiables
 
 - Court fee and stamp duty are MANUAL checklist items only. L17.9 REMOVED by E-15 (8 Sep 2026). The four banned identifiers fail CI.

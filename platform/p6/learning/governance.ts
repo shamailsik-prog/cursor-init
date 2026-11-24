@@ -8,9 +8,10 @@
 import { randomUUID } from "node:crypto"
 import { isClassification } from "@/platform/p1/types"
 import { assertLearnersStopped, type LearnerPosture } from "@/platform/p6/learners"
-import { canonicalPayload, normalizeActorKey, payloadDigest, type MasterStore } from "@/platform/p6/masterStore"
+import { canonicalPayload, InMemoryMasterStore, normalizeActorKey, payloadDigest, type MasterStore } from "@/platform/p6/masterStore"
 import { effectiveClass } from "@/platform/p6/masterWrite"
 import { approveProposal, proposeChange } from "@/platform/p6/proposeChange"
+import { refuseDurableLearningSeal } from "@/platform/p6/learning/durableVoid"
 import { markSealedVoid } from "@/platform/p6/learning/sealedVoid"
 import { baselineMatchesLive, LEARNING_SOURCE_MODULE, learningBaselinePayload } from "@/platform/p6/learning/baseline"
 import { isP6LearningEnabled } from "@/platform/p6/learning/flag"
@@ -212,8 +213,14 @@ function assertPartner(actor: LearningActor, row: LearningProposalRecord): void 
   if (actorKey === normalizeActorKey(row.proposedBy)) throw new Error("approver must differ from proposer")
 }
 
+function refuseDurableLearningStore(store: MasterStore | undefined): void {
+  if (!store || store instanceof InMemoryMasterStore) return
+  refuseDurableLearningSeal()
+}
+
 export async function proposeLearning(input: ProposeLearningInput, deps: LearningDeps): Promise<LearningProposalRecord> {
   return exclusive(deps.ledger, async () => {
+    refuseDurableLearningStore(deps.store)
     assertLearningOpen(deps)
     if (!isClassification(input.classification)) throw new Error("artefact write omitted classification")
     const firmId = text(input.firmId)
@@ -301,6 +308,7 @@ async function voidOpenSeal(proposalId: string, store: MasterStore): Promise<voi
 
 export async function decideLearning(id: string, actor: LearningActor, deps: LearningDeps): Promise<LearningProposalRecord> {
   return exclusive(deps.ledger, async () => {
+    refuseDurableLearningStore(deps.store)
     assertLearningOpen(deps)
     const decision = actor.decision === "approved" ? "approved" : actor.decision === "rejected" ? "rejected" : refuseDirectMasterWrite()
     const row = await deps.ledger.get(id)
