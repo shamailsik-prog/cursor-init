@@ -1,0 +1,466 @@
+/**
+ * L5.4 per-document-type filing readiness (spec lines 3865–3899).
+ * The oracle below is the acceptance reading of the doctype row. It is not the implementation.
+ * A type has a filing profile only when its own posture or its own annexure/checklist text
+ * names a filing accompaniment. Otherwise the checklist is `{ known: false }` and is not a generic list.
+ */
+import { readFileSync } from "node:fs"
+import path from "node:path"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import {
+  D4_CHECKLIST_FLAG,
+  DOCKET_AUTO_TICK_WIRED,
+  blockIfIncomplete,
+  getChecklistForType,
+  getReadiness,
+  isD4ChecklistEnabled,
+  type ChecklistItem,
+  type KnownChecklist,
+  type ManualTick,
+  type Produced,
+} from "@/functions/src/d4/checklist"
+import { getDocumentType, listDocumentTypes, type DocumentType } from "@/functions/src/d4/doctypes"
+
+const root = process.cwd()
+
+const FILING_POSTURES = new Set(["writ", "application", "appeal", "originating_pleading", "responsive_pleading"])
+
+function rowHasFilingProfile(type: DocumentType): boolean {
+  const lines = type.checklist.join("\n")
+  const bundle = `${lines}\n${type.annexureRule}`
+  return (
+    FILING_POSTURES.has(type.posture) ||
+    /\bannexures?\b|\bexhibits?\b/i.test(bundle) ||
+    /\baffidavits?\b|\bverification\b/i.test(bundle) ||
+    /\bvakalatnama\b/i.test(lines) ||
+    /\bindex(?:ed|ing)?\b|\bdocket\b/i.test(bundle) ||
+    type.checklist.some((line) => /\bcourt fee\b/i.test(line))
+  )
+}
+
+function asKnown(id: string): KnownChecklist {
+  const checklist = getChecklistForType(id)
+  expect(checklist.known, id).toBe(true)
+  if (!checklist.known) throw new Error(`expected a checklist for ${id}`)
+  return checklist
+}
+
+function item(checklist: KnownChecklist, id: string): ChecklistItem {
+  const found = checklist.items.find((entry) => entry.id === id)
+  expect(found, id).toBeDefined()
+  if (!found) throw new Error(`missing item ${id}`)
+  return found
+}
+
+function mandatoryTicks(checklist: KnownChecklist, except: readonly string[] = []): ManualTick[] {
+  return checklist.items
+    .filter((entry) => entry.mandatory && !except.includes(entry.id))
+    .map((entry) => ({ itemId: entry.id, by: "clerk", at: "2026-11-24T00:00:00.000Z" }))
+}
+
+const ITEM_KEYS = ["autoTickWired", "completion", "id", "kind", "label", "mandatory", "sourceLines"]
+
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
+describe("getChecklistForType (L5.4, every verified id)", () => {
+  it("yields a derived checklist or known: false, and never a generic list", () => {
+    const types = listDocumentTypes({})
+    expect(types).toHaveLength(159)
+    const withoutProfile: string[] = []
+    for (const type of types) {
+      const checklist = getChecklistForType(type.id)
+      if (!rowHasFilingProfile(type)) {
+        withoutProfile.push(type.id)
+        expect(checklist, type.id).toEqual({ known: false })
+        continue
+      }
+      expect(checklist.known, type.id).toBe(true)
+      if (!checklist.known) continue
+      expect(checklist.documentTypeId).toBe(type.id)
+      expect(checklist.items.length).toBeGreaterThan(0)
+      expect(new Set(checklist.items.map((entry) => entry.id)).size).toBe(checklist.items.length)
+      const pleading = checklist.items.find((entry) => entry.kind === "pleading")
+      expect(Boolean(pleading)).toBe(FILING_POSTURES.has(type.posture))
+      if (pleading) expect(pleading.label).toBe(`Pleading: ${type.name}`)
+      const fee = checklist.items.find((entry) => entry.kind === "court_fee")
+      const feeLine = type.checklist.find((line) => /\bcourt fee\b/i.test(line))
+      expect(Boolean(fee)).toBe(Boolean(feeLine))
+      if (fee && feeLine) {
+        expect(fee.mandatory).toBe(!/\bif\b/i.test(feeLine))
+        expect(fee.completion).toBe("manual")
+        expect(fee.autoTickWired).toBe(false)
+        expect(fee.sourceLines).toContain(feeLine)
+        expect(feeLine).toMatch(/MANUAL/i)
+        expect(Object.keys(fee).sort()).toEqual(ITEM_KEYS)
+        expect(JSON.stringify(fee)).not.toMatch(/\b\d+(?:\.\d+)?\b/)
+      }
+      expect(checklist.items.some((entry) => entry.kind === "vakalatnama")).toBe(
+        type.checklist.some((line) => /\bvakalatnama\b/i.test(line))
+      )
+      for (const entry of checklist.items) {
+        expect(entry.sourceLines.length).toBeGreaterThan(0)
+        for (const line of entry.sourceLines) {
+          expect(line === type.name || line === type.annexureRule || type.checklist.includes(line), `${type.id} ${entry.id}`).toBe(true)
+        }
+      }
+    }
+    expect(withoutProfile).toContain("legal_notice")
+    expect(withoutProfile).toContain("legal_opinion")
+    expect(withoutProfile).toContain("vakalatnama")
+    expect(withoutProfile).toContain("fir_translation")
+    expect(withoutProfile.length).toBeGreaterThan(0)
+    expect(withoutProfile.length).toBeLessThan(types.length)
+  })
+
+  it("a suit, a petition and an application each cite their own row", () => {
+    const suit = getDocumentType("civil_suit")!
+    const petition = getDocumentType("constitutional_petition_199")!
+    const application = getDocumentType("interim_injunction_application")!
+    expect(suit.posture).toBe("originating_pleading")
+    expect(petition.posture).toBe("writ")
+    expect(application.posture).toBe("application")
+
+    const suitList = asKnown(suit.id)
+    const petitionList = asKnown(petition.id)
+    const applicationList = asKnown(application.id)
+    expect(suitList).not.toEqual(petitionList)
+    expect(suitList).not.toEqual(applicationList)
+    expect(petitionList).not.toEqual(applicationList)
+
+    for (const type of [suit, petition, application]) {
+      const checklist = asKnown(type.id)
+      expect(checklist.items.filter((entry) => entry.mandatory).map((entry) => entry.id)).toEqual([
+        "pleading",
+        "annexures",
+        "verification",
+        "vakalatnama",
+        "index_docket",
+        "court_fee",
+      ])
+      expect(item(checklist, "pleading").label).toBe(`Pleading: ${type.name}`)
+      expect(item(checklist, "annexures").sourceLines).toContain(type.annexureRule)
+      expect(item(checklist, "verification").sourceLines).toEqual(
+        expect.arrayContaining([type.checklist.find((line) => /\baffidavit\b|\bverification\b/i.test(line))])
+      )
+      expect(item(checklist, "vakalatnama").label).toBe(type.checklist.find((line) => /\bvakalatnama\b/i.test(line)))
+      expect(item(checklist, "court_fee").label).toBe(type.checklist.find((line) => /\bcourt fee\b/i.test(line)))
+      expect(item(checklist, "index_docket").autoTickWired).toBe(false)
+    }
+
+    expect(suit.checklist).toContain("Affidavit / verification")
+    expect(suit.checklist).toContain("Vakalatnama")
+    expect(application.checklist).toContain("Affidavit in support")
+    expect(application.checklist).toContain("Vakalatnama on file")
+    expect(item(suitList, "verification").label).toBe("Affidavit / verification")
+    expect(item(applicationList, "verification").label).toBe("Affidavit in support")
+    expect(item(applicationList, "vakalatnama").label).toBe("Vakalatnama on file")
+    expect(suit.annexureRule).not.toBe(petition.annexureRule)
+    expect(petition.annexureRule).not.toBe(application.annexureRule)
+  })
+
+  it("does not add a slot the row does not name", () => {
+    const statement = getDocumentType("written_statement_civil")!
+    expect(statement.checklist.some((line) => /\bcourt fee\b/i.test(line))).toBe(false)
+    expect(asKnown(statement.id).items.some((entry) => entry.id === "court_fee")).toBe(false)
+
+    const secp = getDocumentType("secp_complaint")!
+    expect(secp.checklist.some((line) => /\bvakalatnama\b/i.test(line))).toBe(false)
+    expect(secp.checklist.some((line) => /\baffidavit\b|\bverification\b/i.test(line))).toBe(false)
+    const secpItems = asKnown(secp.id).items
+    expect(secpItems.some((entry) => entry.id === "vakalatnama")).toBe(false)
+    expect(secpItems.some((entry) => entry.id === "verification")).toBe(false)
+
+    const nazir = getDocumentType("court_nazir_application")!
+    expect(nazir.checklist).toContain("Affidavit if facts asserted")
+    expect(nazir.annexureRule).not.toMatch(/\bindex/i)
+    const nazirList = asKnown(nazir.id)
+    expect(item(nazirList, "verification").mandatory).toBe(false)
+    expect(nazirList.items.some((entry) => entry.id === "court_fee")).toBe(false)
+    expect(nazirList.items.some((entry) => entry.id === "index_docket")).toBe(false)
+
+    const deed = getDocumentType("memorandum_of_association")!
+    expect(deed.posture).toBe("instrument")
+    expect(deed.checklist.some((line) => /\bstamp duty\b/i.test(line))).toBe(true)
+    expect(deed.checklist.some((line) => /\bcourt fee\b/i.test(line))).toBe(false)
+    const deedList = asKnown(deed.id)
+    expect(deedList.items.some((entry) => entry.kind === "pleading")).toBe(false)
+    expect(deedList.items.some((entry) => entry.id === "court_fee")).toBe(false)
+    expect(item(deedList, "annexures").mandatory).toBe(true)
+    expect(item(deedList, "annexures").sourceLines).toContain(deed.annexureRule)
+    const duty = deedList.items.find((entry) => entry.sourceLines.some((line) => /\bstamp duty\b/i.test(line)))
+    expect(duty?.kind).toBe("type_specific")
+    expect(duty?.mandatory).toBe(false)
+    expect(duty && Object.keys(duty)).not.toContain("amount")
+
+    const possession = getDocumentType("property_suit_possession")!
+    expect(possession.courtIds).toContain("NON_FORUM")
+    expect(possession.posture).toBe("originating_pleading")
+    expect(asKnown(possession.id).items.some((entry) => entry.kind === "pleading")).toBe(true)
+
+    const affidavit = getDocumentType("affidavit")!
+    expect(affidavit.annexureRule).toMatch(/\bif any\b/i)
+    const affidavitList = asKnown(affidavit.id)
+    expect(affidavitList.items.some((entry) => entry.kind === "pleading")).toBe(false)
+    expect(item(affidavitList, "verification").mandatory).toBe(true)
+    expect(item(affidavitList, "annexures").mandatory).toBe(false)
+    expect(item(affidavitList, "annexures").sourceLines).toContain(affidavit.annexureRule)
+  })
+
+  it("refuses an unknown id, a prototype name, and an empty or whitespace id", () => {
+    for (const id of ["no_such_type", "constructor", "__proto__", "toString", " civil_suit "]) {
+      expect(getChecklistForType(id)).toEqual({ known: false })
+    }
+    for (const id of ["", " ", "\t", "\n", " \t\n "]) {
+      expect(getChecklistForType(id)).toEqual({ known: false })
+    }
+    expect(getChecklistForType(undefined as unknown as string)).toEqual({ known: false })
+  })
+
+  it("keeps the court-fee item free of a computed figure, and the module free of fee arithmetic", () => {
+    const source = ["functions/src/d4/checklist.ts", "functions/src/d4/checklistProfiles.ts"]
+      .map((file) => readFileSync(path.join(root, file), "utf8"))
+      .join("\n")
+    expect(source).not.toMatch(/\bamount\b/i)
+    expect(source).not.toMatch(/\brupees?\b|\bRs\b/i)
+    expect(source).not.toMatch(/\bpaise\b/i)
+    expect(source).not.toMatch(/Math\./)
+    expect(source).not.toMatch(/\d+\s*[*x×/]\s*\d+/)
+    expect(source).not.toMatch(/\bfirebase\b|\bfirestore\b/i)
+    expect(source).not.toMatch(/from\s+["']\.\/gateOps["']/)
+    const fee = item(asKnown("civil_suit"), "court_fee")
+    expect(fee.kind).toBe("court_fee")
+    expect("amount" in fee).toBe(false)
+  })
+})
+
+describe("getReadiness and blockIfIncomplete", () => {
+  it("a missing mandatory item is not ready to file, and names that item", () => {
+    const checklist = asKnown("civil_suit")
+    const produced: Produced = { manualTicks: mandatoryTicks(checklist, ["court_fee"]) }
+    const readiness = getReadiness("civil_suit", produced)
+    expect(readiness.known).toBe(true)
+    if (!readiness.known) return
+    expect(readiness.readyToFile).toBe(false)
+    expect(readiness.missingMandatory).toEqual(["court_fee"])
+    expect(readiness.items.find((entry) => entry.id === "court_fee")?.done).toBe(false)
+    const blocked = blockIfIncomplete("civil_suit", produced)
+    expect(blocked).toEqual({
+      blocked: true,
+      reason: "filing_incomplete: court_fee",
+      missingMandatory: ["court_fee"],
+    })
+  })
+
+  it("is ready to file only when every mandatory item is present", () => {
+    const checklist = asKnown("civil_suit")
+    const produced: Produced = {
+      affidavitId: "affidavit-1",
+      annexureIds: ["", "  ", "annex-a"],
+      docketId: "docket-not-wired",
+      manualTicks: mandatoryTicks(checklist).filter((tick) => tick.itemId !== "verification" && tick.itemId !== "annexures"),
+    }
+    const readiness = getReadiness("civil_suit", produced)
+    expect(readiness.known).toBe(true)
+    if (!readiness.known) return
+    expect(readiness.readyToFile).toBe(true)
+    expect(readiness.missingMandatory).toEqual([])
+    expect(readiness.items.find((entry) => entry.id === "verification")).toMatchObject({
+      done: true,
+      completedBy: "affidavit",
+      actor: null,
+    })
+    expect(readiness.items.find((entry) => entry.id === "annexures")).toMatchObject({
+      done: true,
+      completedBy: "annexures",
+      actor: null,
+    })
+    expect(readiness.items.find((entry) => entry.id === "court_fee")).toMatchObject({
+      done: true,
+      completedBy: "manual",
+      actor: { by: "clerk", at: "2026-11-24T00:00:00.000Z" },
+    })
+    expect(readiness.progress).toMatchObject({
+      mandatoryDone: readiness.progress.mandatoryTotal,
+      total: readiness.items.length,
+    })
+    expect(readiness.progress.done).toBeLessThan(readiness.progress.total)
+    expect(blockIfIncomplete("civil_suit", produced)).toEqual({
+      blocked: false,
+      reason: null,
+      missingMandatory: [],
+    })
+  })
+
+  it("leaves an optional item open without blocking, and does not treat a conditional affidavit as mandatory", () => {
+    const suit = asKnown("civil_suit")
+    const cause = suit.items.find((entry) => entry.sourceLines.includes("Cause title and court correct"))
+    expect(cause?.mandatory).toBe(false)
+    expect(cause?.kind).toBe("type_specific")
+    const ready = getReadiness("civil_suit", { manualTicks: mandatoryTicks(suit) })
+    expect(ready.known).toBe(true)
+    if (!ready.known) return
+    expect(ready.readyToFile).toBe(true)
+    expect(ready.items.find((entry) => entry.id === cause?.id)?.done).toBe(false)
+
+    const nazir = asKnown("court_nazir_application")
+    const nazirReady = getReadiness("court_nazir_application", { manualTicks: mandatoryTicks(nazir) })
+    expect(nazirReady.known).toBe(true)
+    if (!nazirReady.known) return
+    expect(nazirReady.readyToFile).toBe(true)
+    expect(nazirReady.missingMandatory).toEqual([])
+    expect(nazirReady.items.find((entry) => entry.id === "verification")).toMatchObject({ mandatory: false, done: false })
+  })
+
+  it("does not auto-tick the index from a docket id while the L5.5 seam is unwired", () => {
+    expect(DOCKET_AUTO_TICK_WIRED).toBe(false)
+    const checklist = asKnown("civil_suit")
+    expect(item(checklist, "index_docket").autoTickWired).toBe(false)
+    expect(item(checklist, "index_docket").completion).toBe("docket")
+    const produced: Produced = {
+      docketId: "docket-1",
+      manualTicks: mandatoryTicks(checklist, ["index_docket"]),
+    }
+    const readiness = getReadiness("civil_suit", produced)
+    expect(readiness.known).toBe(true)
+    if (!readiness.known) return
+    expect(readiness.docketAutoTickWired).toBe(false)
+    expect(readiness.readyToFile).toBe(false)
+    expect(readiness.missingMandatory).toEqual(["index_docket"])
+    expect(readiness.items.find((entry) => entry.id === "index_docket")?.done).toBe(false)
+    expect(JSON.stringify(readiness)).not.toContain("5000")
+  })
+
+  it("ignores a manual tick with no who or when, and ignores a blank affidavit or annexure id", () => {
+    const checklist = asKnown("civil_suit")
+    const produced: Produced = {
+      affidavitId: "  ",
+      annexureIds: ["", "   "],
+      manualTicks: [
+        { itemId: "pleading", by: " ", at: "2026-11-24T00:00:00.000Z" },
+        { itemId: "court_fee", by: "clerk", at: "  " },
+        { itemId: "vakalatnama", by: "clerk", at: "2026-11-24" },
+      ],
+    }
+    const readiness = getReadiness("civil_suit", produced)
+    expect(readiness.known).toBe(true)
+    if (!readiness.known) return
+    expect(readiness.items.find((entry) => entry.id === "pleading")?.done).toBe(false)
+    expect(readiness.items.find((entry) => entry.id === "court_fee")?.done).toBe(false)
+    expect(readiness.items.find((entry) => entry.id === "verification")?.done).toBe(false)
+    expect(readiness.items.find((entry) => entry.id === "annexures")?.done).toBe(false)
+    expect(readiness.items.find((entry) => entry.id === "vakalatnama")).toMatchObject({
+      done: true,
+      actor: { by: "clerk", at: "2026-11-24" },
+    })
+    expect(readiness.readyToFile).toBe(false)
+    const blocked = blockIfIncomplete("civil_suit", produced)
+    expect(blocked.blocked).toBe(true)
+    expect(blocked.missingMandatory).toEqual(
+      checklist.items.filter((entry) => entry.mandatory && entry.id !== "vakalatnama").map((entry) => entry.id)
+    )
+  })
+
+  it("refuses an unknown type and an empty id, and does not call either one ready", () => {
+    expect(getReadiness("no_such_type", {})).toEqual({
+      known: false,
+      reason: "unknown_type",
+      readyToFile: false,
+      missingMandatory: [],
+      progress: { done: 0, total: 0, mandatoryDone: 0, mandatoryTotal: 0 },
+      items: [],
+      docketAutoTickWired: false,
+    })
+    expect(blockIfIncomplete("no_such_type", {})).toEqual({
+      blocked: true,
+      reason: "unknown_type",
+      missingMandatory: [],
+    })
+    for (const id of ["", " ", "\n"]) {
+      expect(getReadiness(id, {})).toMatchObject({ known: false, reason: "empty_document_type", readyToFile: false })
+      expect(blockIfIncomplete(id, {})).toEqual({ blocked: true, reason: "empty_document_type", missingMandatory: [] })
+    }
+    expect(getReadiness("legal_notice", { docketId: "d1", affidavitId: "a1" })).toMatchObject({
+      known: false,
+      reason: "no_filing_profile",
+      readyToFile: false,
+    })
+    expect(blockIfIncomplete("legal_opinion", {})).toEqual({
+      blocked: true,
+      reason: "no_filing_profile",
+      missingMandatory: [],
+    })
+  })
+
+  it("names every missing mandatory item, in checklist order, when nothing has been produced", () => {
+    const checklist = asKnown("civil_suit")
+    const readiness = getReadiness("civil_suit", {})
+    expect(readiness.known).toBe(true)
+    if (!readiness.known) return
+    const mandatory = checklist.items.filter((entry) => entry.mandatory).map((entry) => entry.id)
+    expect(readiness.missingMandatory).toEqual(mandatory)
+    expect(readiness.progress).toEqual({ done: 0, total: checklist.items.length, mandatoryDone: 0, mandatoryTotal: mandatory.length })
+    expect(readiness.readyToFile).toBe(false)
+    expect(blockIfIncomplete("civil_suit", undefined).reason).toBe(`filing_incomplete: ${mandatory.join(", ")}`)
+  })
+
+  it("does not let a produced figure complete the court-fee tick", () => {
+    const checklist = asKnown("sale_deed")
+    const produced = {
+      manualTicks: mandatoryTicks(checklist, ["court_fee"]),
+      feeFigure: 5000,
+    }
+    const readiness = getReadiness("sale_deed", produced)
+    expect(readiness.known).toBe(true)
+    if (!readiness.known) return
+    expect(readiness.missingMandatory).toEqual(["court_fee"])
+    expect(JSON.stringify(readiness.items.find((entry) => entry.id === "court_fee"))).not.toContain("5000")
+    expect(blockIfIncomplete("sale_deed", produced).reason).toBe("filing_incomplete: court_fee")
+  })
+
+  it("uses the last valid manual tick and ignores prototype-shaped item ids", () => {
+    const readiness = getReadiness("court_nazir_application", {
+      manualTicks: [
+        { itemId: "__proto__", by: "x", at: "t" },
+        { itemId: "constructor", by: "x", at: "t" },
+        { itemId: "pleading", by: "first", at: "t1" },
+        { itemId: "pleading", by: "second", at: "t2" },
+      ],
+    })
+    expect(readiness.known).toBe(true)
+    if (!readiness.known) return
+    expect(readiness.items.find((entry) => entry.id === "pleading")?.actor).toEqual({ by: "second", at: "t2" })
+    expect(({} as { polluted?: string }).polluted).toBeUndefined()
+  })
+})
+
+describe("flag and wiring seam", () => {
+  it("exports D4_CHECKLIST and leaves it off unless the env value is true", () => {
+    expect(D4_CHECKLIST_FLAG).toBe("D4_CHECKLIST")
+    vi.stubEnv(`SIKANDER_FLAG_${D4_CHECKLIST_FLAG}`, "")
+    expect(isD4ChecklistEnabled()).toBe(false)
+    vi.stubEnv(`SIKANDER_FLAG_${D4_CHECKLIST_FLAG}`, "true")
+    expect(isD4ChecklistEnabled()).toBe(true)
+    vi.stubEnv(`SIKANDER_FLAG_${D4_CHECKLIST_FLAG}`, " TRUE ")
+    expect(isD4ChecklistEnabled()).toBe(true)
+    vi.stubEnv(`SIKANDER_FLAG_${D4_CHECKLIST_FLAG}`, "yes")
+    expect(isD4ChecklistEnabled()).toBe(false)
+    vi.stubEnv(`SIKANDER_FLAG_${D4_CHECKLIST_FLAG}`, "false")
+    expect(isD4ChecklistEnabled()).toBe(false)
+  })
+
+  it("answers the pure checklist while the flag is unset", () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D4_CHECKLIST_FLAG}`, "")
+    expect(isD4ChecklistEnabled()).toBe(false)
+    expect(asKnown("civil_suit").documentTypeId).toBe("civil_suit")
+  })
+
+  it("is not referenced by the gate, the functions entrypoint or the router", () => {
+    const files = ["functions/src/d4/gateOps.ts", "functions/src/index.ts", "functions/src/http/router.ts"]
+    for (const file of files) {
+      const source = readFileSync(path.join(root, file), "utf8")
+      expect(source, file).not.toMatch(/blockIfIncomplete|getChecklistForType|getReadiness|D4_CHECKLIST|checklistProfiles/)
+    }
+  })
+})
