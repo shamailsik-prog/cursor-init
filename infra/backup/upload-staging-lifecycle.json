@@ -1,0 +1,8 @@
+{
+  "id": "expire-upload-staging",
+  "prefix": "upload-staging/",
+  "expirationDays": 1,
+  "status": "Enabled",
+  "objectLock": "none",
+  "note": "Configuration only. This repo does not apply the rule to a live bucket. The prefix must not inherit the vault COMPLIANCE default retention (infra/backup/document-vault.json, 2555 days): a bucket-wide lock blocks both this lifecycle and DeleteObject until the lock ends. Staging keys are upload-staging/<firmId>/<matterId>/ so this prefix matches them."
+}

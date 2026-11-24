@@ -131,10 +131,15 @@ function buildBaseTree(): string {
     "ci_gates/fixtures/legacy_governance_quarantine_g0_e2e.json",
     "platform/flags/featureFlags.ts",
     // Check [22] (audit F42): the data inventory gate finds stores in firestore.rules, Firestore collection literals,
-    // object key prefixes and Postgres tables; these three files name the collections, the object prefix and the tables
+    // object key prefixes and Postgres tables; these files name the collections, the object prefix and the tables
     // found nowhere in the paths above, so no inventoried store reads as stale in the minimal tree.
+    // uploadStagingStore names firestore:upload_sessions (UPLOAD_SESSIONS_COLLECTION) and the
+    // upload-staging/${firmId}/ key the inventory scanner reads. uploadSessionRecord is the
+    // declared TTL writer for that collection (check [20]); the manifest fails if the file is absent.
     "platform/persistence/firestoreSpineRepositories.ts",
     "platform/documents/documentObjectStore.ts",
+    "platform/documents/uploadStagingStore.ts",
+    "platform/documents/uploadSessionRecord.ts",
     "corpus_service/scraper/models.py",
     // FA-F42-R1-008 (spec R28): a server-only collection must be named in code, not only in firestore.rules; these two
     // files hold the constants (AUDIT_OUTBOX_COLLECTION, MATTER_TOMBSTONES) the copied Functions sources name them by.

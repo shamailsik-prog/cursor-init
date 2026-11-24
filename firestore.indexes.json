@@ -494,6 +494,14 @@
         { "fieldPath": "uploadedBy", "order": "ASCENDING" },
         { "fieldPath": "__name__", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "upload_sessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "firmId", "order": "ASCENDING" },
+        { "fieldPath": "matterId", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [
@@ -584,6 +592,16 @@
     },
     {
       "collectionGroup": "whatsapp_outbound_keys",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" },
+        { "arrayConfig": "CONTAINS", "queryScope": "COLLECTION" }
+      ]
+    },
+    {
+      "collectionGroup": "upload_sessions",
       "fieldPath": "expiresAt",
       "ttl": true,
       "indexes": [

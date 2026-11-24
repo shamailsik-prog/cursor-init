@@ -20,8 +20,8 @@ export { DocumentObjectConfigurationError, DocumentObjectStoreError }
 const OBJECT_FORMAT_VERSION = 1
 const NONCE_BYTES = 12
 const TAG_BYTES = 16
-const FS_STORAGE_SCHEME = "fs://"
-const S3_STORAGE_SCHEME = "s3://"
+export const FS_STORAGE_SCHEME = "fs://"
+export const S3_STORAGE_SCHEME = "s3://"
 const SAFE_SEGMENT = /^[A-Za-z0-9_-]+$/
 
 export type DocumentObjectPutInput = {
@@ -79,7 +79,7 @@ export function resolveDocumentObjectBackendKind(): DocumentObjectBackendKind {
   return "memory"
 }
 
-function activeStorageScheme(): string {
+export function activeStorageScheme(): string {
   return resolveDocumentObjectBackendKind() === "s3" ? S3_STORAGE_SCHEME : FS_STORAGE_SCHEME
 }
 
@@ -134,7 +134,7 @@ export function buildDocumentStoragePath(firmId: string, docId: string, objectVe
   return `${activeStorageScheme()}${firmId}/documents/${docId}/v${objectVersion}`
 }
 
-function encryptPlaintext(plaintext: Buffer): Buffer {
+export function encryptPlaintext(plaintext: Buffer): Buffer {
   const key = encryptionKey()
   const nonce = randomBytes(NONCE_BYTES)
   const cipher = createCipheriv("aes-256-gcm", key, nonce)
@@ -177,7 +177,7 @@ const memoryObjects = new Map<string, Buffer>()
 let testHookFailNextRead = false
 let testHookFailNextDelete = false
 
-function assertDocumentObjectTestHooksAllowed(): void {
+export function assertDocumentObjectTestHooksAllowed(): void {
   if (process.env.NODE_ENV === "production") {
     throw new DocumentObjectConfigurationError(
       "document object test hooks are not available when NODE_ENV=production"
@@ -197,7 +197,7 @@ export function __testHookFailNextDocumentObjectDelete(): void {
   testHookFailNextDelete = true
 }
 
-function objectRoot(): string {
+export function objectRoot(): string {
   const root = process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()
   if (!root) {
     throw new DocumentObjectConfigurationError("SIKANDER_DOCUMENT_OBJECT_ROOT is not set")
