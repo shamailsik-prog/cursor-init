@@ -424,8 +424,9 @@ class RuntimeCheck(unittest.TestCase):
 
 # Wave-1 stores the deletion saga will read. Two already exist on 7ae1a33f with this profile and key
 # (evidence_items, custody_events); the gate forbids a duplicate, and the file lock forbids editing them.
-# The other six are pending on F42 until their writers land. `validatePolicy(policy, inventory())` in
-# functions/test/f42-retention.units.test.ts loads this same file; this pin is what makes that call see them.
+# Five are still pending on F42 until their writers land. whatsapp_outbound_keys landed with W1-Q14R3
+# (ME I1): the pin keeps its deletion key and age field, and `pending` is gone.
+# `validatePolicy(policy, inventory())` in functions/test/f42-retention.units.test.ts loads this same file.
 WAVE1_NEW = (
     {
         "id": "firestore:intakes",
@@ -469,16 +470,16 @@ WAVE1_NEW = (
         "key": {"kind": "objects", "via": "firestore:upload_sessions", "pathField": "storagePath"},
         "pending": "F42",
     },
-    {
-        "id": "firestore:whatsapp_outbound_keys",
-        "kind": "firestore",
-        "name": "whatsapp_outbound_keys",
-        "profile": "operational_ttl",
-        "key": {"kind": "none"},
-        "ageField": {"field": "expiresAt", "type": "timestamp"},
-        "pending": "F42",
-    },
 )
+# Landed writer (W1-Q14R3, ME I1). Same profile and TTL clock as the pre-registration, without `pending`.
+WAVE1_LANDED = {
+    "id": "firestore:whatsapp_outbound_keys",
+    "kind": "firestore",
+    "name": "whatsapp_outbound_keys",
+    "profile": "operational_ttl",
+    "key": {"kind": "none"},
+    "ageField": {"field": "expiresAt", "type": "timestamp"},
+}
 WAVE1_ALREADY = ("firestore:evidence_items", "firestore:custody_events")
 
 
@@ -495,6 +496,13 @@ class Wave1Stores(unittest.TestCase):
             for field, value in expected.items():
                 self.assertEqual(store.get(field), value, expected["id"])
             self.assertNotIn(store["name"], {s["name"] for s in inventory["stores"] if s["id"] != store["id"]})
+        landed = by_id.get(WAVE1_LANDED["id"])
+        self.assertIsNotNone(landed, WAVE1_LANDED["id"])
+        assert landed is not None
+        for field, value in WAVE1_LANDED.items():
+            self.assertEqual(landed.get(field), value, WAVE1_LANDED["id"])
+        self.assertNotIn("pending", landed)
+        self.assertNotIn(landed["name"], {s["name"] for s in inventory["stores"] if s["id"] != landed["id"]})
         for sid in WAVE1_ALREADY:
             store = by_id[sid]
             self.assertEqual(store["profile"], "matter_content", sid)

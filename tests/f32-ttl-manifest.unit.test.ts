@@ -14,6 +14,7 @@ describe("F32 TTL manifest (R4-002)", () => {
         "idempotency_effects",
         "idempotency_keys",
         "rate_limits",
+        "whatsapp_outbound_keys",
       ].sort(),
     )
   })
