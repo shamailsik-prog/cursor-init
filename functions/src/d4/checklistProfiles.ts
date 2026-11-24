@@ -107,8 +107,10 @@ function allowsNotApplicable(line: string): boolean {
  * document. Commas, " and ", and " / " are separators.
  * PARTNER-RULING-PENDING: may become judgment | (warrant OR jail roll)
  * A trailing "annexed" applies to each part. "annexed and indexed" is one bundle.
- * "and of the appellate court" is its own document. A shared "Certified copy of"
- * or "Certified copies of" is copied onto each part.
+ * "and of the appellate court" keeps the document noun from the previous part,
+ * so the label names that document and not the court. A shared "Certified copy of"
+ * or "Certified copies of" is copied onto each part. A non-certified "and of"
+ * continuation that is only a preposition is not emitted.
  */
 function splitNamedLine(line: string): string[] {
   const annexed = /\bannexed\b/i.test(line)
@@ -118,21 +120,53 @@ function splitNamedLine(line: string): string[] {
     .map((part) => part.trim())
     .filter((part) => part !== "")
   if (pieces.length <= 1) return [line]
+  const labeled = withSharedCertifiedCopy(line, pieces)
+  if (labeled.length === 0) return []
   const suffix = annexed ? " annexed" : ""
-  return withSharedCertifiedCopy(line, pieces).map((part) => `${part.replace(/\s+annexed\s*$/i, "").trim()}${suffix}`)
+  return labeled.map((part) => `${part.replace(/\s+annexed\s*$/i, "").trim()}${suffix}`)
+}
+
+function isCourtPhrase(value: string): boolean {
+  return /^(?:[a-z]+\s+){0,3}court$/i.test(value.trim())
+}
+
+function leadingFragment(part: string): boolean {
+  return /^(?:of|for|to|in|on|with|under|from)\b/i.test(part)
+}
+
+/** The previous document, with its last "of the …" possessor replaced by this court. */
+function inheritCourt(prior: string, court: string): string | null {
+  const match = /^(.*)\s+of\s+the\s+\S.*$/i.exec(prior)
+  if (match === null) return null
+  const stem = match[1]
+  if (!/\b(?:judgments?|judgements?|orders?|decrees?|awards?|warrants?|petitions?|plaints?|complaints?|charges?|sentences?|certificates?|records?|notices?|memos?|fir|bails?)\b/i.test(stem)) {
+    return null
+  }
+  return `${stem} of the ${court}`
 }
 
 function withSharedCertifiedCopy(original: string, parts: string[]): string[] {
   const plural = /\bcertified copies of\b/i.test(original)
   const singular = /\bcertified copy of\b/i.test(original)
-  if (!plural && !singular) return parts
+  if (!plural && !singular) return parts.filter((part) => !leadingFragment(part))
   const head = plural ? "Certified copies of" : "Certified copy of"
   const withThe = plural || /\bcertified copy of the\b/i.test(original)
-  return parts.map((part) => {
-    if (/\bcertified cop(?:y|ies)\b/i.test(part)) return part
+  const labeled: string[] = []
+  for (const part of parts) {
+    if (/\bcertified cop(?:y|ies)\b/i.test(part)) {
+      labeled.push(part)
+      continue
+    }
     const rest = part.replace(/^(?:of|for|to|in|on|with|under|from)\s+/i, "").replace(/^the\s+/i, "")
-    return withThe ? `${head} the ${rest}` : `${head} ${rest}`
-  })
+    if (isCourtPhrase(rest)) {
+      const prior = labeled[labeled.length - 1]
+      const inherited = prior === undefined ? null : inheritCourt(prior, rest)
+      if (inherited !== null) labeled.push(inherited)
+      continue
+    }
+    labeled.push(withThe ? `${head} the ${rest}` : `${head} ${rest}`)
+  }
+  return labeled
 }
 
 type ClauseKind = "skip" | "conditional" | "impugned" | "record" | "generic"
