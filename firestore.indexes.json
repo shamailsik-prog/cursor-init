@@ -583,6 +583,16 @@
       ]
     },
     {
+      "collectionGroup": "whatsapp_outbound_keys",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" },
+        { "arrayConfig": "CONTAINS", "queryScope": "COLLECTION" }
+      ]
+    },
+    {
       "collectionGroup": "counters",
       "fieldPath": "expiresAt",
       "ttl": true,
