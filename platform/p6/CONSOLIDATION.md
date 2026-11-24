@@ -14,10 +14,11 @@ F41 boundary: `docs/audit/2026-10-13-forensic-audit.md` L839–L853. Quarantine 
 
 ## Decisions
 
-- `platform/p6/masterWrite.ts` `writeMaster` (L234) is the only master write. It is not re-exported from `platform/p6/index.ts`. `executeMasterTableWrite` (L275) holds the `master_versions` and `master_knowledge` statements and is not exported. `scanP6MasterWriters` (L386) fails any other file under `platform/p6` that writes a `master_*` table, calls `.commitVersion(`, `.persistVersion(`, `sessionForWrite(`, `writeMaster(` outside the store and `proposeChange`, or `sealMasterSession(` outside the store. It reads `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.py` and `.sql`, the same suffixes as `ci_gates/check_master_writes.py`.
+- `writeMaster` lives in `platform/p6/masterStore.ts`. It is not re-exported from `platform/p6/index.ts`, and `platform/p6/masterWrite.ts` does not export it. The seal is a private map in the store. There is no exported sealer. The writer reads the stored proposal and the stored version through that private handle. It does not trust the caller's `getProposal`, `getVersion`, `currentSnapshot`, or `assertCommitShape`.
+- The `master_versions` and `master_knowledge` statements live in `masterStore.ts` beside that seal. They are not exported. `scanP6MasterWriters` fails any other file under `platform/p6` that writes a `master_*` table, calls `.commitVersion(`, `.persistVersion(`, `sessionForWrite(`, `sealMasterSession(`, `rollbackMaster(` outside `proposeChange`, `writeMaster(` outside the store and `proposeChange`, aliases `writeMaster`, or calls it through a bracket. It reads `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`, `.py` and `.sql`. The repository guard uses the same suffixes and also refuses those calls, an aliased import, a bracket call, and any import of `@/platform/p6/masterWrite` outside `platform/p6`.
 - `change_proposals` inserts and updates stay in `platform/p6/masterStore.ts`. A proposal is not a master version. The repo-wide guard still refuses those statements outside P6.
-- Public `commitVersion` on the store (masterStore.ts L618 and L899) and on the session (L1042) calls `writeMaster`. The memory persist is `saveVersion` (L632), reached only through a session sealed inside `runExclusive`. `pgRaw` (L1077) stays inside the store. `sessionForWrite` is not exported. The ledger and the audit are staged on that transaction and published only after COMMIT. `writeMaster` loads the stored proposal (or the stored rollback target) and refuses a snapshot that is not that stored change.
-- `applyChange` (proposeChange.ts L209, delegate L259) and `rollbackMaster` (L284, delegate L300) pass the public session into `writeMaster`. They do not receive the raw persist or the Postgres client.
+- Public `commitVersion` on the store and on the session calls `writeMaster`. The memory persist is `#saveVersion`. A successful apply sets the stored status to `applied` in the same transaction as the version insert. The class is derived again from the current master body; when that class is substantive the stored partner decision is required. `sessionForWrite` is not exported. The ledger and the audit are staged on that transaction and published only after COMMIT. A snapshot that is not the stored change is refused.
+- `applyChange` and `rollbackMaster` pass the public session into `writeMaster`. They do not receive the raw persist or the Postgres client. A session the store did not seal is refused.
 - The write stays on when `SIKANDER_FLAG_P6_CONSOLIDATION` is unset. A flag-off second writer would fail the source scan. The flag gates the new learning, review and client entry points only (`platform/p6/consolidationFlag.ts` L8). Unset means off.
 - Actor binding uses `normalizeActorKey` from the store, the same fold as approval. A substantive apply requires the stored partner decision, `authorId` equal to the stored `decidedBy`, and the approver's folded key different from the proposer's. A cosmetic apply requires the system author `p6`. A rollback requires a stored version in the same firm.
 - The audit log and the once-only apply ledger are in-process. They are not a new table and not a new collection. They are published only after the transaction commits, and discarded if it rolls back. Durable once-only remains the store compare-and-swap and the one-proposal version constraint.
@@ -80,11 +81,11 @@ Adjacent, not one of the three channels: `services/d1-1/clients.ts` `createClien
 | --- | --- | --- | --- |
 | `proposeChange` | proposeChange.ts L143 | `tests/p6.g3.test.ts`, `tests/p6.master.pg.test.ts`, `tests/spine.hardening.test.ts` L349 | Stays a proposal. It does not write the master. |
 | `approveProposal` | proposeChange.ts L163 | same P6 tests | Records the partner decision the writer requires. |
-| `applyChange` | proposeChange.ts L209 | `tests/p6.g3.test.ts`, `tests/p6.master.pg.test.ts` | `writeMaster` L259 |
-| `rollbackMaster` | proposeChange.ts L284 | same | `writeMaster` L300 |
-| `commitVersion` | masterStore.ts L618, L899, L1042 | Public store and session | `writeMaster` via `guardedWrite` |
-| `writeMaster` | masterWrite.ts L234 | `applyChange`, `rollbackMaster`, public `commitVersion` | Canonical. Not on `platform/p6/index.ts`. |
-| `executeMasterTableWrite` | masterWrite.ts L275 | `writeMaster` only | Canonical SQL, not exported |
+| `applyChange` | proposeChange.ts | `tests/p6.g3.test.ts`, `tests/p6.master.pg.test.ts` | `writeMaster` in `masterStore.ts` |
+| `rollbackMaster` | proposeChange.ts | same | `writeMaster` in `masterStore.ts` |
+| `commitVersion` | masterStore.ts, store and session | Public store and session | `writeMaster` via `guardedWrite` |
+| `writeMaster` | masterStore.ts | `applyChange`, `rollbackMaster`, public `commitVersion` | Canonical. Not on `platform/p6/index.ts`. Not exported from `masterWrite.ts`. |
+| master table statements | masterStore.ts | `writeMaster` only | Not exported. The store is the only file the source scan allows to write `master_*`. |
 
 ## W2-WIRE
 

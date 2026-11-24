@@ -8,10 +8,11 @@
 
 import { randomUUID } from "node:crypto"
 import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
-import { effectiveClass, nextSnapshot, writeMaster } from "@/platform/p6/masterWrite"
+import { effectiveClass, nextSnapshot } from "@/platform/p6/masterWrite"
 import {
   normalizeActorKey,
   payloadDigest,
+  writeMaster,
   type CommitVersionResult,
   type MasterDiff,
   type MasterSnapshot,

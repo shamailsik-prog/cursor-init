@@ -54,8 +54,16 @@ class PatternCoversEveryMasterWrite(unittest.TestCase):
     def test_call_patterns_and_upper_case_suffixes_are_reported(self):
         samples = [
             "writeMaster(input, session, gate)",
+            "sealMasterSession(session, raw)",
+            "rollbackMaster(store, input)",
             "sessionForWrite(tx)",
             "raw.persistVersion(input)",
+            "import { writeMaster as w } from '@/platform/p6/masterStore'",
+            "import { sealMasterSession as seal } from '@/platform/p6/masterWrite'",
+            "m['writeMaster'](input, session, gate)",
+            'm["writeMaster"](input, session, gate)',
+            'import { nextSnapshot } from "@/platform/p6/masterWrite"',
+            "await import('@/platform/p6/masterWrite')",
         ]
         for sample in samples:
             self.assertIsNotNone(gate.PAT.search(sample), sample)
@@ -65,6 +73,9 @@ class PatternCoversEveryMasterWrite(unittest.TestCase):
             planted.parent.mkdir(parents=True)
             planted.write_text("export const q = `INSERT INTO master_audit (id) VALUES ('x')`\n", encoding="utf-8")
             self.assertIn("services/learner/Write.TS", gate.scan(root))
+            cts = root / "services" / "learner" / "sealed.cts"
+            cts.write_text("export const q = sealMasterSession(session, raw)\n", encoding="utf-8")
+            self.assertIn("services/learner/sealed.cts", gate.scan(root))
 
     def test_an_unrelated_insert_is_not_a_master_write(self):
         self.assertIsNone(gate.PAT.search("INSERT INTO public.users (id) VALUES ('a')"))

@@ -9,10 +9,10 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import {
   InMemoryMasterStore,
+  writeMaster,
   type CommitVersionInput,
   type MasterSession,
   type MasterStore,
-  type PersistedProposal,
 } from "@/platform/p6/masterStore"
 import { applyChange, approveProposal, proposeChange, rollbackMaster, type ApprovalActor } from "@/platform/p6/proposeChange"
 import {
@@ -20,8 +20,6 @@ import {
   masterWriteViolations,
   nextSnapshot,
   scanP6MasterWriters,
-  sealMasterSession,
-  writeMaster,
 } from "@/platform/p6/masterWrite"
 import * as p6Index from "@/platform/p6"
 import * as storeModule from "@/platform/p6/masterStore"
@@ -30,97 +28,6 @@ const PARTNER: ApprovalActor = { actorId: "partner_b", kind: "partner", role: "p
 
 function store(): MasterStore {
   return new InMemoryMasterStore({ role: "p6_service" })
-}
-
-function proposal(over: Partial<PersistedProposal> = {}): PersistedProposal {
-  return {
-    id: over.id ?? "prop-forged",
-    firmId: "firmA",
-    sourceModule: "15",
-    classification: "confidential",
-    changeClass: "substantive",
-    requestedClass: "substantive",
-    partition: "mutable",
-    entryKey: "clause.nda",
-    payload: { wording: "keep it secret" },
-    proposedBy: "learner-1",
-    status: "applied",
-    decidedBy: "partner_b",
-    decidedKind: "partner",
-    decidedRole: "partner",
-    declassify: false,
-    payloadHash: "hash",
-    ...over,
-  }
-}
-
-function command(row: PersistedProposal, author: { authorId: string; authorKind: "partner" | "system" }): CommitVersionInput {
-  const before = { entries: {} }
-  const after = {
-    entries: {
-      [row.entryKey]: {
-        partition: "mutable" as const,
-        key: row.entryKey,
-        body: row.payload,
-        classification: row.classification,
-      },
-    },
-  }
-  return {
-    firmId: row.firmId,
-    proposalId: row.id,
-    action: "apply",
-    diff: { key: row.entryKey, partition: "mutable", before, after },
-    snapshot: after,
-    authorId: author.authorId,
-    authorKind: author.authorKind,
-    restoredFromVersionId: null,
-    classification: row.classification,
-    proposal: row,
-    expectedBaseVersionId: null,
-  }
-}
-
-function countingSession(row: PersistedProposal) {
-  let commits = 0
-  let gate: Promise<void> = Promise.resolve()
-  const session = {
-    async getProposal(id: string) {
-      return id === row.id ? row : null
-    },
-    async currentSnapshot() {
-      return { entries: {} }
-    },
-    async currentClassification() {
-      return "confidential" as const
-    },
-    async lockFirm() {
-      return null
-    },
-    async getVersion() {
-      return null
-    },
-    async assertCommitShape() {},
-  }
-  sealMasterSession(session, {
-    async allowDeclassify() {},
-    async persistVersion(input: CommitVersionInput) {
-      const previous = gate
-      let release!: () => void
-      gate = new Promise<void>((resolve) => {
-        release = resolve
-      })
-      await previous
-      try {
-        commits += 1
-        await new Promise((resolve) => setTimeout(resolve, 20))
-        return { committed: true as const, versionId: `v-${input.proposalId}-${commits}` }
-      } finally {
-        release()
-      }
-    },
-  })
-  return { commits: () => commits, session }
 }
 
 describe("P6 consolidation — one master writer", () => {
@@ -162,59 +69,119 @@ describe("P6 consolidation — one master writer", () => {
     const proposeSource = readFileSync("platform/p6/proposeChange.ts", "utf8")
     const storeSource = readFileSync("platform/p6/masterStore.ts", "utf8")
     expect(proposeSource).not.toMatch(/\.commitVersion\s*\(/)
-    expect(storeSource).not.toMatch(/\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:[\w."]+\s*\.\s*)?["']?master_(?:knowledge|versions)\b/i)
+    expect(storeSource).toMatch(/INSERT INTO master_versions/)
+    expect(storeSource).not.toMatch(/export (?:async )?function sealMasterSession/)
+    expect(storeSource).not.toMatch(/\bsealMasterSession\s*\(/)
     expect(storeSource).not.toMatch(/\.commitVersion\s*\(/)
     expect(storeSource).not.toMatch(/executeMasterTableWrite\s*\(/)
     expect(storeSource).toMatch(/guardedWrite\(/)
+    expect(storeSource).toMatch(/async #saveVersion/)
     const writerSource = readFileSync("platform/p6/masterWrite.ts", "utf8")
-    expect(writerSource).not.toMatch(/export async function executeMasterTableWrite/)
+    expect(writerSource).not.toMatch(/INSERT INTO master_versions/)
+    expect(writerSource).not.toMatch(/export (?:async )?function sealMasterSession/)
+    expect(writerSource).not.toMatch(/export async function writeMaster/)
   })
 
   it("an unapproved write refuses and does not commit", async () => {
-    const row = proposal({
-      id: "prop-unapproved",
+    const memory = store()
+    const pending = await memory.insertProposal({
+      id: "00000000-0000-4000-8000-000000000281",
+      firmId: "firmA",
+      sourceModule: "15",
+      classification: "confidential",
       changeClass: "substantive",
       requestedClass: null,
+      partition: "mutable",
+      entryKey: "clause.unapproved",
+      payload: { wording: "not yet" },
+      proposedBy: "learner-1",
+      status: "pending",
       decidedBy: null,
       decidedKind: null,
       decidedRole: null,
-      status: "pending",
+      declassify: false,
+      payloadHash: "pending",
     })
-    const counter = countingSession(row)
-    await expect(writeMaster(command(row, { authorId: "p6", authorKind: "system" }), counter.session, { declassify: false })).rejects.toThrow(
-      /partner approval/,
-    )
-    expect(counter.commits()).toBe(0)
-    expect(masterWriteAuditLog().some((entry) => entry.proposalId === "prop-unapproved")).toBe(false)
+    const current = await memory.currentSnapshot("firmA")
+    const snapshot = nextSnapshot(current, pending)
+    await expect(
+      memory.commitVersion({
+        firmId: "firmA",
+        proposalId: pending.id,
+        action: "apply",
+        diff: { key: pending.entryKey, partition: "mutable", before: current, after: snapshot },
+        snapshot,
+        authorId: "p6",
+        authorKind: "system",
+        restoredFromVersionId: null,
+        classification: "confidential",
+        proposal: pending,
+        expectedBaseVersionId: null,
+      }),
+    ).rejects.toThrow(/partner approval/)
+    expect(await memory.listVersions("firmA")).toEqual([])
+    expect(masterWriteAuditLog().some((entry) => entry.proposalId === pending.id)).toBe(false)
   })
 
   it("an actor mismatch refuses, including a case-folded approver", async () => {
-    const row = proposal({
-      id: "prop-mismatch",
-      proposedBy: "partner_a",
-      decidedBy: "Partner_A",
-      status: "applied",
-    })
-    const counter = countingSession(row)
-    await expect(writeMaster(command(row, { authorId: "Partner_A", authorKind: "partner" }), counter.session, { declassify: false })).rejects.toThrow(
-      /approver must differ from proposer/,
+    const memory = store()
+    const pending = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.fold",
+        payload: { wording: "folded" },
+        proposedBy: "Partner_A",
+      },
+      memory,
     )
-    expect(counter.commits()).toBe(0)
+    await expect(
+      approveProposal(pending.id, { actorId: "partner_a", kind: "partner", role: "partner" }, memory),
+    ).rejects.toThrow(/approver must differ from proposer/)
+    expect((await memory.getProposal(pending.id))?.status).toBe("pending")
+    expect(await memory.listVersions("firmA")).toEqual([])
   })
 
   it("a concurrent double-apply applies once", async () => {
-    const row = proposal({ id: "prop-race" })
-    const counter = countingSession(row)
-    const input = command(row, { authorId: "partner_b", authorKind: "partner" })
-    const raced = await Promise.allSettled([
-      writeMaster(input, counter.session, { declassify: false }),
-      writeMaster(input, counter.session, { declassify: false }),
-    ])
+    const memory = store()
+    const approved = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.race",
+        payload: { wording: "race" },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    await approveProposal(approved.id, PARTNER, memory)
+    const stored = await memory.getProposal(approved.id)
+    const current = await memory.currentSnapshot("firmA")
+    const snapshot = nextSnapshot(current, stored!)
+    const input: CommitVersionInput = {
+      firmId: "firmA",
+      proposalId: stored!.id,
+      action: "apply",
+      diff: { key: stored!.entryKey, partition: "mutable", before: current, after: snapshot },
+      snapshot,
+      authorId: "partner_b",
+      authorKind: "partner",
+      restoredFromVersionId: null,
+      classification: "confidential",
+      proposal: null,
+      expectedBaseVersionId: null,
+    }
+    const raced = await Promise.allSettled([memory.commitVersion(input), memory.commitVersion(input)])
     expect(raced.filter((item) => item.status === "fulfilled")).toHaveLength(1)
     expect(raced.filter((item) => item.status === "rejected")).toHaveLength(1)
-    expect(counter.commits()).toBe(1)
+    expect(await memory.listVersions("firmA")).toHaveLength(1)
 
-    const memory = store()
     const pending = await proposeChange(
       {
         firmId: "firmA",
@@ -276,6 +243,17 @@ describe("P6 consolidation — one master writer", () => {
       ]),
     ).toEqual([])
     expect(masterWriteViolations([{ path: "platform/p6/note.ts", source: "export const label = 'change_proposals'\n" }])).toEqual([])
+    expect(
+      masterWriteViolations([{ path: "platform/p6/seal.ts", source: "export function sneak(session, raw) { sealMasterSession(session, raw) }\n" }]),
+    ).toEqual(["platform/p6/seal.ts"])
+    expect(
+      masterWriteViolations([
+        { path: "platform/p6/alias.ts", source: "import { writeMaster as w } from '@/platform/p6/masterStore'\n" },
+      ]),
+    ).toEqual(["platform/p6/alias.ts"])
+    expect(
+      masterWriteViolations([{ path: "platform/p6/bracket.ts", source: "m['writeMaster'](input, session, gate)\n" }]),
+    ).toEqual(["platform/p6/bracket.ts"])
   })
 
   it("reads a pre-existing file once and does not follow a symlink that replaces a path", () => {
@@ -399,9 +377,13 @@ describe("P6 consolidation — one master writer", () => {
     plant("sneak.cjs", "master_audit")
     plant("sneak.jsx", "master_audit")
     plant("sneak.mts", "master_audit")
+    plant("sneak.cts", "master_audit")
+    writeFileSync(join(nested, "seal.cts"), "export function sneak(session, raw) { sealMasterSession(session, raw) }\n")
     try {
       expect(scanP6MasterWriters(root).sort()).toEqual([
+        "platform/p6/nested/seal.cts",
         "platform/p6/nested/sneak.cjs",
+        "platform/p6/nested/sneak.cts",
         "platform/p6/nested/sneak.jsx",
         "platform/p6/nested/sneak.mjs",
         "platform/p6/nested/sneak.mts",
@@ -458,7 +440,6 @@ describe("P6 consolidation — one master writer", () => {
       declassify: false,
       payloadHash: "pending",
     })
-    const current = await memory.currentSnapshot("firmA")
     const disguisedBefore = {
       entries: {
         [pending.entryKey]: {
@@ -603,16 +584,31 @@ describe("P6 consolidation — one master writer", () => {
         }),
       ).rejects.toThrow(/partner approval/)
     })
+    const seeded = await proposeChange(
+      {
+        firmId: "firmB",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.cosmetic",
+        payload: { wording: "tidy" },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    await approveProposal(seeded.id, PARTNER, memory)
+    await applyChange(seeded.id, memory)
     const cosmetic = await memory.insertProposal({
       id: "00000000-0000-4000-8000-000000000272",
       firmId: "firmB",
       sourceModule: "15",
-      classification: "internal",
+      classification: "confidential",
       changeClass: "cosmetic",
       requestedClass: "cosmetic",
       partition: "mutable",
       entryKey: "clause.cosmetic",
-      payload: { wording: "tidy" },
+      payload: { wording: "tidy " },
       proposedBy: "learner-1",
       status: "pending",
       decidedBy: null,
@@ -621,24 +617,378 @@ describe("P6 consolidation — one master writer", () => {
       declassify: false,
       payloadHash: "pending",
     })
-    const empty = await memory.currentSnapshot("firmB")
-    const cosmeticSnapshot = nextSnapshot(empty, cosmetic)
+    const head = await memory.currentSnapshot("firmB")
+    const base = (await memory.listVersions("firmB")).at(-1)?.id ?? null
+    const cosmeticSnapshot = nextSnapshot(head, cosmetic)
     await expect(
       memory.commitVersion({
         firmId: "firmB",
         proposalId: cosmetic.id,
         action: "apply",
-        diff: { key: cosmetic.entryKey, partition: "mutable", before: empty, after: cosmeticSnapshot },
+        diff: { key: cosmetic.entryKey, partition: "mutable", before: head, after: cosmeticSnapshot },
         snapshot: cosmeticSnapshot,
         authorId: "clerk_x",
         authorKind: "system",
         restoredFromVersionId: null,
-        classification: "internal",
+        classification: "confidential",
         proposal: cosmetic,
-        expectedBaseVersionId: null,
+        expectedBaseVersionId: base,
       }),
     ).rejects.toThrow(/cosmetic proposal is not pending/)
     expect(await memory.listVersions("firmA")).toEqual([])
-    expect(await memory.listVersions("firmB")).toEqual([])
+    expect((await memory.getProposal(cosmetic.id))?.status).toBe("pending")
+  })
+
+  it("N8 an unsealed session is refused and saveVersion is not a public write", async () => {
+    const memory = store()
+    const pending = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.n8",
+        payload: { wording: "sealed only" },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    await approveProposal(pending.id, PARTNER, memory)
+    const stored = await memory.getProposal(pending.id)
+    const current = await memory.currentSnapshot("firmA")
+    const snapshot = nextSnapshot(current, stored!)
+    const input: CommitVersionInput = {
+      firmId: "firmA",
+      proposalId: stored!.id,
+      action: "apply",
+      diff: { key: stored!.entryKey, partition: "mutable", before: current, after: snapshot },
+      snapshot,
+      authorId: "partner_b",
+      authorKind: "partner",
+      restoredFromVersionId: null,
+      classification: "confidential",
+      proposal: stored!,
+      expectedBaseVersionId: null,
+    }
+    await expect(writeMaster(input, { getProposal: async () => stored }, { declassify: false })).rejects.toThrow(/master session is closed/)
+    const sneaky = memory as unknown as { saveVersion?: (value: CommitVersionInput) => Promise<unknown> }
+    expect(sneaky.saveVersion).toBeUndefined()
+    if (sneaky.saveVersion) await sneaky.saveVersion(input)
+    expect(await memory.listVersions("firmA")).toEqual([])
+    const writer = await import("@/platform/p6/masterWrite")
+    expect("sealMasterSession" in writer).toBe(false)
+    expect("writeMaster" in writer).toBe(false)
+  })
+
+  it("a stale cosmetic proposal cannot revert a later partner change, and an approved commit is applied", async () => {
+    const memory = store()
+    const first = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.stale",
+        payload: { wording: "alpha" },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    await approveProposal(first.id, PARTNER, memory)
+    await applyChange(first.id, memory)
+    const cosmetic = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "cosmetic",
+        partition: "mutable",
+        entryKey: "clause.stale",
+        payload: { wording: "alpha " },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    expect(cosmetic.changeClass).toBe("cosmetic")
+    const partner = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.stale",
+        payload: { wording: "beta" },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    await approveProposal(partner.id, PARTNER, memory)
+    await applyChange(partner.id, memory)
+    await expect(applyChange(cosmetic.id, memory)).rejects.toThrow(/partner approval/)
+    const current = await memory.currentSnapshot("firmA")
+    const stored = await memory.getProposal(cosmetic.id)
+    const snapshot = nextSnapshot(current, stored!)
+    const beforeCount = (await memory.listVersions("firmA")).length
+    await expect(
+      memory.commitVersion({
+        firmId: "firmA",
+        proposalId: cosmetic.id,
+        action: "apply",
+        diff: { key: cosmetic.entryKey, partition: "mutable", before: current, after: snapshot },
+        snapshot,
+        authorId: "p6",
+        authorKind: "system",
+        restoredFromVersionId: null,
+        classification: "confidential",
+        proposal: stored,
+        expectedBaseVersionId: (await memory.listVersions("firmA")).at(-1)?.id ?? null,
+      }),
+    ).rejects.toThrow(/partner approval/)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.stale"]?.body).toEqual({ wording: "beta" })
+    expect((await memory.getProposal(cosmetic.id))?.status).toBe("pending")
+    expect(await memory.listVersions("firmA")).toHaveLength(beforeCount)
+
+    const approved = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.status",
+        payload: { wording: "kept" },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    await approveProposal(approved.id, PARTNER, memory)
+    const row = await memory.getProposal(approved.id)
+    const head = await memory.currentSnapshot("firmA")
+    const next = nextSnapshot(head, row!)
+    const committed = await memory.commitVersion({
+      firmId: "firmA",
+      proposalId: row!.id,
+      action: "apply",
+      diff: { key: row!.entryKey, partition: "mutable", before: head, after: next },
+      snapshot: next,
+      authorId: "partner_b",
+      authorKind: "partner",
+      restoredFromVersionId: null,
+      classification: "confidential",
+      proposal: null,
+      expectedBaseVersionId: (await memory.listVersions("firmA")).at(-1)?.id ?? null,
+    })
+    expect(committed.committed).toBe(true)
+    expect((await memory.getProposal(approved.id))?.status).toBe("applied")
+    await expect(applyChange(approved.id, memory)).rejects.toThrow(/already applied/)
+  })
+
+  it("N5 N6 N7 N10 a rollback or apply that drops a binding check is refused", async () => {
+    const memory = store()
+    const left = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.left",
+        payload: { wording: "left" },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    const right = await proposeChange(
+      {
+        firmId: "firmB",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.right",
+        payload: { wording: "right" },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    await approveProposal(left.id, PARTNER, memory)
+    await approveProposal(right.id, PARTNER, memory)
+    const appliedLeft = await applyChange(left.id, memory)
+    const appliedRight = await applyChange(right.id, memory)
+    const rightVersion = await memory.getVersion(appliedRight.versionId)
+    await expect(
+      memory.commitVersion({
+        firmId: "firmA",
+        proposalId: null,
+        action: "rollback",
+        diff: { key: "*", partition: "mutable", before: await memory.currentSnapshot("firmA"), after: rightVersion!.snapshot },
+        snapshot: rightVersion!.snapshot,
+        authorId: "partner_b",
+        authorKind: "partner",
+        restoredFromVersionId: appliedRight.versionId,
+        classification: "confidential",
+        proposal: null,
+        expectedBaseVersionId: appliedLeft.versionId,
+      }),
+    ).rejects.toThrow(/version not found/)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.left"]?.body).toEqual({ wording: "left" })
+
+    const forged = {
+      entries: {
+        "clause.left": {
+          partition: "mutable" as const,
+          key: "clause.left",
+          body: { wording: "forged rollback" },
+          classification: "confidential" as const,
+        },
+      },
+    }
+    const leftVersion = await memory.getVersion(appliedLeft.versionId)
+    await expect(
+      memory.commitVersion({
+        firmId: "firmA",
+        proposalId: null,
+        action: "rollback",
+        diff: { key: "*", partition: "mutable", before: await memory.currentSnapshot("firmA"), after: forged },
+        snapshot: forged,
+        authorId: "partner_b",
+        authorKind: "partner",
+        restoredFromVersionId: appliedLeft.versionId,
+        classification: "confidential",
+        proposal: null,
+        expectedBaseVersionId: appliedLeft.versionId,
+      }),
+    ).rejects.toThrow(/bound to the proposal/)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.left"]?.body).toEqual(leftVersion!.snapshot.entries["clause.left"]?.body)
+
+    const pending = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.bind",
+        payload: { wording: "bound" },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    await approveProposal(pending.id, PARTNER, memory)
+    const stored = await memory.getProposal(pending.id)
+    const current = await memory.currentSnapshot("firmA")
+    const honest = nextSnapshot(current, stored!)
+    const disguisedBefore = { entries: {} }
+    await expect(
+      memory.commitVersion({
+        firmId: "firmA",
+        proposalId: stored!.id,
+        action: "apply",
+        diff: { key: stored!.entryKey, partition: "mutable", before: disguisedBefore, after: honest },
+        snapshot: honest,
+        authorId: "partner_b",
+        authorKind: "partner",
+        restoredFromVersionId: null,
+        classification: "confidential",
+        proposal: null,
+        expectedBaseVersionId: appliedLeft.versionId,
+      }),
+    ).rejects.toThrow(/bound to the proposal/)
+    await expect(
+      memory.commitVersion({
+        firmId: "firmA",
+        proposalId: stored!.id,
+        action: "apply",
+        diff: { key: stored!.entryKey, partition: "mutable", before: current, after: honest },
+        snapshot: honest,
+        authorId: "partner_b",
+        authorKind: "partner",
+        restoredFromVersionId: null,
+        classification: "internal",
+        proposal: null,
+        expectedBaseVersionId: appliedLeft.versionId,
+      }),
+    ).rejects.toThrow(/bound to the proposal/)
+    expect(await memory.getVersion(appliedLeft.versionId)).toEqual(leftVersion)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.bind"]).toBeUndefined()
+  })
+
+  it("a fake store cannot roll the master back to an arbitrary snapshot", async () => {
+    const memory = store()
+    const pending = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.fake",
+        payload: { wording: "real" },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    await approveProposal(pending.id, PARTNER, memory)
+    const applied = await applyChange(pending.id, memory)
+    const arbitrary = {
+      entries: {
+        forged: {
+          partition: "mutable" as const,
+          key: "forged",
+          body: { wording: "ARBITRARY SNAPSHOT" },
+          classification: "confidential" as const,
+        },
+      },
+    }
+    const fake = {
+      role: "p6_service",
+      async getVersion() {
+        return {
+          id: applied.versionId,
+          firmId: "firmA",
+          versionNo: 1,
+          proposalId: pending.id,
+          parentVersionId: null,
+          action: "apply" as const,
+          diff: applied.diff,
+          snapshot: arbitrary,
+          authorId: "partner_b",
+          authorKind: "partner" as const,
+          restoredFromVersionId: null,
+        }
+      },
+      async runExclusive<T>(fn: (tx: MasterSession) => Promise<T>): Promise<T> {
+        const tx = {
+          async lockFirm() {
+            return applied.versionId
+          },
+          async currentSnapshot() {
+            return { entries: {} }
+          },
+          async currentClassification() {
+            return "confidential" as const
+          },
+          async getVersion() {
+            return fake.getVersion()
+          },
+          async getProposal() {
+            return null
+          },
+          async assertCommitShape() {},
+          async commitVersion() {
+            throw new Error("caller commit")
+          },
+        }
+        return fn(tx as unknown as MasterSession)
+      },
+    }
+    await expect(
+      rollbackMaster({ firmId: "firmA", toVersionId: applied.versionId, actor: PARTNER }, fake as unknown as MasterStore),
+    ).rejects.toThrow(/master session is closed/)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.fake"]?.body).toEqual({ wording: "real" })
+    expect(JSON.stringify(await memory.listVersions("firmA"))).not.toContain("ARBITRARY SNAPSHOT")
   })
 })

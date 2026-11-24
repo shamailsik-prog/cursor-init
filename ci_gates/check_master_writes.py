@@ -20,8 +20,13 @@ _WRITE = re.compile(
 _OTHER = re.compile(
     r"applyChange\s*\("
     r"|writeMaster\s*\("
+    r"|sealMasterSession\s*\("
+    r"|rollbackMaster\s*\("
     r"|sessionForWrite\s*\("
     r"|\.persistVersion\s*\("
+    r"|import\s*\{[^}]*\b(?:writeMaster|sealMasterSession|rollbackMaster)\s+as\b"
+    r"""|\[['"]writeMaster['"]\]\s*\("""
+    r"|@/platform/p6/masterWrite"
     r"|collection\(\s*['\"]master_versions['\"]"
     r"|match\s+/master_versions/",
     re.I,
@@ -66,7 +71,7 @@ def scan(root: pathlib.Path | None = None) -> list[str]:
     base = root or pathlib.Path(".")
     failed: list[str] = []
     for p in base.rglob("*"):
-        if p.suffix.lower() not in {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".py", ".sql"}:
+        if p.suffix.lower() not in {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".py", ".sql"}:
             continue
         rel = p.relative_to(base).as_posix()
         if any(part in SKIP_PARTS for part in rel.split("/")):

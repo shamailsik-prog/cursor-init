@@ -11,7 +11,7 @@ import pg from "pg"
 import { createPgMasterStore, InMemoryMasterStore, type CommitVersionInput } from "@/platform/p6/masterStore"
 import * as storeModule from "@/platform/p6/masterStore"
 import { applyChange, approveProposal, proposeChange, rollbackMaster } from "@/platform/p6/proposeChange"
-import { masterWriteAuditLog } from "@/platform/p6/masterWrite"
+import { masterWriteAuditLog, nextSnapshot } from "@/platform/p6/masterWrite"
 
 const postgresUrl = process.env.SIKANDER_POSTGRES_URL?.trim()
 if (process.env.CI && !postgresUrl) {
@@ -2122,6 +2122,339 @@ suite("G3 master grants on local Postgres", () => {
       expect(masterWriteAuditLog().slice(auditBefore)).toEqual([
         expect.objectContaining({ proposalId: pending.id, versionId: applied.versionId, outcome: "committed" }),
       ])
+    } finally {
+      await pool.end()
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  it("BYPASS-271-R2-001: a stale cosmetic proposal cannot revert a partner change", async () => {
+    const db = await freshDb("p6stale")
+    const pool = new pg.Pool({ connectionString: db.url, max: 1 })
+    try {
+      await db.client.query(DDL)
+      await db.client.query(ACTOR_KEY_DDL)
+      await db.client.query(`GRANT p6_service TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`)
+      const store = createPgMasterStore(pool)
+      const partner = { actorId: "partner_b", kind: "partner" as const, role: "partner" }
+      const first = await proposeChange(
+        {
+          firmId: "firmA",
+          sourceModule: "15",
+          classification: "confidential",
+          changeClass: "substantive",
+          partition: "mutable",
+          entryKey: "clause.stale",
+          payload: { wording: "alpha" },
+          proposedBy: "learner-1",
+        },
+        store,
+      )
+      await approveProposal(first.id, partner, store)
+      await applyChange(first.id, store)
+      const cosmetic = await proposeChange(
+        {
+          firmId: "firmA",
+          sourceModule: "15",
+          classification: "confidential",
+          changeClass: "cosmetic",
+          partition: "mutable",
+          entryKey: "clause.stale",
+          payload: { wording: "alpha " },
+          proposedBy: "learner-1",
+        },
+        store,
+      )
+      expect(cosmetic.changeClass).toBe("cosmetic")
+      expect(cosmetic.status).toBe("pending")
+      const later = await proposeChange(
+        {
+          firmId: "firmA",
+          sourceModule: "15",
+          classification: "confidential",
+          changeClass: "substantive",
+          partition: "mutable",
+          entryKey: "clause.stale",
+          payload: { wording: "beta" },
+          proposedBy: "learner-1",
+        },
+        store,
+      )
+      await approveProposal(later.id, partner, store)
+      await applyChange(later.id, store)
+      await expect(applyChange(cosmetic.id, store)).rejects.toThrow(/partner approval/)
+      const current = await store.currentSnapshot("firmA")
+      const stored = await store.getProposal(cosmetic.id)
+      const versionsBefore = await db.client.query<{ n: number }>(`SELECT count(*)::int AS n FROM master_versions`)
+      await expect(
+        store.commitVersion({
+          firmId: "firmA",
+          proposalId: cosmetic.id,
+          action: "apply",
+          diff: { key: cosmetic.entryKey, partition: "mutable", before: current, after: nextSnapshot(current, stored!) },
+          snapshot: nextSnapshot(current, stored!),
+          authorId: "p6",
+          authorKind: "system",
+          restoredFromVersionId: null,
+          classification: "confidential",
+          proposal: stored,
+          expectedBaseVersionId: (await store.listVersions("firmA")).at(-1)?.id ?? null,
+        }),
+      ).rejects.toThrow(/partner approval/)
+      const head = await db.client.query<{ snapshot: { entries: Record<string, { body: unknown }> } }>(
+        `SELECT snapshot FROM master_knowledge WHERE firm_id = 'firmA'`,
+      )
+      expect(head.rows[0]?.snapshot.entries["clause.stale"]?.body).toEqual({ wording: "beta" })
+      const row = await db.client.query<{ status: string }>(`SELECT status FROM change_proposals WHERE id = $1`, [cosmetic.id])
+      expect(row.rows[0]?.status).toBe("pending")
+      const versionsAfter = await db.client.query<{ n: number }>(`SELECT count(*)::int AS n FROM master_versions`)
+      expect(versionsAfter.rows[0]?.n).toBe(versionsBefore.rows[0]?.n)
+    } finally {
+      await pool.end()
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  it("BYPASS-271-R2-002: an exported seal cannot commit a lying session or a forged rollback", async () => {
+    const db = await freshDb("p6seal")
+    const pool = new pg.Pool({ connectionString: db.url, max: 1 })
+    try {
+      await db.client.query(DDL)
+      await db.client.query(ACTOR_KEY_DDL)
+      await db.client.query(`GRANT p6_service TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`)
+      const store = createPgMasterStore(pool)
+      const partner = { actorId: "partner_b", kind: "partner" as const, role: "partner" }
+      const pending = await proposeChange(
+        {
+          firmId: "firmA",
+          sourceModule: "15",
+          classification: "confidential",
+          changeClass: "substantive",
+          partition: "mutable",
+          entryKey: "clause.seal",
+          payload: { wording: "NEVER APPROVED" },
+          proposedBy: "learner-1",
+        },
+        store,
+      )
+      const current = await store.currentSnapshot("firmA")
+      const base = (await store.listVersions("firmA")).at(-1)?.id ?? null
+      const lying = {
+        ...pending,
+        status: "approved" as const,
+        decidedBy: "partner_b",
+        decidedKind: "partner" as const,
+        decidedRole: "partner",
+      }
+      const snapshot = nextSnapshot(current, lying)
+      const writer = await import("@/platform/p6/masterWrite")
+      const seal = (writer as { sealMasterSession?: (session: object, raw: object) => void }).sealMasterSession
+      const write = (writer as { writeMaster?: (input: CommitVersionInput, session: object, gate: { declassify: boolean }) => Promise<{ committed: boolean }> }).writeMaster
+      const client = new pg.Client({ connectionString: db.url })
+      await client.connect()
+      let committed = false
+      try {
+        await client.query("BEGIN")
+        await client.query("SET LOCAL ROLE p6_service")
+        if (typeof seal === "function" && typeof write === "function") {
+          const session = {
+            async getProposal() {
+              return lying
+            },
+            async currentSnapshot() {
+              return current
+            },
+            async currentClassification() {
+              return "confidential" as const
+            },
+            async lockFirm() {
+              return base
+            },
+            async getVersion() {
+              return null
+            },
+            async assertCommitShape() {},
+          }
+          seal(session, { pgClient: client, allowDeclassify: async () => {} })
+          const result = await write(
+            {
+              firmId: "firmA",
+              proposalId: pending.id,
+              action: "apply",
+              diff: { key: pending.entryKey, partition: "mutable", before: current, after: snapshot },
+              snapshot,
+              authorId: "partner_b",
+              authorKind: "partner",
+              restoredFromVersionId: null,
+              classification: "confidential",
+              proposal: lying,
+              expectedBaseVersionId: base,
+            },
+            session,
+            { declassify: false },
+          )
+          committed = result.committed === true
+        }
+        await client.query("COMMIT")
+      } finally {
+        await client.end()
+      }
+      expect(committed).toBe(false)
+      expect(typeof seal).not.toBe("function")
+      const leaked = await db.client.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM master_versions WHERE snapshot::text LIKE '%NEVER APPROVED%'`,
+      )
+      expect(leaked.rows[0]?.n).toBe(0)
+
+      const real = await proposeChange(
+        {
+          firmId: "firmA",
+          sourceModule: "15",
+          classification: "confidential",
+          changeClass: "substantive",
+          partition: "mutable",
+          entryKey: "clause.real",
+          payload: { wording: "real" },
+          proposedBy: "learner-1",
+        },
+        store,
+      )
+      await approveProposal(real.id, partner, store)
+      const applied = await applyChange(real.id, store)
+      const arbitrary = {
+        entries: {
+          forged: {
+            partition: "mutable" as const,
+            key: "forged",
+            body: { wording: "ARBITRARY SNAPSHOT" },
+            classification: "confidential" as const,
+          },
+        },
+      }
+      const realVersion = await store.getVersion(applied.versionId)
+      const realHead = await store.currentSnapshot("firmA")
+      const fake = {
+        role: "p6_service",
+        async getVersion() {
+          return { ...realVersion!, snapshot: arbitrary }
+        },
+        async runExclusive(fn: (tx: object) => Promise<unknown>) {
+          const held = new pg.Client({ connectionString: db.url })
+          await held.connect()
+          try {
+            await held.query("BEGIN")
+            await held.query("SET LOCAL ROLE p6_service")
+            const tx = {
+              async lockFirm() {
+                return applied.versionId
+              },
+              async currentSnapshot() {
+                return realHead
+              },
+              async currentClassification() {
+                return "confidential" as const
+              },
+              async getVersion() {
+                return { ...realVersion!, snapshot: arbitrary }
+              },
+              async getProposal() {
+                return null
+              },
+              async assertCommitShape() {},
+            }
+            if (typeof seal === "function") seal(tx, { pgClient: held, allowDeclassify: async () => {} })
+            const result = await fn(tx)
+            await held.query("COMMIT")
+            return result
+          } catch (error) {
+            await held.query("ROLLBACK")
+            throw error
+          } finally {
+            await held.end()
+          }
+        },
+      }
+      await expect(
+        rollbackMaster({ firmId: "firmA", toVersionId: applied.versionId, actor: partner }, fake as unknown as ReturnType<typeof createPgMasterStore>),
+      ).rejects.toThrow(/master session is closed|bound to the proposal/)
+      const forged = await db.client.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM master_versions WHERE snapshot::text LIKE '%ARBITRARY SNAPSHOT%'`,
+      )
+      expect(forged.rows[0]?.n).toBe(0)
+      const head = await db.client.query<{ snapshot: { entries: Record<string, { body: unknown }> } }>(
+        `SELECT snapshot FROM master_knowledge WHERE firm_id = 'firmA'`,
+      )
+      expect(head.rows[0]?.snapshot.entries["clause.real"]?.body).toEqual({ wording: "real" })
+    } finally {
+      await pool.end()
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  it("STATUS-R2-003 and N3b: a committed approval is applied, and a finished session is closed", async () => {
+    const db = await freshDb("p6status")
+    const pool = new pg.Pool({ connectionString: db.url, max: 1 })
+    try {
+      await db.client.query(DDL)
+      await db.client.query(ACTOR_KEY_DDL)
+      await db.client.query(`GRANT p6_service TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`)
+      const store = createPgMasterStore(pool)
+      const partner = { actorId: "partner_b", kind: "partner" as const, role: "partner" }
+      const pending = await proposeChange(
+        {
+          firmId: "firmA",
+          sourceModule: "15",
+          classification: "confidential",
+          changeClass: "substantive",
+          partition: "mutable",
+          entryKey: "clause.status",
+          payload: { wording: "kept" },
+          proposedBy: "learner-1",
+        },
+        store,
+      )
+      await approveProposal(pending.id, partner, store)
+      const stored = await store.getProposal(pending.id)
+      const current = await store.currentSnapshot("firmA")
+      const snapshot = nextSnapshot(current, stored!)
+      const committed = await store.commitVersion({
+        firmId: "firmA",
+        proposalId: pending.id,
+        action: "apply",
+        diff: { key: pending.entryKey, partition: "mutable", before: current, after: snapshot },
+        snapshot,
+        authorId: "partner_b",
+        authorKind: "partner",
+        restoredFromVersionId: null,
+        classification: "confidential",
+        proposal: null,
+        expectedBaseVersionId: null,
+      })
+      expect(committed.committed).toBe(true)
+      const status = await db.client.query<{ status: string }>(`SELECT status FROM change_proposals WHERE id = $1`, [pending.id])
+      expect(status.rows[0]?.status).toBe("applied")
+      await expect(applyChange(pending.id, store)).rejects.toThrow(/already applied/)
+      const versions = await db.client.query<{ n: number }>(`SELECT count(*)::int AS n FROM master_versions`)
+      expect(versions.rows[0]?.n).toBe(1)
+      let finished: { commitVersion: (input: CommitVersionInput) => Promise<unknown> } | undefined
+      await store.runExclusive(async (tx) => {
+        finished = tx
+      })
+      await expect(
+        finished!.commitVersion({
+          firmId: "firmA",
+          proposalId: null,
+          action: "rollback",
+          diff: { key: "*", partition: "mutable", before: current, after: current },
+          snapshot: current,
+          authorId: "partner_b",
+          authorKind: "partner",
+          restoredFromVersionId: committed.versionId,
+          classification: "confidential",
+          proposal: null,
+          expectedBaseVersionId: committed.versionId,
+        }),
+      ).rejects.toThrow(/master session is closed/)
     } finally {
       await pool.end()
       await dropDb(db.name, db.client)

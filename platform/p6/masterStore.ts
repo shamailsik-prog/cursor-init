@@ -5,7 +5,7 @@
  */
 import { createHash, randomUUID } from "node:crypto"
 import pg from "pg"
-import { isClassification, type Classification } from "@/platform/p1/types"
+import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
 import type { MasterWriteSession, StagedMasterWrite } from "@/platform/p6/masterWrite"
 
 export type MasterSnapshot = {
@@ -383,24 +383,215 @@ type MemoryState = {
 
 type RawWrite = {
   allowDeclassify(on: boolean): Promise<void>
-  persistVersion?(input: CommitVersionInput): Promise<CommitVersionResult>
+  save?(input: CommitVersionInput): Promise<CommitVersionResult>
   stageAfterCommit?(staged: StagedMasterWrite): void
-  pgClient?: import("pg").PoolClient
+  pgClient?: pg.PoolClient
+  getProposal(id: string): Promise<PersistedProposal | null>
+  getVersion(id: string): Promise<VersionRow | null>
+  currentSnapshot(firmId: string): Promise<MasterSnapshot>
+  currentClassification(firmId: string): Promise<Classification>
+  lockFirm(firmId: string): Promise<string | null>
+  assertCommitShape(input: CommitVersionInput): Promise<void>
+}
+
+const sealedHandles = new WeakMap<object, RawWrite>()
+
+function seal(session: object, raw: RawWrite): void {
+  sealedHandles.set(session, raw)
+}
+
+function retire(session: object): void {
+  sealedHandles.delete(session)
+}
+
+function sameDocument(left: unknown, right: unknown): boolean {
+  return canonicalPayload(left) === canonicalPayload(right)
+}
+
+function higherClass(left: Classification, right: Classification): Classification {
+  return classificationRank(left) >= classificationRank(right) ? left : right
+}
+
+function snapshotClass(snapshot: MasterSnapshot, fallback: Classification): Classification {
+  let best = fallback
+  for (const entry of Object.values(snapshot.entries)) {
+    if (!isClassification(entry.classification)) continue
+    best = higherClass(best, entry.classification)
+  }
+  return best
+}
+
+async function markApplied(client: pg.PoolClient, stored: PersistedProposal): Promise<void> {
+  if (stored.status === "applied") return
+  if (stored.status === "pending") {
+    const updated = await client.query(
+      `UPDATE change_proposals
+          SET status = 'applied', decided_by = 'p6', decided_kind = 'system', decided_role = 'system'
+        WHERE id = $1 AND status = 'pending'`,
+      [stored.id],
+    )
+    if ((updated.rowCount ?? 0) !== 1) throw new Error("proposal status changed")
+    return
+  }
+  if (stored.status === "approved") {
+    const updated = await client.query(
+      `UPDATE change_proposals SET status = 'applied' WHERE id = $1 AND status = 'approved'`,
+      [stored.id],
+    )
+    if ((updated.rowCount ?? 0) !== 1) throw new Error("proposal status changed")
+  }
+}
+
+async function insertMasterVersion(client: pg.PoolClient, input: CommitVersionInput, versionId: string): Promise<void> {
+  await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`p6:${input.firmId}`])
+  const prior = await client.query<{ version_no: number; id: string }>(
+    `SELECT version_no, id FROM master_versions
+      WHERE firm_id = $1 ORDER BY version_no DESC LIMIT 1`,
+    [input.firmId],
+  )
+  const parent = prior.rows[0]
+  if ((parent?.id ?? null) !== input.expectedBaseVersionId) throw new Error("master version conflict")
+  const versionNo = (parent?.version_no ?? 0) + 1
+  await client.query(
+    `INSERT INTO master_versions
+       (id, firm_id, version_no, proposal_id, parent_version_id, action, diff, snapshot,
+        author_id, author_kind, restored_from_version_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11)`,
+    [
+      versionId,
+      input.firmId,
+      versionNo,
+      input.proposalId,
+      parent?.id ?? null,
+      input.action,
+      JSON.stringify(input.diff),
+      JSON.stringify(input.snapshot),
+      input.authorId,
+      input.authorKind,
+      input.restoredFromVersionId,
+    ],
+  )
+  const written = await client.query(
+    `INSERT INTO master_knowledge (firm_id, snapshot, classification, version_id)
+     VALUES ($1, $2::jsonb, $3, $4)
+     ON CONFLICT (firm_id) DO UPDATE
+       SET snapshot = EXCLUDED.snapshot,
+           classification = EXCLUDED.classification,
+           version_id = EXCLUDED.version_id
+       WHERE master_knowledge.version_id IS NOT DISTINCT FROM $5
+     RETURNING firm_id`,
+    [input.firmId, JSON.stringify(input.snapshot), input.classification, versionId, input.expectedBaseVersionId],
+  )
+  if ((written.rowCount ?? 0) !== 1) throw new Error("master version conflict")
+}
+
+async function assertStoredWrite(
+  input: CommitVersionInput,
+  raw: RawWrite,
+  gate: { declassify: boolean },
+  rules: {
+    effectiveClass: typeof import("@/platform/p6/masterWrite").effectiveClass
+    nextSnapshot: typeof import("@/platform/p6/masterWrite").nextSnapshot
+  },
+): Promise<{ declassify: boolean; stored: PersistedProposal | null }> {
+  const locked = await raw.lockFirm(input.firmId)
+  if ((locked ?? null) !== input.expectedBaseVersionId) throw new Error("master version conflict")
+  const current = await raw.currentSnapshot(input.firmId)
+  if (!sameDocument(input.diff.before, current)) throw new Error("commit is bound to the proposal")
+  if (input.action === "rollback") {
+    if (input.proposalId !== null || input.proposal) throw new Error("proposal not found")
+    if (!input.restoredFromVersionId) throw new Error("version not found")
+    const target = await raw.getVersion(input.restoredFromVersionId)
+    if (!target || target.firmId !== input.firmId) throw new Error("version not found")
+    if (!sameDocument(input.snapshot, target.snapshot)) throw new Error("commit is bound to the proposal")
+    if (input.authorKind !== "partner" || normalizeActorKey(input.authorId) === "") {
+      throw new Error("substantive proposal requires partner approval")
+    }
+    const targetClass = snapshotClass(target.snapshot, "internal")
+    const currentClass = await raw.currentClassification(input.firmId)
+    const classification = gate.declassify ? targetClass : higherClass(currentClass, targetClass)
+    if (input.classification !== classification) throw new Error("commit is bound to the proposal")
+    return { declassify: gate.declassify, stored: null }
+  }
+  if (!input.proposalId) throw new Error("proposal not found")
+  const stored = await raw.getProposal(input.proposalId)
+  if (!stored || stored.firmId !== input.firmId) throw new Error("commit is bound to the proposal")
+  const liveClass = rules.effectiveClass(stored.requestedClass, current.entries[stored.entryKey]?.body, stored.payload)
+  const substantive = liveClass === "substantive" || stored.changeClass === "substantive"
+  const expected = rules.nextSnapshot(current, stored)
+  if (!sameDocument(input.snapshot, expected) || !sameDocument(input.diff.after, input.snapshot)) {
+    throw new Error("commit is bound to the proposal")
+  }
+  if (input.diff.key !== stored.entryKey) throw new Error("commit is bound to the proposal")
+  if (substantive) {
+    if (
+      (stored.status !== "approved" && stored.status !== "applied") ||
+      stored.decidedKind !== "partner" ||
+      stored.decidedRole !== "partner" ||
+      !stored.decidedBy ||
+      input.authorKind !== "partner" ||
+      input.authorId !== stored.decidedBy
+    ) {
+      throw new Error("substantive proposal requires partner approval")
+    }
+    const approver = normalizeActorKey(input.authorId)
+    const proposer = normalizeActorKey(stored.proposedBy)
+    if (proposer === "") throw new Error("proposer key missing")
+    if (approver === "" || approver === proposer) throw new Error("approver must differ from proposer")
+  } else if (stored.changeClass === "cosmetic" && liveClass === "cosmetic") {
+    if (stored.status !== "pending" && stored.status !== "applied") throw new Error("cosmetic proposal is not pending")
+    if (input.authorKind !== "system" || input.authorId !== "p6") throw new Error("cosmetic proposal is not pending")
+  } else {
+    throw new Error("substantive proposal requires partner approval")
+  }
+  const classification = snapshotClass(input.snapshot, stored.classification)
+  if (input.classification !== classification) throw new Error("commit is bound to the proposal")
+  return { declassify: stored.declassify === true, stored }
+}
+
+export async function writeMaster(
+  input: CommitVersionInput,
+  session: object,
+  gate: { declassify: boolean },
+): Promise<CommitVersionResult> {
+  const { effectiveClass, nextSnapshot, publishStagedMasterWrites, runOneApply } = await import("@/platform/p6/masterWrite")
+  return runOneApply(input.action === "apply" ? input.proposalId : null, async () => {
+    const raw = sealedHandles.get(session)
+    if (!raw) throw new Error("master session is closed")
+    await raw.assertCommitShape(input)
+    const bound = await assertStoredWrite(input, raw, gate, { effectiveClass, nextSnapshot })
+    await raw.allowDeclassify(bound.declassify)
+    let outcome: CommitVersionResult
+    if (raw.pgClient) {
+      if (bound.stored && bound.stored.status !== "applied") await markApplied(raw.pgClient, bound.stored)
+      const versionId = randomUUID()
+      await insertMasterVersion(raw.pgClient, input, versionId)
+      outcome = { committed: true, versionId }
+    } else if (raw.save) {
+      outcome = await raw.save(input)
+    } else {
+      throw new Error("master session is closed")
+    }
+    if (!outcome.committed) return outcome
+    const staged: StagedMasterWrite = {
+      proposalId: input.action === "apply" ? input.proposalId : null,
+      entry: {
+        action: input.action,
+        firmId: input.firmId,
+        proposalId: input.proposalId,
+        actorId: input.authorId,
+        versionId: outcome.versionId,
+        outcome: "committed",
+      },
+    }
+    if (raw.stageAfterCommit) raw.stageAfterCommit(staged)
+    else publishStagedMasterWrites([staged])
+    return outcome
+  })
 }
 
 async function guardedWrite(session: MasterWriteSession, input: CommitVersionInput): Promise<CommitVersionResult> {
-  const { writeMaster } = await import("@/platform/p6/masterWrite")
   return writeMaster(input, session, { declassify: input.proposal?.declassify === true })
-}
-
-async function seal(session: MasterWriteSession, raw: RawWrite): Promise<void> {
-  const { sealMasterSession } = await import("@/platform/p6/masterWrite")
-  sealMasterSession(session, raw)
-}
-
-async function retire(session: object): Promise<void> {
-  const { closeMasterSession } = await import("@/platform/p6/masterWrite")
-  closeMasterSession(session)
 }
 
 async function publishStaged(staged: readonly StagedMasterWrite[]): Promise<void> {
@@ -463,9 +654,9 @@ export class InMemoryMasterStore implements MasterStore {
     if (this.dead.has(session)) throw new Error("master session is closed")
   }
 
-  private async endSession(session: object): Promise<void> {
+  private endSession(session: object): void {
     this.dead.add(session)
-    await retire(session)
+    retire(session)
   }
 
   private rawSession(staged: StagedMasterWrite[]): RawWrite {
@@ -474,7 +665,17 @@ export class InMemoryMasterStore implements MasterStore {
       stageAfterCommit: (item) => {
         staged.push(item)
       },
-      persistVersion: (input) => this.saveVersion(input),
+      save: (input) => this.#saveVersion(input),
+      getProposal: (id) => this.getProposal(id),
+      getVersion: (id) => this.getVersion(id),
+      currentSnapshot: (firmId) => this.currentSnapshot(firmId),
+      currentClassification: (firmId) => this.currentClassification(firmId),
+      lockFirm: (firmId) => this.lockFirm(firmId),
+      assertCommitShape: async (input) => {
+        if (!input.proposal) return
+        assertCommitProposal(this.state.proposals.get(input.proposal.id), input.proposal)
+        assertCommitBound(input)
+      },
     }
   }
 
@@ -620,7 +821,7 @@ export class InMemoryMasterStore implements MasterStore {
     const staged: StagedMasterWrite[] = []
     const tx = this.publicSession()
     try {
-      await seal(tx, this.rawSession(staged))
+      seal(tx, this.rawSession(staged))
       const outcome = await guardedWrite(tx, input)
       if (outcome.committed) await publishStaged(staged)
       return outcome
@@ -629,7 +830,7 @@ export class InMemoryMasterStore implements MasterStore {
     }
   }
 
-  private async saveVersion(input: CommitVersionInput): Promise<CommitVersionResult> {
+  async #saveVersion(input: CommitVersionInput): Promise<CommitVersionResult> {
     const snap = cloneState(this.state)
     try {
       const firmVersions = this.state.versions.filter((row) => row.firmId === input.firmId)
@@ -656,7 +857,17 @@ export class InMemoryMasterStore implements MasterStore {
       this.state.versions.push(version)
       this.state.heads.set(input.firmId, structuredClone(input.snapshot))
       if (isClassification(input.classification)) this.state.classes.set(input.firmId, input.classification)
-      if (input.proposal) this.state.proposals.set(input.proposal.id, structuredClone(input.proposal))
+      if (input.action === "apply" && input.proposalId) {
+        const row = this.state.proposals.get(input.proposalId)
+        if (row && row.status !== "applied") {
+          if (row.status === "pending") {
+            row.decidedBy = "p6"
+            row.decidedKind = "system"
+            row.decidedRole = "system"
+          }
+          row.status = "applied"
+        }
+      }
       if (this.failCommit === "throw") {
         this.state = snap
         throw new Error("master write did not commit")
@@ -1082,6 +1293,52 @@ function pgRaw(client: pg.PoolClient, staged: StagedMasterWrite[]): RawWrite {
     },
     stageAfterCommit: (item) => {
       staged.push(item)
+    },
+    async getProposal(id) {
+      const found = await client.query<ProposalQueryRow>(
+        `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
+        [id],
+      )
+      const row = found.rows[0]
+      return row ? proposalFromRow(row) : null
+    },
+    async getVersion(id) {
+      const found = await client.query<VersionQueryRow>(
+        `SELECT id, firm_id, version_no, proposal_id, parent_version_id, action, diff, snapshot,
+                author_id, author_kind, restored_from_version_id
+           FROM master_versions WHERE id = $1`,
+        [id],
+      )
+      const row = found.rows[0]
+      return row ? versionFromRow(row) : null
+    },
+    async currentSnapshot(firmId) {
+      const found = await client.query<{ snapshot: MasterSnapshot }>(
+        `SELECT snapshot FROM master_knowledge WHERE firm_id = $1`,
+        [firmId],
+      )
+      return found.rows[0]?.snapshot ?? EMPTY_SNAPSHOT
+    },
+    async currentClassification(firmId) {
+      return readClassification(client, firmId)
+    },
+    async lockFirm(firmId) {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`p6:${firmId}`])
+      const found = await client.query<{ version_id: string }>(
+        `SELECT version_id FROM master_knowledge WHERE firm_id = $1 FOR UPDATE`,
+        [firmId],
+      )
+      return found.rows[0]?.version_id ?? null
+    },
+    async assertCommitShape(input) {
+      if (!input.proposal) return
+      const found = await client.query<ProposalQueryRow>(
+        `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
+        [input.proposal.id],
+      )
+      const current = found.rows[0] ? proposalFromRow(found.rows[0]) : undefined
+      assertCommitProposal(current, input.proposal)
+      assertCommitBound(input)
     },
   }
 }
