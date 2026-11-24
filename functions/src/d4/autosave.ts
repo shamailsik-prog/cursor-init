@@ -269,6 +269,9 @@ export async function autosaveDraft(
         }
         const bodyHash = sha256Hex(text)
         if (head && head.lastBodyHash === bodyHash) {
+          // The watermark moves even though no point is written, so a delayed lower seq cannot land after this one.
+          const lastClientSeq = Math.max(head.lastClientSeq, seq)
+          tx.update(headRef(draftId), { lastClientSeq, updatedAt: stamp })
           await audit.stage(tx, "allow", "ok")
           return { written: false, reason: "duplicate_body" }
         }
@@ -400,9 +403,29 @@ export async function getRecoveryTimeline(caller: Caller, audit: CallAudit, draf
 }
 
 /**
+ * The point's label, without its body. Above the caller's clearance this throws before the body is read
+ * and before any version is written, the same `cleared` test the timeline uses to hide the point.
+ */
+async function readPointForRestore(tx: Transaction, caller: Caller, draftId: string, seq: number): Promise<DocumentData> {
+  const id = pointDocId(draftId, seq)
+  const masked = await tx.get(autosavePoints().where(FieldPath.documentId(), "==", id).select("firmId", "draftId", "pointSeq", "classification").limit(1))
+  const meta = masked.docs[0]?.data()
+  if (!meta || meta.firmId !== caller.firmId || meta.draftId !== draftId || meta.pointSeq !== seq || !cleared(meta.classification, caller.clearanceLevel)) {
+    throw new HttpError(404, "point_not_found")
+  }
+  const row = (await tx.get(autosavePoints().doc(id))).data()
+  if (!row || row.firmId !== caller.firmId || row.draftId !== draftId || row.pointSeq !== seq || typeof row.body !== "string" || !cleared(row.classification, caller.clearanceLevel)) {
+    throw new HttpError(404, "point_not_found")
+  }
+  return row
+}
+
+/**
  * restorePoint(draftId, pointSeq). Appends a formal version through `storeVersion` (kind `save`), so the
  * event, the audit row and the gate reset match an edit. Old versions are not rewritten. An approved or
  * locked draft is refused. The point is marked so a later prune of this draft leaves it in place.
+ * The new version's label is the strictest of the point, the draft and the matter, and is never lower
+ * than the point.
  */
 export async function restorePoint(caller: Caller, audit: CallAudit, draftId: string, pointSeq: number): Promise<RestorePointResult> {
   if (!isD4AutosaveEnabled()) return { restored: false, reason: "disabled" }
@@ -421,14 +444,11 @@ export async function restorePoint(caller: Caller, audit: CallAudit, draftId: st
     draft.currentVersion,
     "save",
     async (tx) => {
-      const row = (await tx.get(pointRef)).data()
-      if (!row || row.firmId !== caller.firmId || row.draftId !== draftId || row.pointSeq !== seq || typeof row.body !== "string") {
-        throw new HttpError(404, "point_not_found")
-      }
+      const row = await readPointForRestore(tx, caller, draftId, seq)
       const current = (await tx.get(ref)).data()
       if (!current || current.firmId !== caller.firmId || typeof current.title !== "string") throw notFound()
       tx.update(pointRef, { referencedByRestore: true })
-      return { title: current.title, body: row.body }
+      return { title: current.title, body: row.body, classification: row.classification as Classification }
     },
     refuseApprovedOrLocked
   )

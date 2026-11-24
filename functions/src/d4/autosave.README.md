@@ -35,7 +35,7 @@ Permission is `draft.edit`, the guard `saveDraftVersion` uses (`loadDraftForCall
 `autosaveDraft(draftId, body, clientSeq, baseVersion)`
 
 - `clientSeq` is a safe integer from 1. A seq less than or equal to the last point's seq is ignored (`stale_seq`): an offline replay does not insert a second point and does not move the timeline backwards.
-- The same `bodyHash` as the last point writes nothing (`duplicate_body`), even when `clientSeq` is newer.
+- The same `bodyHash` as the last point writes no new point (`duplicate_body`). In that same transaction `lastClientSeq` becomes `max(lastClientSeq, clientSeq)`, so a delayed lower seq is `stale_seq` and cannot replace the newer duplicate.
 - `baseVersion` above the draft's current formal version is 409 `draft_changed`. A base behind the current version is still stored. A formal save landing in between must not drop the keystrokes.
 - An approved or locked draft can still take points. The text is what must not be lost. Restoring it is what the lock refuses.
 - Points are capped at 200 per draft (`AUTOSAVE_POINT_CAP`). On each new point, older points of **this draft** with `pointSeq <= newSeq - 200` are deleted when `referencedByRestore` is not true. Another draft is never in that query. A point a restore has referenced is kept even when it falls outside the window.
@@ -49,7 +49,8 @@ Permission is `draft.edit`, the guard `saveDraftVersion` uses (`loadDraftForCall
 `restorePoint(draftId, pointSeq)`
 
 - Refuses an approved draft with 409 `draft_approved` and a locked draft with 409 `draft_locked`, before any version is written. The check runs again inside the version transaction.
-- Otherwise calls `storeVersion` with kind `save` and the point's body under the draft's current title. That is the edit path: version `n+1`, a `draft.autosaved` event, one audit row, and `gateResult` cleared. `status`, `approvedBy` and `locked` move only as they do on an edit. The previous version documents are not updated.
+- A point whose label is above the caller's clearance is 404 `point_not_found`, the same answer as a missing point. The check reads the point's classification only. The body is not read and nothing is written: no version, no draft update, no `referencedByRestore`.
+- Otherwise calls `storeVersion` with kind `save` and the point's body under the draft's current title. That is the edit path: version `n+1`, a `draft.autosaved` event, one audit row, and `gateResult` cleared. The version's classification is the strictest of the point, the draft and the matter, so a restore never downgrades a raised point after the draft's label falls. `status`, `approvedBy` and `locked` move only as they do on an edit. The previous version documents are not updated.
 - The point is marked `referencedByRestore` in that same transaction, including when the body already matches the current version and `storeVersion` writes no new version (`saved: false`).
 - A missing point is 404 `point_not_found`.
 

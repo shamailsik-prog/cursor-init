@@ -541,4 +541,68 @@ describe.skipIf(!EMULATORS)("L5.1 autosave points", () => {
     expectErr(await refusal(restore(owner, preId, 1)), 409, "matter_required")
     expect(await versionDoc(preId, 1)).toBeUndefined()
   })
+
+  it("advances lastClientSeq on a duplicate body so a delayed lower seq is stale", async () => {
+    enable()
+    const { matterId, partner } = await newMatter()
+    const draft = await createDraft(partner, matterId, "Version one.")
+    const bodyA = "Body A stays the newest point."
+    const first = await autosave(partner, draft.draftId, bodyA, 1, 1)
+    expect(first).toMatchObject({ written: true, clientSeq: 1 })
+    const duplicate = await autosave(partner, draft.draftId, bodyA, 3, 1)
+    expect(duplicate).toEqual({ written: false, reason: "duplicate_body" })
+    const head = (await adminDb().collection("draft_autosave_points").doc(`${draft.draftId}~head`).get()).data()
+    expect(head?.lastClientSeq).toBe(3)
+    expect(head?.lastPointSeq).toBe(1)
+
+    const late = await autosave(partner, draft.draftId, "Body B is older and must not land.", 2, 1)
+    expect(late).toEqual({ written: false, reason: "stale_seq" })
+    const points = await pointsOf(draft.draftId)
+    expect(points).toHaveLength(1)
+    expect(points[0].data.body).toBe(bodyA)
+    expect(points[0].data.clientSeq).toBe(1)
+    expect((await timeline(partner, draft.draftId)).items.map((item) => item.clientSeq)).toEqual([1])
+  })
+
+  it("refuses a restore above clearance and keeps the point label on version n+1", async () => {
+    enable()
+    const { firmId, matterId, partner } = await newMatter({ classification: "internal" })
+    const draft = await createDraft(partner, matterId, "Original formal body.")
+    const secret = "Privileged recovery text that a lower clearance must not receive."
+    expect((await autosave(partner, draft.draftId, secret, 1, 1)).written).toBe(true)
+    await adminDb().collection("matters").doc(matterId).update({ classification: "privileged" })
+    await adminDb().collection("drafts").doc(draft.draftId).update({ classification: "privileged" })
+    expect((await autosave(partner, draft.draftId, "Later privileged point.", 2, 1)).written).toBe(true)
+    const raised = (await pointsOf(draft.draftId))[0]
+    expect(raised.data.classification).toBe("privileged")
+    expect(raised.data.body).toBe(secret)
+
+    await adminDb().collection("matters").doc(matterId).update({ classification: "internal" })
+    await adminDb().collection("drafts").doc(draft.draftId).update({ classification: "internal" })
+    const before = await draftDoc(draft.draftId)
+    const lower = caller(firmId, "associate", "internal")
+    await addMember(firmId, matterId, lower.uid)
+    const equal = caller(firmId, "associate", "privileged")
+    await addMember(firmId, matterId, equal.uid)
+
+    const hidden = await timeline(lower, draft.draftId)
+    expect(hidden.items.some((item) => item.pointSeq === raised.data.pointSeq)).toBe(false)
+
+    const refused = await refusal(restore(lower, draft.draftId, raised.data.pointSeq as number))
+    expectErr(refused, 404, "point_not_found")
+    expect(refused.message).not.toContain(secret)
+    expect(await versionDoc(draft.draftId, 2)).toBeUndefined()
+    expect((await draftDoc(draft.draftId))?.currentVersion).toBe(1)
+    expect((await draftDoc(draft.draftId))?.currentBodySha256).toBe(before?.currentBodySha256)
+    expect((await pointsOf(draft.draftId))[0].data.referencedByRestore).toBe(false)
+
+    const restored = await restore(equal, draft.draftId, raised.data.pointSeq as number)
+    expect(restored).toMatchObject({ restored: true, saved: true, pointSeq: raised.data.pointSeq })
+    const version = await versionDoc(draft.draftId, 2)
+    expect(version).toMatchObject({ version: 2, body: secret, classification: "privileged", kind: "save" })
+    expect(CLASSIFICATION_RANKS[version?.classification as Classification]).toBeGreaterThanOrEqual(CLASSIFICATION_RANKS.privileged)
+    expect(CLASSIFICATION_RANKS[version?.classification as Classification]).toBeGreaterThanOrEqual(CLASSIFICATION_RANKS.internal)
+    expect((await draftDoc(draft.draftId))?.classification).toBe("privileged")
+    expect(versionShape(await versionDoc(draft.draftId, 1)).body).toBe("Original formal body.")
+  })
 })

@@ -450,7 +450,7 @@ export async function storeVersion(
   ref: DocumentReference,
   baseVersion: number,
   kind: "save" | "restore",
-  resolve: (tx: Transaction) => Promise<{ title: string; body: string; restoredFrom?: number }>,
+  resolve: (tx: Transaction) => Promise<{ title: string; body: string; restoredFrom?: number; classification?: Classification }>,
   /**
    * Runs inside the version transaction after the permission re-check and before the lock check.
    * Absent for a save and a formal restore, so those paths are unchanged. The autosave restore uses it
@@ -477,7 +477,13 @@ export async function storeVersion(
           return { saved: false, draft: draftView(draftId, draft) }
         }
         const version = baseVersion + 1
-        const classification = raisedLabel(caller, draft, matter)
+        const raised = raisedLabel(caller, draft, matter)
+        // Optional floor from the caller (autosave restore). Absent for a save and a formal restore, so those
+        // versions stay on raisedLabel alone. A floor never lowers the label, and the caller must be cleared for it.
+        const floor = next.classification
+        if (floor !== undefined && !isKnownClassification(floor)) throw new HttpError(403, "clearance")
+        const classification = floor === undefined ? raised : strictest([raised, floor])
+        if (rankOf(caller.clearanceLevel) < rankOf(classification)) throw new HttpError(403, "clearance")
         await audit.stage(tx, "allow", "ok")
         tx.create(versions().doc(versionId(draftId, version)), {
           firmId: caller.firmId,
