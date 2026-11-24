@@ -192,6 +192,7 @@ function writeCourtOpsPage(
   return { stamped, removed, reported: report.length }
 }
 
+/** Live means in progress, this firm, this matter, and not halted. Completed and refused are an operator sweep (PURGE-264-R3-003). */
 function requestIsLive(data: DocumentData, firmId: string, matterId: string): boolean {
   return data.firmId === firmId && data.matterId === matterId && data.status === "in_progress" && data.halted == null
 }

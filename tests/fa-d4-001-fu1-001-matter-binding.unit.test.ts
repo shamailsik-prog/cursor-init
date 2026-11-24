@@ -241,6 +241,14 @@ describe("FA-D4-001-FU1-001 deletion reach", () => {
     expect(prep.slice(step, step + 220)).toContain("assertNoHold(tx, firmId, req.matterId)")
   })
 
+  it("PURGE-264-R3-003: court-ops deletion does not treat a completed request as live, and late traces still do", () => {
+    const reach = readFileSync("functions/src/retention/courtOpsDeletionReach.ts", "utf8")
+    const late = readFileSync("functions/src/retention/lateTraces.ts", "utf8")
+    expect(reach).toContain('data.status === "in_progress"')
+    expect(late).toMatch(/new Set\(\["in_progress", "completed"\]\)/)
+    expect(late).toContain("operator sweep")
+  })
+
   it("A3: the deleting matter's hold is read inside the page transaction", () => {
     const src = readFileSync("functions/src/retention/courtOpsDeletionReach.ts", "utf8")
     const page = src.slice(src.indexOf("return input.db.runTransaction"), src.indexOf("function writeCourtOpsPage"))
