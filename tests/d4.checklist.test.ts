@@ -581,6 +581,77 @@ describe("getReadiness and blockIfIncomplete", () => {
     }
   })
 
+  it("rejects a 1900 or 2100 tick whose UTC instant falls outside that year", () => {
+    const suit = asKnown("civil_suit")
+    const held = withoutItem(suit, "pleading")
+    const rejected = [
+      "1900-01-01T00:00:00+05:00",
+      "1900-01-01T04:59:00+05:00",
+      "1900-01-01T04:59:59+05:00",
+      "2100-12-31T22:00:00-05:00",
+      "2100-12-31T19:00:00-05:00",
+      "1899-12-31T20:00:00-05:00",
+      "2101-01-01T04:00:00+05:00",
+    ]
+    for (const at of rejected) {
+      const readiness = getReadiness("civil_suit", {
+        ...held,
+        manualTicks: [...(held.manualTicks ?? []), { itemId: "pleading", by: "clerk", at }],
+      })
+      expect(readiness.known).toBe(true)
+      if (!readiness.known) continue
+      expect(readiness.items.find((entry) => entry.id === "pleading")?.done, at).toBe(false)
+      expect(readiness.readyToFile, at).toBe(false)
+    }
+    for (const at of ["1900-01-01T05:00:00+05:00", "2100-12-31T18:59:59-05:00", "1900-01-01T00:00:00Z", "2100-12-31T23:59:59Z"]) {
+      const readiness = getReadiness("civil_suit", {
+        ...held,
+        manualTicks: [...(held.manualTicks ?? []), { itemId: "pleading", by: "clerk", at }],
+      })
+      expect(readiness.known).toBe(true)
+      if (!readiness.known) continue
+      expect(readiness.items.find((entry) => entry.id === "pleading")?.done, at).toBe(true)
+    }
+  })
+
+  it("rejects an offset outside -12:00 through +14:00", () => {
+    const suit = asKnown("civil_suit")
+    const held = withoutItem(suit, "pleading")
+    for (const at of [
+      "2026-11-24T12:00:00+15:00",
+      "2026-11-24T12:00:00-13:00",
+      "2026-11-24T12:00:00+23:59",
+      "2026-11-24T12:00:00-23:59",
+      "2026-11-24T18:00:00+14:30",
+      "2026-11-24T12:00:00-12:30",
+      "2026-11-24T12:00:00+14:01",
+      "2026-11-24T12:00:00-12:01",
+    ]) {
+      const readiness = getReadiness("civil_suit", {
+        ...held,
+        manualTicks: [...(held.manualTicks ?? []), { itemId: "pleading", by: "clerk", at }],
+      })
+      expect(readiness.known).toBe(true)
+      if (!readiness.known) continue
+      expect(readiness.items.find((entry) => entry.id === "pleading")?.done, at).toBe(false)
+    }
+    for (const at of [
+      "2026-11-24T18:00:00+14:00",
+      "2026-11-24T12:00:00-12:00",
+      "2026-11-24T12:00:00+05:30",
+      "2026-11-24T12:00:00+05:45",
+      "2026-11-24T12:00:00+00:00",
+    ]) {
+      const readiness = getReadiness("civil_suit", {
+        ...held,
+        manualTicks: [...(held.manualTicks ?? []), { itemId: "pleading", by: "clerk", at }],
+      })
+      expect(readiness.known).toBe(true)
+      if (!readiness.known) continue
+      expect(readiness.items.find((entry) => entry.id === "pleading")?.done, at).toBe(true)
+    }
+  })
+
   it("rejects a not-applicable tick on an unconditional limitation line", () => {
     const rows = [
       { id: "civil_suit", label: /Limitation checked/i },
@@ -647,10 +718,12 @@ describe("getReadiness and blockIfIncomplete", () => {
       annexureRule: "Legal size",
     })
     const line = "Certified copy of the judgment of the trial court and of the appellate court annexed"
-    expect(courts.filter((entry) => entry.sourceLines.includes(line)).map((entry) => entry.label)).toEqual([
+    const labels = courts.filter((entry) => entry.sourceLines.includes(line)).map((entry) => entry.label)
+    expect(labels).toEqual([
       "Certified copy of the judgment of the trial court annexed",
-      "Certified copy of the appellate court annexed",
+      "Certified copy of the judgment of the appellate court annexed",
     ])
+    expect(labels.some((label) => /^(?:certified cop(?:y|ies) of\s+)?(?:the\s+)?appellate court annexed$/i.test(label))).toBe(false)
   })
 
   it("splits a certified-copies line at 'and of' and keeps the prefix on each part", () => {
@@ -668,7 +741,7 @@ describe("getReadiness and blockIfIncomplete", () => {
         .map((entry) => entry.label)
     ).toEqual([
       "Certified copies of the judgment of the trial court annexed",
-      "Certified copies of the appellate court annexed",
+      "Certified copies of the judgment of the appellate court annexed",
     ])
     const bail = itemsForDocumentType({
       ...base,
@@ -680,6 +753,111 @@ describe("getReadiness and blockIfIncomplete", () => {
     expect(
       bail.filter((entry) => entry.sourceLines.includes("Certified copies of the order for bail and of the FIR annexed")).map((entry) => entry.label)
     ).toEqual(["Certified copies of the order for bail annexed", "Certified copies of the FIR annexed"])
+  })
+
+  it("keeps both documents on a non-certified and-of line", () => {
+    const base = getDocumentType("affidavit")!
+    const judgment = itemsForDocumentType({
+      ...base,
+      id: "judgment_and_of_court",
+      name: "Judgment and of a court",
+      checklist: ["Judgment of the trial court and of the appellate court annexed"],
+      annexureRule: "Legal size",
+    })
+    const line = "Judgment of the trial court and of the appellate court annexed"
+    const parts = judgment.filter((entry) => entry.sourceLines.includes(line))
+    expect(parts.map((entry) => entry.label)).toEqual([
+      "Judgment of the trial court annexed",
+      "Judgment of the appellate court annexed",
+    ])
+    expect(parts.every((entry) => entry.mandatory)).toBe(true)
+    const fir = itemsForDocumentType({
+      ...base,
+      id: "order_and_of_fir",
+      name: "Order and of the FIR",
+      checklist: ["Order for bail and of the FIR annexed"],
+      annexureRule: "Legal size",
+    })
+    const firLine = "Order for bail and of the FIR annexed"
+    const firParts = fir.filter((entry) => entry.sourceLines.includes(firLine))
+    expect(firParts.map((entry) => entry.label)).toEqual(["Order for bail annexed", "of the FIR annexed"])
+    expect(firParts.every((entry) => entry.mandatory)).toBe(true)
+    const statement = itemsForDocumentType({
+      ...base,
+      id: "plaint_and_of_statement",
+      name: "Plaint and of the written statement",
+      checklist: ["Plaint and of the written statement annexed"],
+      annexureRule: "Legal size",
+    })
+    const statementLine = "Plaint and of the written statement annexed"
+    const statementParts = statement.filter((entry) => entry.sourceLines.includes(statementLine))
+    expect(statementParts.map((entry) => entry.label)).toEqual(["Plaint annexed", "of the written statement annexed"])
+    expect(statementParts.every((entry) => entry.mandatory)).toBe(true)
+  })
+
+  it("emits a mandatory item for a certified continuation with nothing to inherit and for an all-fragment line", () => {
+    const base = getDocumentType("affidavit")!
+    const decree = itemsForDocumentType({
+      ...base,
+      id: "decree_and_of_tribunal",
+      name: "Decree and of the Tribunal",
+      checklist: ["Certified copy of the decree and of the Tribunal annexed"],
+      annexureRule: "Legal size",
+    })
+    const decreeLine = "Certified copy of the decree and of the Tribunal annexed"
+    const decreeParts = decree.filter((entry) => entry.sourceLines.includes(decreeLine))
+    expect(decreeParts.map((entry) => entry.label)).toEqual([
+      "Certified copy of the decree annexed",
+      "of the Tribunal annexed",
+    ])
+    expect(decreeParts.length).toBeGreaterThanOrEqual(1)
+    expect(decreeParts.every((entry) => entry.mandatory)).toBe(true)
+    const both = itemsForDocumentType({
+      ...base,
+      id: "and_of_two_courts",
+      name: "And of two courts",
+      checklist: ["of the trial court and of the appellate court annexed"],
+      annexureRule: "Legal size",
+    })
+    const fragmentLine = "of the trial court and of the appellate court annexed"
+    const kept = both.filter((entry) => entry.sourceLines.includes(fragmentLine))
+    expect(kept.map((entry) => entry.label)).toEqual(["of the trial court annexed", "of the appellate court annexed"])
+    expect(kept.length).toBeGreaterThanOrEqual(1)
+    expect(kept.every((entry) => entry.mandatory)).toBe(true)
+  })
+
+  it("does not label a Tribunal or the Supreme Court of Pakistan as the document", () => {
+    const base = getDocumentType("affidavit")!
+    const tribunal = itemsForDocumentType({
+      ...base,
+      id: "judgment_and_of_tribunal",
+      name: "Judgment and of the Tribunal",
+      checklist: ["Certified copy of the judgment of the trial court and of the Tribunal annexed"],
+      annexureRule: "Legal size",
+    })
+    const tribunalLine = "Certified copy of the judgment of the trial court and of the Tribunal annexed"
+    const tribunalParts = tribunal.filter((entry) => entry.sourceLines.includes(tribunalLine))
+    expect(tribunalParts.map((entry) => entry.label)).toEqual([
+      "Certified copy of the judgment of the trial court annexed",
+      "Certified copy of the judgment of the Tribunal annexed",
+    ])
+    expect(tribunalParts.every((entry) => entry.mandatory)).toBe(true)
+    expect(tribunalParts.some((entry) => entry.label === "Certified copy of the Tribunal annexed")).toBe(false)
+    const supreme = itemsForDocumentType({
+      ...base,
+      id: "judgment_and_of_supreme_court",
+      name: "Judgment and of the Supreme Court of Pakistan",
+      checklist: ["Certified copy of the judgment of the trial court and of the Supreme Court of Pakistan annexed"],
+      annexureRule: "Legal size",
+    })
+    const supremeLine = "Certified copy of the judgment of the trial court and of the Supreme Court of Pakistan annexed"
+    const supremeParts = supreme.filter((entry) => entry.sourceLines.includes(supremeLine))
+    expect(supremeParts.map((entry) => entry.label)).toEqual([
+      "Certified copy of the judgment of the trial court annexed",
+      "Certified copy of the judgment of the Supreme Court of Pakistan annexed",
+    ])
+    expect(supremeParts.every((entry) => entry.mandatory)).toBe(true)
+    expect(supremeParts.some((entry) => entry.label === "Certified copy of the Supreme Court of Pakistan annexed")).toBe(false)
   })
 
   it("every split part of every seed row is a document name", () => {

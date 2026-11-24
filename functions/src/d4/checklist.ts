@@ -113,17 +113,29 @@ function validClock(hour: number, minute: number, second: number): boolean {
   return hour <= 23 && minute <= 59 && second <= 59
 }
 
-function validOffset(offset: string): boolean {
-  if (offset === "Z") return true
-  const match = /^[+-](\d{2}):(\d{2})$/.exec(offset)
-  if (match === null) return false
-  return Number(match[1]) <= 23 && Number(match[2]) <= 59
+/** Civil offsets run from -12:00 through +14:00, inclusive. 720 and 840 are those spans in minutes. */
+const MIN_OFFSET_MINUTES = -720
+const MAX_OFFSET_MINUTES = 840
+
+function offsetMinutes(offset: string): number | null {
+  if (offset === "Z") return 0
+  const match = /^([+-])(\d{2}):(\d{2})$/.exec(offset)
+  if (match === null) return null
+  const hours = Number(match[2])
+  const minutes = Number(match[3])
+  if (hours > 23 || minutes > 59) return null
+  const span = hours * 60 + minutes
+  const signed = match[1] === "-" ? -span : span
+  if (signed < MIN_OFFSET_MINUTES || signed > MAX_OFFSET_MINUTES) return null
+  return signed
 }
 
 /**
- * A real ISO date in 1900..2100. The written year, month and day round-trip
- * through `Date.UTC`. The clock and the offset are checked on their own, so a
- * +05:00 time before 05:00 still counts.
+ * A real ISO date whose written year, month and day round-trip through
+ * `Date.UTC`, and whose UTC instant also falls in 1900..2100. The clock and
+ * the offset are checked on their own, so a +05:00 time before 05:00 still
+ * counts when that instant stays inside the year. An offset outside
+ * -12:00..+14:00 does not.
  */
 function isRealIsoDate(value: string): boolean {
   const match = ISO_DATE.exec(value)
@@ -134,10 +146,18 @@ function isRealIsoDate(value: string): boolean {
   if (!calendarRoundTrip(year, month, day)) return false
   if (year < MIN_ISO_YEAR || year > MAX_ISO_YEAR) return false
   if (value.length === 10) return true
-  const clock = /T(\d{2}):(\d{2}):(\d{2})/.exec(value)
+  const clock = /T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?/.exec(value)
   if (clock === null || !validClock(Number(clock[1]), Number(clock[2]), Number(clock[3]))) return false
   const offset = value.endsWith("Z") ? "Z" : value.slice(-6)
-  return validOffset(offset)
+  const shift = offsetMinutes(offset)
+  if (shift === null) return false
+  const fraction = clock[4] ?? ""
+  const millis = fraction === "" ? 0 : Number(fraction.padEnd(3, "0"))
+  const instant = new Date(
+    Date.UTC(year, month - 1, day, Number(clock[1]), Number(clock[2]), Number(clock[3]), millis) - shift * 60000
+  )
+  const instantYear = instant.getUTCFullYear()
+  return instantYear >= MIN_ISO_YEAR && instantYear <= MAX_ISO_YEAR
 }
 
 function classified(documentTypeId: unknown):
