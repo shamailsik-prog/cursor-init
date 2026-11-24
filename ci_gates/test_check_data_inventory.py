@@ -422,12 +422,13 @@ class RuntimeCheck(unittest.TestCase):
         self.assertEqual(gate.check_runtime_collections(["matters"], inventory), [])
 
 
-# Wave-1 stores the deletion saga will read. Two already exist on 7ae1a33f with this profile and key
-# (evidence_items, custody_events); the gate forbids a duplicate, and the file lock forbids editing them.
-# Four stay pending on F42 until their writers land. Two have landed and their pending flags are gone
-# (ME I1): draft_autosave_points (W1-L51) and whatsapp_outbound_keys (W1-Q14R3). A pending flag on a
-# store the tree now names is a note, and the pin must not keep demanding it.
-# `validatePolicy(policy, inventory())` in functions/test/f42-retention.units.test.ts loads this same file.
+# Wave-1 stores the deletion saga will read. Four stay pending on F42 until their writers land.
+# Landed, with no pending flag (ME I1): draft_autosave_points (W1-L51), whatsapp_outbound_keys
+# (W1-Q14R3), and evidence_items plus custody_events (W1-Q08B). The evidence stores were already
+# inventoried on 7ae1a33f (matter_content, field matterId); Q08B does not append a duplicate.
+# A pending flag on a store the tree now names is a note, and the pin must not keep demanding it.
+# `validatePolicy(policy, inventory())` in functions/test/f42-retention.units.test.ts loads this
+# same file; this pin is what makes that call see them.
 WAVE1_NEW = (
     {
         "id": "firestore:intakes",
@@ -464,9 +465,9 @@ WAVE1_NEW = (
         "pending": "F42",
     },
 )
-# Landed writers. draft_autosave_points (W1-L51): matter-deletion key stays matterId; a null matterId
-# is not that query, and W2-DEL finds it by firmId plus createdBy (functions/src/d4/autosave.README.md).
-# whatsapp_outbound_keys (W1-Q14R3): same profile and TTL clock as the pre-registration, without pending.
+# Landed writers, one tuple. draft_autosave_points (W1-L51): matter-deletion key stays matterId.
+# whatsapp_outbound_keys (W1-Q14R3): same profile and TTL clock, without pending.
+# evidence_items and custody_events (W1-Q08B): already inventoried, matter_content, field matterId.
 WAVE1_LANDED = (
     {
         "id": "firestore:draft_autosave_points",
@@ -483,12 +484,25 @@ WAVE1_LANDED = (
         "key": {"kind": "none"},
         "ageField": {"field": "expiresAt", "type": "timestamp"},
     },
+    {
+        "id": "firestore:evidence_items",
+        "kind": "firestore",
+        "name": "evidence_items",
+        "profile": "matter_content",
+        "key": {"kind": "field", "field": "matterId"},
+    },
+    {
+        "id": "firestore:custody_events",
+        "kind": "firestore",
+        "name": "custody_events",
+        "profile": "matter_content",
+        "key": {"kind": "field", "field": "matterId"},
+    },
 )
-WAVE1_ALREADY = ("firestore:evidence_items", "firestore:custody_events")
 
 
 class Wave1Stores(unittest.TestCase):
-    """W1-INV: the stores wave 1 will create are inventoried before those writers land."""
+    """W1-INV: wave-1 stores are inventoried before their writers land. Four remain pending."""
 
     def test_new_wave1_stores_are_pending_f42_with_their_deletion_keys(self) -> None:
         inventory = gate.load_json(ROOT, gate.INVENTORY)
@@ -502,11 +516,7 @@ class Wave1Stores(unittest.TestCase):
             self.assertNotIn(store["name"], {s["name"] for s in inventory["stores"] if s["id"] != store["id"]})
         for expected in WAVE1_LANDED:
             self.assertNotIn("pending", by_id[expected["id"]], expected["id"])
-        for sid in WAVE1_ALREADY:
-            store = by_id[sid]
-            self.assertEqual(store["profile"], "matter_content", sid)
-            self.assertEqual(store["key"], {"kind": "field", "field": "matterId"}, sid)
-            self.assertNotIn("pending", store, sid)
+        self.assertEqual(len(WAVE1_NEW), 4)
         # The object prefix points at the session store this same inventory registers.
         via = by_id["objects:upload-staging"]["key"]["via"]
         self.assertEqual(by_id[via]["kind"], "firestore")
@@ -522,6 +532,26 @@ class Wave1Stores(unittest.TestCase):
         self.assertEqual(intakes["key"], {"kind": "field", "field": "matterId"})
         self.assertIsNone(intakes["anonymise"]["matterId"])
         self.assertNotEqual(intakes["key"]["kind"], "docId")
+
+    def test_q08b_evidence_writer_is_registered_without_pending(self) -> None:
+        """ME I1: the landed evidence writer uses the pre-registered stores and does not mark them pending."""
+        inventory = gate.load_json(ROOT, gate.INVENTORY)
+        by_id = {s["id"]: s for s in inventory["stores"]}
+        for sid, name in (("firestore:evidence_items", "evidence_items"), ("firestore:custody_events", "custody_events")):
+            store = by_id[sid]
+            self.assertEqual(store["name"], name, sid)
+            self.assertEqual(store["kind"], "firestore", sid)
+            self.assertEqual(store["profile"], "matter_content", sid)
+            self.assertEqual(store["key"], {"kind": "field", "field": "matterId"}, sid)
+            self.assertNotIn("pending", store, sid)
+        types = (ROOT / "functions/src/d1/evidence/types.ts").read_text(encoding="utf-8")
+        writer = (ROOT / "functions/src/d1/evidence/custody.ts").read_text(encoding="utf-8")
+        self.assertIn('export const EVIDENCE_ITEMS = "evidence_items"', types)
+        self.assertIn('export const CUSTODY_EVENTS = "custody_events"', types)
+        # L4: both stored shapes require firmId. A row that omits it does not parse.
+        self.assertIn('"firmId"', writer)
+        self.assertIn("firmId: caller.firmId", writer)
+        self.assertIn("firmId: item.firmId", writer)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ Architecture lines 1189–1209. Per-matter evidence register and an append-only 
 
 ## Stores
 
-`evidence_items` and `custody_events`, both already in the retention inventory. This module does not edit `infra/retention` or the Firestore rules.
+`evidence_items` and `custody_events` are the pre-registered inventory rows (`matter_content`, deletion key `matterId`). They were never `pending`. This writer does not append a duplicate and does not add `pending`. Every evidence row and every custody event carries `firmId`. Firestore rules and `infra/retention/inventory.json` are not edited.
 
 ## Custody hash
 

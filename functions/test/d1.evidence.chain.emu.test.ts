@@ -94,6 +94,8 @@ describe.skipIf(!EMULATORS)("D1 evidence register and custody chain", () => {
     expect(new Set(trail.map((event) => event.hash)).size).toBe(2)
     expect(trail[1]?.prevHash).toBe(trail[0]?.hash)
     expect(trail[0]?.prevHash).toBe("")
+    expect(trail.every((event) => event.firmId === caller.firmId)).toBe(true)
+    expect((await getEvidenceItem(caller, item.id)).firmId).toBe(caller.firmId)
     expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: true, eventCount: 2 })
     const db = adminDb()
     expect((await db.collection(EVIDENCE_ITEMS).doc(item.id).get()).exists).toBe(true)
@@ -305,6 +307,26 @@ describe.skipIf(!EMULATORS)("D1 evidence register and custody chain", () => {
       expect(first.text).toContain(event.hash)
     }
     expect((await getEvidenceRegister(caller, matterId)).map((row) => row.id)).toContain(item.id)
+  })
+
+  it("a stored evidence row without firmId is not served", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    const item = await logEvidence(caller, {
+      matterId,
+      item: "bundle",
+      source: "client",
+      receiptDate: "2026-06-03",
+      custodian: "clerk A",
+      classification: "internal",
+    })
+    const stored = (await adminDb().collection(EVIDENCE_ITEMS).doc(item.id).get()).data()
+    if (!stored) throw new Error("missing evidence row")
+    const { firmId: _firmId, ...withoutFirm } = stored
+    await adminDb().collection(EVIDENCE_ITEMS).doc(item.id).set(withoutFirm)
+    await expect(getEvidenceItem(caller, item.id)).rejects.toMatchObject({ code: "not_found" })
   })
 
   it("an intern may read and may not author", async () => {
