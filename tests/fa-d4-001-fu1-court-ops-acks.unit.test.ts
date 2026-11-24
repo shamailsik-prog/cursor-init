@@ -261,6 +261,14 @@ describe("backfill plan, move decision and exit code (R12, R13)", () => {
     expect(decideCourtOpsAckMove(bound, boundStored, tie).write).toEqual(tie)
   })
 
+  it("C2: an empty matterId is unbound and is not written", () => {
+    const planned = planCourtOpsAckBackfill([legacy(F, "workflow", "w1", { createdAt: 300, matterId: "" })], [], new Map([["workflow:w1", F]])).moves[0]!
+    const stored = legacy(F, "workflow", "w1", { createdAt: 300, matterId: "" }).data
+    const moved = decideCourtOpsAckMove(planned, stored, null)
+    expect(moved.outcome).toEqual({ status: "rejected", reason: "matter_unbound" })
+    expect(moved.write).toBeUndefined()
+  })
+
   it("WRITER-264-008: a move never writes or overwrites an acknowledgement with a null matterId", () => {
     const planned = planCourtOpsAckBackfill([legacy(F, "workflow", "w1", { createdAt: 300 })], [], new Map([["workflow:w1", F]])).moves[0]!
     const stored = legacy(F, "workflow", "w1", { createdAt: 300 }).data
