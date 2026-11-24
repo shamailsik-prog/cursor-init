@@ -1,6 +1,8 @@
 /**
  * One citation reader. The draft is normalised and tokenised, then one label
- * grammar both finds citations and classifies assigned labels. see, refer, and
+ * grammar both finds citations and classifies assigned labels. An index is
+ * read per line, and every label on that line uses the filing-set check.
+ * A pure index is left out of the order check. see, refer, and
  * relies open a citation only for a single uppercase letter, a P, D, or R mark,
  * or an Annexure, Exhibit, Enclosure, or Mark head. A lowercase p. or pp. plus a
  * number is a page reference. A carriage return, line separator, or paragraph
@@ -170,7 +172,8 @@ function foldNewlines(input: string): string {
     "$1 ",
   )
   const joined = kept.replace(/(\band\b|,|\bto\b|-|\/)[ \t]*(?:\n[ \t]*){2,}/gi, "$1 ")
-  return joined.replace(/[ \t]*(?:\n[ \t]*){2,}/g, ". ").replace(/[ \t]*\n[ \t]*/g, " ")
+  const continued = joined.replace(/([A-Za-z])\.?[ \t]*(?:\n[ \t]*){2,}(?=(?:and|or)[ \t]+[A-Za-z]\b)/gi, "$1, ")
+  return continued.replace(/[ \t]*(?:\n[ \t]*){2,}/g, ". ").replace(/[ \t]*\n[ \t]*/g, " ")
 }
 
 export function normaliseCitationText(input: string): string {
@@ -344,6 +347,7 @@ function parseMark(tokens: readonly Token[], index: number): { key: string; pref
   const punct = tokens[cursor]
   if (punct?.kind === "punct" && "/.-".includes(punct.value)) {
     const after = tokens[cursor + 1]
+    if (punct.value === "." && after?.kind === "num" && after.value.length === 4) return null
     if (after?.kind === "num") {
       return { key: `${head.value.toUpperCase()}/${after.value}`, prefix: head.value.toUpperCase(), next: cursor + 2 }
     }
@@ -464,6 +468,10 @@ function parseItem(tokens: readonly Token[], index: number): Item | null {
   if (!ranged) return { labels: [atom.label], next: atom.next }
   const right = parseAtom(tokens, atom.next + 1)
   if (!right) return { labels: [atom.label], next: atom.next }
+  const rightToken = tokens[atom.next + 1]
+  if (separator?.value === "-" && rightToken?.kind === "word" && /^[a-z]$/.test(rightToken.value) && rightToken.caps !== "upper") {
+    return { labels: [atom.label], next: atom.next }
+  }
   const labels = expand(atom.label, right.label)
   if (!labels) return { error: true }
   return { labels, next: right.next }
@@ -542,11 +550,26 @@ function isCitationWord(token: Token | undefined): boolean {
   return token?.kind === "word" && (token.value in KEYWORD_FAMILY || CITATION_OPENERS.has(token.value))
 }
 
+function exemptCaseMark(tokens: readonly Token[], index: number): boolean {
+  const direct = parseMark(tokens, index)
+  if (direct && dashCodeExempt(tokens, index, direct.next)) return true
+  if (tokens[index]?.value !== "no") return false
+  let cursor = index + 1
+  if (tokens[cursor]?.value === ".") cursor += 1
+  const mark = parseMark(tokens, cursor)
+  return !!mark && dashCodeExempt(tokens, cursor, mark.next)
+}
+
 function labelShaped(tokens: readonly Token[], index: number, skippedWord: boolean): boolean {
   const token = tokens[index]
   if (!token || token.kind !== "word" || token.value.includes("_")) return false
   if (skippedWord && (token.value === "a" || token.value === "i")) return false
-  if (isPageReference(tokens, index, parseMark(tokens, index)?.next ?? index + 3)) return false
+  const mark = parseMark(tokens, index)
+  if (mark && dashCodeExempt(tokens, index, mark.next)) return false
+  if (token.caps !== "upper" && /^[a-z]$/.test(token.value) && tokens[index + 1]?.value === "/" && tokens[index + 2]?.kind === "word" && tokens[index + 2]?.caps !== "upper") return false
+  if (token.caps !== "upper" && /^[a-z]$/.test(token.value) && tokens[index - 1]?.value === "/") return false
+  if (exemptCaseMark(tokens, index)) return false
+  if (isPageReference(tokens, index, mark?.next ?? index + 3)) return false
   if (SPELLED_NUMBERS.has(token.value) || failedLabel(tokens, index)) return true
   return parseAtom(tokens, index) !== null
 }
@@ -820,7 +843,8 @@ function shapedLabel(tokens: readonly Token[], index: number, family: CitationFa
   const hyphen = tightHyphenKey(tokens, index)
   if (hyphen) return { label: { family, key: hyphen.key }, next: hyphen.next }
   const mark = parseMark(tokens, index)
-  if (mark && !isPageReference(tokens, index, mark.next)) return { label: { family: "mark", key: mark.key }, next: mark.next }
+  if (mark && (isPageReference(tokens, index, mark.next) || dashCodeExempt(tokens, index, mark.next))) return null
+  if (mark) return { label: { family: "mark", key: mark.key }, next: mark.next }
   if (!oneLetter(tokens[index])) return null
   const atom = parseAtom(tokens, index)
   if (atom) return { label: atom.label, next: atom.next }
@@ -860,6 +884,8 @@ function skipJoiner(tokens: readonly Token[], index: number, family: CitationFam
   } else if (token.value === "-" && shapedLabel(tokens, index + 1, family)) {
     cursor = index + 1
   } else return null
+  const joined = tokens[cursor]
+  if (joined?.kind === "word" && oneLetter(joined) && joined.caps !== "upper" && /^[a-z]$/.test(joined.value)) return null
   if (!shapedLabel(tokens, cursor, family) && !wordSlot(tokens, cursor, family)) return null
   return cursor
 }
@@ -1163,7 +1189,11 @@ function headingRemainderIsList(tokens: readonly Token[], start: number): boolea
     const token = tokens[cursor]
     if (!token) return false
     if (token.value === "." && tokens[cursor - 1]?.value !== "no") return true
-    if (token.kind === "punct" && ",;:&-/|".includes(token.value)) continue
+    if (token.value === "-" || token.value === ":") {
+      while (cursor + 1 < tokens.length && descriptionWord(tokens[cursor + 1])) cursor += 1
+      continue
+    }
+    if (token.kind === "punct" && ",;&/|".includes(token.value)) continue
     if (token.kind === "word" && (token.value === "and" || token.value === "or" || token.value === "to" || token.value === "see" || token.value === "refer")) continue
     if (token.kind === "word" && token.value in KEYWORD_FAMILY) continue
     const mark = parseMark(tokens, cursor)
@@ -1332,6 +1362,7 @@ export function scanCitations(
     }
     hits.push({ ...hitOf(label), forOrder })
   }
+  for (const label of extraIndexLabels(draft)) consider(label, null, false)
   for (let cursor = 0; cursor < tokens.length; cursor += 1) {
     const kind = tokens[cursor]?.kind === "word" ? tokens[cursor]?.value : ""
     if (kind !== "annexures" && kind !== "exhibits" && kind !== "documents") continue
@@ -1417,6 +1448,10 @@ export function scanCitations(
       const slots = labelsAfterHead(tokens, index, end, keyword)
       const parsed = parseExpression(tokens, index + 1)
       const forOrder = !headingSentence(tokens, index)
+      if (!parsed && COPULA.has(tokens[index + 1]?.value ?? "") && slots.length === 0) {
+        index += 1
+        continue
+      }
       if (!parsed || (parsed.labels.length === 0 && slots.length === 0 && spelledBeforeKeyword(tokens, index))) {
         unparsed.push(`body cites ${token.value} without a label expression that can be read`)
         for (const label of slots) consider(label, keyword, forOrder)
@@ -1455,11 +1490,18 @@ export function scanCitations(
         }
         return false
       })
-      if (!exhibitHead && dashCodeExempt(tokens, index, mark.next)) {
+      if (dashCodeExempt(tokens, index, mark.next) && (!exhibitHead || numberedPrefix(tokens, index))) {
         index = extension?.next ?? mark.next
         continue
       }
       const inOrder = !headingSentence(tokens, index)
+      const tail = tokens[mark.next]
+      const stem = tokens[mark.next - 1]
+      if (tail?.kind === "word" && /^[a-z]$/.test(tail.value) && (tail.from === stem?.to || tail.caps !== "upper")) {
+        consider({ family: "mark", key: `${mark.key}${tail.value.toUpperCase()}` }, null, inOrder)
+        index = mark.next + 1
+        continue
+      }
       if (extension && tokens[index + 1]?.value === "-") {
         index = extension.next
         consider({ family: "mark", key: extension.key }, null, inOrder)
@@ -1506,4 +1548,78 @@ export function scanCitations(
     index += 1
   }
   return { hits, unparsed }
+}
+
+function impureIndexLine(line: string): boolean {
+  if (/^\s*(?:\d+[.)]|[-*•])\s+/.test(line)) return true
+  if (/^\s*[A-Za-z]\s*[.:]\s+\S/.test(line)) return true
+  if (/\b(see|refer|relies|placed)\b/i.test(line)) return true
+  if (/\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b/i.test(line)) return true
+  if (/\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b/i.test(line)) return true
+  return false
+}
+
+function labelsOnLine(line: string): Label[] {
+  const tokens = mergeKeywords(tokenise(normaliseCitationText(line)))
+  const labels: Label[] = []
+  for (let index = 0; index < tokens.length; index += 1) {
+    const mark = parseMark(tokens, index)
+    if (mark && !isPageReference(tokens, index, mark.next) && !dashCodeExempt(tokens, index, mark.next)) {
+      const tail = tokens[mark.next]
+      const stem = tokens[mark.next - 1]
+      if (tail?.kind === "word" && /^[a-z]$/.test(tail.value) && (tail.from === stem?.to || tail.caps !== "upper")) {
+        labels.push({ family: "mark", key: `${mark.key}${tail.value.toUpperCase()}` })
+      } else labels.push({ family: "mark", key: mark.key })
+      index = mark.next - 1
+      continue
+    }
+    const token = tokens[index]
+    if (!token || !oneLetter(token) || (token.caps !== "upper" && /^[a-z]$/.test(token.value))) continue
+    const year = tokens[index + 2]
+    if (tokens[index + 1]?.value === "." && year?.kind === "num" && year.value.length === 4) continue
+    labels.push({ family: "letter", key: token.value.toUpperCase() })
+  }
+  return labels
+}
+
+function extraIndexLabels(draft: string): Label[] {
+  const lines = draft.replace(/\r\n/g, "\n").replace(/[\r\u2028\u2029]/g, "\n").split("\n")
+  const labels: Label[] = []
+  let mode: "none" | "standard" | "extra" = "none"
+  let impure = false
+  let block: string[] = []
+  const flush = () => {
+    if (mode === "extra" || impure) for (const line of block) labels.push(...labelsOnLine(line))
+    block = []
+    impure = false
+    mode = "none"
+  }
+  for (const line of lines) {
+    if (!line.trim()) {
+      flush()
+      continue
+    }
+    const bare = headingLine(line).replace(/[.:]\s*$/g, "").trim()
+    if (/^(?:list|index)\s+of\s+(?:annexures|exhibits|documents)\b/i.test(bare)) {
+      flush()
+      mode = "standard"
+      block = [line]
+      if (impureIndexLine(line)) impure = true
+      continue
+    }
+    if (/^(?:list\s+of\s+(?:annexure|enclosures)|enclosures|index)\b/i.test(bare)) {
+      flush()
+      mode = "extra"
+      block = [line]
+      continue
+    }
+    if (mode !== "none") {
+      block.push(line)
+      if (impureIndexLine(line)) impure = true
+      continue
+    }
+    if (line.includes("|")) labels.push(...labelsOnLine(line))
+  }
+  flush()
+  return labels
 }
