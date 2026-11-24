@@ -92,6 +92,16 @@ function assertActor(caller: EvidenceActor): void {
   if (!isSafeDocId(caller.uid) || !isSafeDocId(caller.firmId)) throw new EvidenceError("invalid_input")
 }
 
+/** A missing or mistyped caller is invalid_input, before a role refusal and before any read. */
+function assertCaller(caller: EvidenceActor, mode: Mode): void {
+  if (!isPlain(caller) || typeof caller.role !== "string" || typeof caller.uid !== "string" || typeof caller.firmId !== "string") {
+    throw new EvidenceError("invalid_input")
+  }
+  if (!isClassification(caller.clearanceLevel)) throw new EvidenceError("invalid_input")
+  assertRole(caller, mode)
+  assertActor(caller)
+}
+
 function parseId(value: unknown): string {
   if (!isSafeDocId(value)) throw new EvidenceError("invalid_input")
   return value
@@ -115,9 +125,22 @@ function parseReceiptDate(value: unknown): string {
 }
 
 function stamp(clock?: EvidenceClock): string {
-  const now = clock?.now?.() ?? Date.now()
+  if (clock !== undefined && !isPlain(clock)) throw new EvidenceError("invalid_input")
+  if (clock?.now !== undefined && typeof clock.now !== "function") throw new EvidenceError("invalid_input")
+  let now: unknown
+  try {
+    now = clock?.now ? clock.now() : Date.now()
+  } catch (err) {
+    if (err instanceof EvidenceError) throw err
+    throw new EvidenceError("invalid_input")
+  }
   if (typeof now !== "number" || !Number.isFinite(now)) throw new EvidenceError("invalid_input")
-  return new Date(now).toISOString()
+  try {
+    return new Date(now).toISOString()
+  } catch (err) {
+    if (err instanceof EvidenceError) throw err
+    throw new EvidenceError("invalid_input")
+  }
 }
 
 function isContention(err: unknown): boolean {
@@ -362,8 +385,7 @@ function parseAdd(input: AddCustodyInput): { evidenceId: string; kind: Draft["ki
 
 export async function logEvidence(caller: EvidenceActor, input: LogEvidenceInput, clock?: EvidenceClock): Promise<EvidenceItem> {
   requireD1Evidence()
-  assertRole(caller, "write")
-  assertActor(caller)
+  assertCaller(caller, "write")
   const parsed = parseLog(input)
   const createdAt = stamp(clock)
   const id = `ev_${randomUUID().replace(/-/g, "")}`
@@ -416,16 +438,14 @@ export async function logEvidence(caller: EvidenceActor, input: LogEvidenceInput
 
 export async function getEvidenceItem(caller: EvidenceActor, evidenceId: string): Promise<EvidenceItem> {
   requireD1Evidence()
-  assertRole(caller, "read")
-  assertActor(caller)
+  assertCaller(caller, "read")
   const { item } = await readItem(caller, parseId(evidenceId), "read")
   return item
 }
 
 export async function getEvidenceRegister(caller: EvidenceActor, matterId: string): Promise<EvidenceItem[]> {
   requireD1Evidence()
-  assertRole(caller, "read")
-  assertActor(caller)
+  assertCaller(caller, "read")
   const id = parseId(matterId)
   await gateOf(caller, id, "read")
   const snap = await adminDb().collection(EVIDENCE_ITEMS).where("matterId", "==", id).get()
@@ -442,8 +462,7 @@ export async function getEvidenceRegister(caller: EvidenceActor, matterId: strin
 
 export async function linkEvidenceToDocument(caller: EvidenceActor, input: LinkEvidenceInput, clock?: EvidenceClock): Promise<EvidenceItem> {
   requireD1Evidence()
-  assertRole(caller, "write")
-  assertActor(caller)
+  assertCaller(caller, "write")
   const evidenceId = parseId(input?.evidenceId)
   const documentId = parseId(input?.documentId)
   const at = stamp(clock)
@@ -477,8 +496,7 @@ export async function linkEvidenceToDocument(caller: EvidenceActor, input: LinkE
 
 export async function addCustodyEvent(caller: EvidenceActor, input: AddCustodyInput, clock?: EvidenceClock): Promise<CustodyEvent> {
   requireD1Evidence()
-  assertRole(caller, "write")
-  assertActor(caller)
+  assertCaller(caller, "write")
   const parsed = parseAdd(input)
   const at = stamp(clock)
   return commit(() =>
@@ -502,14 +520,12 @@ async function loadCustody(caller: EvidenceActor, evidenceId: string, mode: Mode
 
 export async function getCustodyTrail(caller: EvidenceActor, evidenceId: string): Promise<CustodyTrail> {
   requireD1Evidence()
-  assertRole(caller, "read")
-  assertActor(caller)
+  assertCaller(caller, "read")
   return loadCustody(caller, evidenceId, "read")
 }
 
 export async function verifyCustodyChain(caller: EvidenceActor, evidenceId: string): Promise<ChainVerification> {
   requireD1Evidence()
-  assertRole(caller, "read")
-  assertActor(caller)
+  assertCaller(caller, "read")
   return (await loadCustody(caller, evidenceId, "read")).verdict
 }

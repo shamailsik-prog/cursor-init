@@ -40,7 +40,13 @@ export function renderEvidenceLog(
     genesis: genesis
       ? {
           id: genesis.id,
+          evidenceId: genesis.evidenceId,
           seq: genesis.seq,
+          kind: genesis.kind,
+          actorId: genesis.actorId,
+          at: genesis.at,
+          note: genesis.note,
+          custodian: genesis.custodian,
           item: genesis.item,
           source: genesis.source,
           receiptDate: genesis.receiptDate,
@@ -90,6 +96,11 @@ export function renderEvidenceLog(
     lines.push("---")
     lines.push("seq: 0")
     lines.push("kind: genesis")
+    lines.push(`evidenceId: ${genesis.evidenceId}`)
+    lines.push(`actorId: ${genesis.actorId}`)
+    lines.push(`at: ${genesis.at}`)
+    lines.push(`custodian: ${genesis.custodian}`)
+    lines.push(`note: ${genesis.note}`)
     lines.push(`item: ${genesis.item}`)
     lines.push(`source: ${genesis.source}`)
     lines.push(`receiptDate: ${genesis.receiptDate}`)

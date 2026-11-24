@@ -59,6 +59,17 @@ describe("D1 evidence flag", () => {
     expect(adminDb).not.toHaveBeenCalled()
   })
 
+  it("a malformed caller or clock is invalid_input and does not reach the store", async () => {
+    process.env[FLAG] = "true"
+    const input = { matterId: "matter-1", item: "x", source: "y", receiptDate: "2026-01-15", custodian: "z", classification: "internal" as const }
+    await expect(logEvidence(null as unknown as EvidenceActor, input)).rejects.toMatchObject({ name: "EvidenceError", code: "invalid_input" })
+    await expect(logEvidence({ ...actor, clearanceLevel: "nope" as EvidenceActor["clearanceLevel"] }, input)).rejects.toMatchObject({ code: "invalid_input" })
+    await expect(logEvidence(actor, input, { now: "nope" as unknown as () => number })).rejects.toMatchObject({ code: "invalid_input" })
+    await expect(logEvidence(actor, input, { now: () => Number.POSITIVE_INFINITY })).rejects.toMatchObject({ code: "invalid_input" })
+    await expect(logEvidence(actor, input, { now: () => { throw new RangeError("bad clock") } })).rejects.toMatchObject({ code: "invalid_input" })
+    expect(adminDb).not.toHaveBeenCalled()
+  })
+
   it("a client or an intern author is refused before any read", async () => {
     process.env[FLAG] = "true"
     const client = { ...actor, role: "client" as const }

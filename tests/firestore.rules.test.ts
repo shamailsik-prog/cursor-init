@@ -760,11 +760,10 @@ describe("Review round 1 — update/read paths, proposals, members", () => {
     it("member cannot create above own clearance", async () => {
       await assertFails(setDoc(doc(await authed("rv-low", ASSOC_LOW), coll, "c-hi"), row("privileged")))
     })
-    it("cleared author member can create (drafts: no longer, P4-11)", async () => {
+    it("cleared author member cannot create (Functions-only, P4-11)", async () => {
       const create = setDoc(doc(await authed("rv-low", ASSOC_LOW), coll, "c-ok"), row("internal"))
-      // Phase 4a (P4-11): drafts are written by Cloud Functions only; evidence_items and custody_events are unchanged.
-      if (coll === "drafts") await assertFails(create)
-      else await assertSucceeds(create)
+      // Drafts (P4-11), evidence_items and custody_events (CUST-273-001) are written by Cloud Functions only.
+      await assertFails(create)
     })
   })
 
@@ -855,11 +854,10 @@ describe.each(["drafts", "evidence_items"])("Review round 2 — %s update (N3)",
     await assertFails(updateDoc(doc(db, coll, "n3Row"), { matterId: "n3Other" }))
     await assertFails(updateDoc(doc(db, coll, "n3Row"), { firmId: "firmB" }))
   })
-  it("cleared author member can monotonically update (drafts: no longer, P4-11)", async () => {
+  it("cleared author member cannot update (Functions-only, P4-11)", async () => {
     const update = updateDoc(doc(await authed("n3-high", ASSOC_HIGH), coll, "n3Row"), { classification: "confidential" })
-    // Phase 4a (P4-11): drafts are written by Cloud Functions only; evidence_items are unchanged.
-    if (coll === "drafts") await assertFails(update)
-    else await assertSucceeds(update)
+    // Drafts (P4-11) and evidence_items (CUST-273-001) are written by Cloud Functions only.
+    await assertFails(update)
   })
 })
 
@@ -1706,5 +1704,111 @@ describe("SEC-3: rules read the authoritative users record and the firm's MFA po
   it("a deactivated user cannot read their own users record either", async () => {
     await assertSucceeds(getDoc(doc(rawAuthed("sec3-live", PARTNER), "users", "sec3-live")))
     await assertFails(getDoc(doc(rawAuthed("sec3-ex", PARTNER), "users", "sec3-ex")))
+  })
+})
+
+describe("W1-Q08B — evidence and custody are Functions-only, and custody reads are cleared", () => {
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged" }
+  const INTERNAL = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+  const PRIVILEGED = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "evM"), { firmId: "firmA", title: "Evidence", classification: "internal" })
+      for (const uid of ["ev-partner", "ev-internal", "ev-privileged"]) {
+        await setDoc(doc(db, "matter_members", `evM_${uid}`), { firmId: "firmA", matterId: "evM", userId: uid })
+      }
+      await setDoc(doc(db, "evidence_items", "evItem"), {
+        firmId: "firmA",
+        matterId: "evM",
+        classification: "internal",
+        eventCount: 1,
+        lastHash: "ab".repeat(32),
+      })
+      await setDoc(doc(db, "evidence_items", "evItemPriv"), {
+        firmId: "firmA",
+        matterId: "evM",
+        classification: "privileged",
+      })
+      await setDoc(doc(db, "custody_events", "evItem_0"), {
+        firmId: "firmA",
+        matterId: "evM",
+        classification: "internal",
+        seq: 0,
+        note: "genesis",
+      })
+      await setDoc(doc(db, "custody_events", "evItem_1"), {
+        firmId: "firmA",
+        matterId: "evM",
+        classification: "internal",
+        seq: 1,
+        note: "opened",
+      })
+      await setDoc(doc(db, "custody_events", "evPrivNote"), {
+        firmId: "firmA",
+        matterId: "evM",
+        classification: "privileged",
+        seq: 2,
+        note: "privileged custody note",
+      })
+    })
+  })
+
+  it("a partner cannot plant an evidence row", async () => {
+    await assertFails(
+      setDoc(doc(await authed("ev-partner", PARTNER), "evidence_items", "evPlanted"), {
+        firmId: "firmA",
+        matterId: "evM",
+        classification: "internal",
+        item: "forged exhibit",
+      })
+    )
+  })
+
+  it("a partner cannot forge a back-dated custody event or rewrite the header", async () => {
+    const db = await authed("ev-partner", PARTNER)
+    await assertFails(
+      setDoc(doc(db, "custody_events", "evItem_forged"), {
+        firmId: "firmA",
+        matterId: "evM",
+        classification: "internal",
+        seq: 2,
+        at: "2020-01-01T00:00:00.000Z",
+        note: "back-dated",
+        prevHash: "ab".repeat(32),
+        hash: "cd".repeat(32),
+      })
+    )
+    await assertFails(updateDoc(doc(db, "evidence_items", "evItem"), { eventCount: 2, lastHash: "cd".repeat(32) }))
+  })
+
+  it("a partner cannot pre-create the next custody seq", async () => {
+    await assertFails(
+      setDoc(doc(await authed("ev-partner", PARTNER), "custody_events", "evItem_2"), {
+        firmId: "firmA",
+        matterId: "evM",
+        classification: "internal",
+        seq: 2,
+        note: "occupies the next seq",
+      })
+    )
+  })
+
+  it("a partner cannot delete an evidence row or a custody event", async () => {
+    const db = await authed("ev-partner", PARTNER)
+    await assertFails(deleteDoc(doc(db, "evidence_items", "evItem")))
+    await assertFails(deleteDoc(doc(db, "custody_events", "evItem_1")))
+  })
+
+  it("an internal member reads an internal custody note and not a privileged one", async () => {
+    const low = await authed("ev-internal", INTERNAL)
+    const opened = await assertSucceeds(getDoc(doc(low, "custody_events", "evItem_1")))
+    expect(opened.data()?.note).toBe("opened")
+    await assertFails(getDoc(doc(low, "custody_events", "evPrivNote")))
+    await assertFails(getDoc(doc(low, "evidence_items", "evItemPriv")))
+    const high = await authed("ev-privileged", PRIVILEGED)
+    const privileged = await assertSucceeds(getDoc(doc(high, "custody_events", "evPrivNote")))
+    expect(privileged.data()?.note).toBe("privileged custody note")
   })
 })

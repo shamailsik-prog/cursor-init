@@ -4,6 +4,7 @@ import { addCustodyEvent, getCustodyTrail, verifyCustodyChain } from "../src/d1/
 import { exportEvidenceLog } from "../src/d1/evidence/export"
 import { getEvidenceItem, getEvidenceRegister, linkEvidenceToDocument, logEvidence } from "../src/d1/evidence/register"
 import { EVIDENCE_ITEMS, CUSTODY_EVENTS, type EvidenceActor } from "../src/d1/evidence/types"
+import { MATTER_TOMBSTONES } from "@/platform/retention/tombstone"
 import { EMULATORS, uniq } from "./emu"
 
 /**
@@ -304,10 +305,19 @@ describe.skipIf(!EMULATORS)("D1 evidence register and custody chain", () => {
     expect(Buffer.from(first.json, "utf8").equals(Buffer.from(second.json, "utf8"))).toBe(true)
     expect(Buffer.from(first.text, "utf8").equals(Buffer.from(second.text, "utf8"))).toBe(true)
     const trail = await getCustodyTrail(caller, item.id)
-    const parsed = JSON.parse(first.json) as { events: { seq: number; hash: string }[]; genesis: { hash: string } }
+    const parsed = JSON.parse(first.json) as {
+      events: { seq: number; hash: string }[]
+      genesis: { hash: string; evidenceId: string; actorId: string; at: string; custodian: string; note: string }
+    }
     expect(parsed.events.map((event) => event.seq)).toEqual(trail.events.map((event) => event.seq))
+    expect(parsed.genesis.evidenceId).toBe(item.id)
+    expect(parsed.genesis.actorId).toBe(caller.uid)
+    expect(parsed.genesis.at).toBe(item.createdAt)
+    expect(parsed.genesis.custodian).toBe("clerk A")
+    expect(parsed.genesis.note).toBe("")
     expect(first.json).toContain(trail.genesis?.hash)
     expect(first.text).toContain(trail.genesis?.hash)
+    expect(first.text).toContain(`actorId: ${caller.uid}`)
     for (const event of trail.events) {
       expect(first.json).toContain(event.hash)
       expect(first.text).toContain(event.hash)
@@ -485,6 +495,220 @@ describe.skipIf(!EMULATORS)("D1 evidence register and custody chain", () => {
     expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: false, brokenSeq: 0, reason: "header" })
     await db.collection(EVIDENCE_ITEMS).doc(item.id).update({ classification: "internal" })
     expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: true, eventCount: 1 })
+  })
+
+  it("a same-firm author who is not a member is refused", async () => {
+    process.env[FLAG] = "true"
+    const owner = actor()
+    const outsider = actor({ firmId: owner.firmId, role: "associate" })
+    const matterId = uniq("matter")
+    await seedMatter(owner, matterId)
+    await expect(
+      logEvidence(outsider, {
+        matterId,
+        item: "bundle",
+        source: "desk",
+        receiptDate: "2026-08-01",
+        custodian: "associate",
+        classification: "internal",
+      })
+    ).rejects.toMatchObject({ code: "not_member" })
+  })
+
+  it("a tombstoned matter is refused", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    const item = await logEvidence(caller, {
+      matterId,
+      item: "file",
+      source: "client",
+      receiptDate: "2026-08-02",
+      custodian: "clerk A",
+      classification: "internal",
+    })
+    await adminDb().collection(MATTER_TOMBSTONES).doc(matterId).set({ firmId: caller.firmId, matterId })
+    await expect(getEvidenceItem(caller, item.id)).rejects.toMatchObject({ code: "matter_deleted" })
+    await expect(
+      logEvidence(caller, {
+        matterId,
+        item: "another",
+        source: "client",
+        receiptDate: "2026-08-03",
+        custodian: "clerk A",
+        classification: "internal",
+      })
+    ).rejects.toMatchObject({ code: "matter_deleted" })
+  })
+
+  it("a matter filed under another firm is not found", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    await adminDb().collection("matters").doc(matterId).update({ firmId: uniq("firm") })
+    await expect(
+      logEvidence(caller, {
+        matterId,
+        item: "file",
+        source: "client",
+        receiptDate: "2026-08-04",
+        custodian: "clerk A",
+        classification: "internal",
+      })
+    ).rejects.toMatchObject({ code: "not_found" })
+  })
+
+  it("an item above the caller's clearance is refused even when the matter is not", async () => {
+    process.env[FLAG] = "true"
+    const partner = actor()
+    const reader = actor({ firmId: partner.firmId, role: "associate", clearanceLevel: "internal" })
+    const matterId = uniq("matter")
+    await seedMatter(partner, matterId, "internal")
+    await adminDb().collection("matter_members").doc(`${matterId}_${reader.uid}`).set({
+      firmId: partner.firmId,
+      matterId,
+      userId: reader.uid,
+    })
+    const visible = await logEvidence(partner, {
+      matterId,
+      item: "letter",
+      source: "court",
+      receiptDate: "2026-08-05",
+      custodian: "clerk A",
+      classification: "internal",
+    })
+    const hidden = await logEvidence(partner, {
+      matterId,
+      item: "opinion",
+      source: "counsel",
+      receiptDate: "2026-08-06",
+      custodian: "partner",
+      classification: "internal",
+    })
+    await adminDb().collection(EVIDENCE_ITEMS).doc(hidden.id).update({ classification: "privileged" })
+    await expect(getEvidenceItem(reader, hidden.id)).rejects.toMatchObject({ code: "clearance" })
+    const register = await getEvidenceRegister(reader, matterId)
+    expect(register.map((row) => row.id)).toEqual([visible.id])
+    expect(register.some((row) => row.id === hidden.id)).toBe(false)
+  })
+
+  it("a second document link is already_linked and the link event keeps the previous hash", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    const item = await logEvidence(caller, {
+      matterId,
+      item: "deed",
+      source: "registry",
+      receiptDate: "2026-08-07",
+      custodian: "clerk A",
+      classification: "internal",
+    })
+    const firstDoc = uniq("doc")
+    const secondDoc = uniq("doc")
+    await adminDb().collection("documents").doc(firstDoc).set(documentData(caller, matterId, "internal"))
+    await adminDb().collection("documents").doc(secondDoc).set(documentData(caller, matterId, "internal"))
+    const linked = await linkEvidenceToDocument(caller, { evidenceId: item.id, documentId: firstDoc })
+    expect(linked.documentId).toBe(firstDoc)
+    const again = await linkEvidenceToDocument(caller, { evidenceId: item.id, documentId: firstDoc })
+    expect(again.documentId).toBe(firstDoc)
+    await expect(linkEvidenceToDocument(caller, { evidenceId: item.id, documentId: secondDoc })).rejects.toMatchObject({
+      code: "already_linked",
+    })
+    const trail = await getCustodyTrail(caller, item.id)
+    expect(trail.events[0]?.kind).toBe("link")
+    expect(trail.events[0]?.prevHash).toBe(trail.genesis?.hash)
+    expect(trail.events[0]?.documentId).toBe(firstDoc)
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: true, eventCount: 1 })
+    const stored = await getEvidenceItem(caller, item.id)
+    expect(stored.documentId).toBe(firstDoc)
+    expect(stored.createdBy).toBe(caller.uid)
+    expect(stored.createdAt).toBe(item.createdAt)
+  })
+
+  it("a transfer without a custodian is invalid and a transfer moves the header custodian", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    const item = await logEvidence(caller, {
+      matterId,
+      item: "seal",
+      source: "court",
+      receiptDate: "2026-08-08",
+      custodian: "clerk A",
+      classification: "internal",
+    })
+    await expect(addCustodyEvent(caller, { evidenceId: item.id, kind: "transfer", note: "handed over" })).rejects.toMatchObject({
+      code: "invalid_input",
+    })
+    await addCustodyEvent(caller, { evidenceId: item.id, kind: "transfer", note: "handed over", custodian: "partner" })
+    const stored = await getEvidenceItem(caller, item.id)
+    expect(stored.custodian).toBe("partner")
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: true, eventCount: 1 })
+  })
+
+  it("a second genesis or a second copy of the same seq breaks the chain", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    const item = await logEvidence(caller, {
+      matterId,
+      item: "disk",
+      source: "client",
+      receiptDate: "2026-08-09",
+      custodian: "clerk A",
+      classification: "internal",
+    })
+    const db = adminDb()
+    const genesis = (await db.collection(CUSTODY_EVENTS).doc(`${item.id}_0`).get()).data()
+    if (!genesis) throw new Error("missing genesis")
+    await db.collection(CUSTODY_EVENTS).doc(`${item.id}_0b`).set({ ...genesis, note: "second genesis" })
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: false, brokenSeq: 0, reason: "duplicate" })
+    await db.collection(CUSTODY_EVENTS).doc(`${item.id}_0b`).delete()
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: true, eventCount: 0 })
+    await addCustodyEvent(caller, { evidenceId: item.id, kind: "receipt", note: "logged" })
+    const seq1 = (await db.collection(CUSTODY_EVENTS).doc(`${item.id}_1`).get()).data()
+    if (!seq1) throw new Error("missing seq 1")
+    await db.collection(CUSTODY_EVENTS).doc(`${item.id}_1b`).set(seq1)
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: false, brokenSeq: 1, reason: "duplicate" })
+    await db.collection(CUSTODY_EVENTS).doc(`${item.id}_1b`).delete()
+    const next = { ...seq1, seq: 2 }
+    await db.collection(CUSTODY_EVENTS).doc(`${item.id}_2`).set(next)
+    await expect(addCustodyEvent(caller, { evidenceId: item.id, kind: "annotation", note: "would reuse seq 2" })).rejects.toMatchObject({
+      code: "chain_broken",
+    })
+    expect((await db.collection(EVIDENCE_ITEMS).doc(item.id).get()).data()?.eventCount).toBe(1)
+  })
+
+  it("editing createdBy, createdAt, documentId, or headerHash fails verify", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    const item = await logEvidence(caller, {
+      matterId,
+      item: "photo",
+      source: "site",
+      receiptDate: "2026-08-10",
+      custodian: "clerk A",
+      classification: "internal",
+    })
+    const db = adminDb()
+    await db.collection(EVIDENCE_ITEMS).doc(item.id).update({ createdBy: "other-user" })
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: false, brokenSeq: 0, reason: "header" })
+    await db.collection(EVIDENCE_ITEMS).doc(item.id).update({ createdBy: caller.uid, createdAt: "2020-01-01T00:00:00.000Z" })
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: false, brokenSeq: 0, reason: "header" })
+    await db.collection(EVIDENCE_ITEMS).doc(item.id).update({ createdAt: item.createdAt, documentId: uniq("doc") })
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: false, brokenSeq: 0, reason: "header" })
+    await db.collection(EVIDENCE_ITEMS).doc(item.id).update({ documentId: null, headerHash: "ab".repeat(32) })
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: false, brokenSeq: 0, reason: "header" })
+    await db.collection(EVIDENCE_ITEMS).doc(item.id).update({ headerHash: item.headerHash })
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: true, eventCount: 0 })
   })
 })
 

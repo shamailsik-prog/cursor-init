@@ -313,7 +313,9 @@ export function parseCustodyEvent(id: string, data: unknown): CustodyEvent | nul
  * a gap. An event past `header.eventCount` is a count mismatch. `lastHash` must
  * be the genesis hash when there are no custody events, and the hash of event
  * `eventCount` otherwise. The header fields bound into genesis (`item`,
- * `source`, `receiptDate`, `firmId`, `matterId`) must still match it.
+ * `source`, `receiptDate`, `firmId`, `matterId`, `createdBy`, `createdAt`)
+ * must still match it. `documentId` must match the last link event, or be
+ * null when the chain has no link.
  */
 export function inspectCustodyChain(
   header: Pick<
@@ -326,6 +328,9 @@ export function inspectCustodyChain(
     | "receiptDate"
     | "classification"
     | "custodian"
+    | "documentId"
+    | "createdBy"
+    | "createdAt"
     | "eventCount"
     | "lastHash"
     | "headerHash"
@@ -347,7 +352,9 @@ export function inspectCustodyChain(
     header.source !== genesis.source ||
     header.receiptDate !== genesis.receiptDate ||
     header.firmId !== genesis.firmId ||
-    header.matterId !== genesis.matterId
+    header.matterId !== genesis.matterId ||
+    header.createdBy !== genesis.actorId ||
+    header.createdAt !== genesis.at
   ) {
     return { ok: false, brokenSeq: 0, reason: "header" }
   }
@@ -383,6 +390,13 @@ export function inspectCustodyChain(
   const tipCustodian = header.eventCount === 0 ? genesis.custodian : tip?.custodian
   if (header.classification !== tipClassification || header.custodian !== tipCustodian) {
     return { ok: false, brokenSeq: 0, reason: "header" }
+  }
+  let linked: CustodyEvent | undefined
+  for (const event of bySeq.values()) {
+    if (event.kind === "link" && (linked === undefined || event.seq > linked.seq)) linked = event
+  }
+  if (header.documentId !== (linked?.documentId ?? null)) {
+    return { ok: false, brokenSeq: linked?.seq ?? 0, reason: "header" }
   }
   return { ok: true, eventCount: header.eventCount }
 }

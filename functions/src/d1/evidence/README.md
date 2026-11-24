@@ -8,11 +8,11 @@ Architecture lines 1189–1209. Per-matter evidence register and an append-only 
 
 ## Stores
 
-`evidence_items` and `custody_events` are the pre-registered inventory rows (`matter_content`, deletion key `matterId`). They were never `pending`. This writer does not append a duplicate and does not add `pending`. Every evidence row and every custody event carries `firmId`. Firestore rules and `infra/retention/inventory.json` are not edited.
+`evidence_items` and `custody_events` are the pre-registered inventory rows (`matter_content`, deletion key `matterId`). They were never `pending`. This writer does not append a duplicate and does not add `pending`. Every evidence row and every custody event carries `firmId`. `infra/retention/inventory.json` is not edited. Client writes are denied: both collections are Functions-only (`allow create, update, delete: if false`). A read still requires a matter member cleared for that row, including a custody note.
 
 ## Custody hash
 
-Logging an item writes the evidence row and a genesis custody event (`seq` 0) in one transaction. The genesis body hashes `item`, `source`, `receiptDate`, `classification`, `firmId`, and `matterId`. Its digest is stored as `headerHash` and, until the first custody event, as `lastHash`. Seq 1 uses that digest as `prevHash`.
+Logging an item writes the evidence row and a genesis custody event (`seq` 0) in one transaction. The genesis body hashes `item`, `source`, `receiptDate`, `classification`, `firmId`, and `matterId`. Its digest is stored as `headerHash` and, until the first custody event, as `lastHash`. Seq 1 uses that digest as `prevHash`. `createdBy` and `createdAt` are bound to the genesis `actorId` and `at`. `documentId` is bound to the last link event, and is null when the chain has no link.
 
 For each later event, in a transaction:
 
@@ -24,7 +24,9 @@ For each later event, in a transaction:
 
 Concurrent appends contend on the evidence document and on that query, so two calls take seq 1 and seq 2.
 
-`verifyCustodyChain` and `getCustodyTrail` read the header and the trail in one transaction. The verdict is the first broken seq (`gap`, `count`, `duplicate`, `prev`, `hash`, `identity`, `header`, or `malformed`). A malformed document is listed on the trail and is not dropped. A direct edit of a bound header field, or of `lastHash`, fails verify.
+`verifyCustodyChain` and `getCustodyTrail` read the header and the trail in one transaction (`loadCustody` passes the same transaction into both reads). The verdict is the first broken seq (`gap`, `count`, `duplicate`, `prev`, `hash`, `identity`, `header`, or `malformed`). A malformed document is listed on the trail and is not dropped. A direct edit of a bound header field, of `headerHash`, of `createdBy`, of `createdAt`, of `documentId`, or of `lastHash`, fails verify.
+
+The chain is unkeyed. A direct database rewrite that recomputes every event hash, `headerHash`, and `lastHash` still verifies. The rules stop the client SDK from doing that. There is no idempotency key: a second `logEvidence` creates a second item. A retried call is a new row, not a replay.
 
 Condition notes, annotations, transfers, and the document link are new events. The evidence row may update only `custodian`, `eventCount`, `lastHash`, `documentId`, and a raised `classification`.
 
@@ -38,7 +40,7 @@ Writes: partner, associate, or clerk, same firm, member of the matter, clearance
 
 ## Export
 
-`exportEvidenceLog` reads the header and the trail in one transaction and returns canonical JSON, plain text, and the verdict. The report includes the genesis hash and every event hash. The same intact trail yields the same bytes. A chain that is not intact is refused with `chain_broken` and that verdict. No PDF library.
+`exportEvidenceLog` reads the header and the trail through `getCustodyTrail` (one transaction) and returns canonical JSON, plain text, and the verdict. The report includes the genesis hash, the genesis `evidenceId`, `actorId`, `at`, `custodian`, and `note`, and every event hash. The same intact trail yields the same bytes. A chain that is not intact is refused with `chain_broken` and that verdict. No PDF library.
 
 ## Out of scope
 
