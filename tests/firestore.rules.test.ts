@@ -625,8 +625,8 @@ describe("M2 — role, clearance and membership on core collections", () => {
       await assertFails(setDoc(doc(await authed("member1", MEMBER_ASSOC), "change_proposals", "p-other"), proposal("partner1")))
       await assertFails(setDoc(doc(await authed("member1", MEMBER_ASSOC), "change_proposals", "p-hi"), proposal("member1", "privileged")))
     })
-    it("associate can propose as self within clearance", async () => {
-      await assertSucceeds(setDoc(doc(await authed("member1", MEMBER_ASSOC), "change_proposals", "p-ok"), proposal("member1")))
+    it("associate cannot propose from the client (FA-RULES-CP-001)", async () => {
+      await assertFails(setDoc(doc(await authed("member1", MEMBER_ASSOC), "change_proposals", "p-ok"), proposal("member1")))
     })
   })
 
@@ -708,8 +708,116 @@ describe("Review round 1 — update/read paths, proposals, members", () => {
       )
       await assertFails(setDoc(doc(db, "change_proposals", "rp-reason"), { ...base, status: "pending", reason: "x" }))
     })
-    it("can be created pending", async () => {
-      await assertSucceeds(setDoc(doc(await authed("rv-low", ASSOC_LOW), "change_proposals", "rp-ok"), { ...base, status: "pending" }))
+    it("cannot be created pending from the client (FA-RULES-CP-001)", async () => {
+      await assertFails(setDoc(doc(await authed("rv-low", ASSOC_LOW), "change_proposals", "rp-ok"), { ...base, status: "pending" }))
+    })
+  })
+
+  describe("FA-RULES-CP-001 client cannot approve change_proposals", () => {
+    const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged" }
+    const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+    const pending = (proposedBy: string) => ({
+      firmId: "firmA",
+      sourceModule: "p6",
+      classification: "internal",
+      payload: { wording: "cite" },
+      proposedBy,
+      status: "pending" as const,
+    })
+
+    beforeAll(async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        const db = ctx.firestore()
+        const seed = {
+          firmId: "firmA",
+          sourceModule: "p6",
+          classification: "internal",
+          payload: { wording: "cite" },
+          status: "pending",
+        }
+        await setDoc(doc(db, "change_proposals", "cp-own"), { ...seed, proposedBy: "cp-partner" })
+        await setDoc(doc(db, "change_proposals", "cp-own-status"), { ...seed, proposedBy: "cp-partner" })
+        await setDoc(doc(db, "change_proposals", "cp-own-applied"), { ...seed, proposedBy: "cp-partner" })
+        await setDoc(doc(db, "change_proposals", "cp-own-by"), { ...seed, proposedBy: "cp-partner" })
+        await setDoc(doc(db, "change_proposals", "cp-other-row"), { ...seed, proposedBy: "cp-assoc" })
+        await setDoc(doc(db, "change_proposals", "cp-read"), { ...seed, proposedBy: "cp-assoc" })
+      })
+    })
+
+    it("self-approve on create", async () => {
+      const db = await authed("cp-assoc", ASSOC)
+      await assertFails(
+        setDoc(doc(db, "change_proposals", "cp-create-self"), {
+          ...pending("cp-assoc"),
+          approvedBy: "cp-assoc",
+          approvedAt: 1,
+          decision: "approved",
+        }),
+      )
+    })
+
+    it("self-approve on update", async () => {
+      const db = await authed("cp-partner", PARTNER)
+      await assertFails(updateDoc(doc(db, "change_proposals", "cp-own-status"), { status: "approved" }))
+    })
+
+    it("a forged approvedBy", async () => {
+      const partner = await authed("cp-partner", PARTNER)
+      await assertFails(updateDoc(doc(partner, "change_proposals", "cp-own-by"), { approvedBy: "cp-other-partner" }))
+      const assoc = await authed("cp-assoc", ASSOC)
+      await assertFails(
+        setDoc(doc(assoc, "change_proposals", "cp-create-forged"), {
+          ...pending("cp-assoc"),
+          approvedBy: "cp-partner",
+          approvedAt: 1,
+        }),
+      )
+    })
+
+    it("a partner token approving their own proposal", async () => {
+      const db = await authed("cp-partner", PARTNER)
+      await assertFails(
+        updateDoc(doc(db, "change_proposals", "cp-own"), {
+          status: "approved",
+          decidedBy: "cp-partner",
+          decidedAt: 1,
+          reason: "self",
+        }),
+      )
+    })
+
+    it("a status flip to applied", async () => {
+      const db = await authed("cp-partner", PARTNER)
+      await assertFails(updateDoc(doc(db, "change_proposals", "cp-own-applied"), { status: "applied" }))
+    })
+
+    it("a partner token cannot name an arbitrary approver or approve another proposal", async () => {
+      const db = await authed("cp-other-partner", PARTNER)
+      await assertFails(
+        updateDoc(doc(db, "change_proposals", "cp-other-row"), {
+          status: "approved",
+          decidedBy: "not-a-real-uid",
+          decidedAt: 2,
+        }),
+      )
+    })
+
+    it("a client cannot stamp decision or applied on create", async () => {
+      const db = await authed("cp-assoc", ASSOC)
+      await assertFails(setDoc(doc(db, "change_proposals", "cp-create-decision"), { ...pending("cp-assoc"), decision: "approved" }))
+      await assertFails(
+        setDoc(doc(db, "change_proposals", "cp-create-applied-flag"), { ...pending("cp-assoc"), applied: true, appliedAt: 1 }),
+      )
+    })
+
+    it("cannot create a proposal already approved or applied", async () => {
+      const db = await authed("cp-assoc", ASSOC)
+      await assertFails(setDoc(doc(db, "change_proposals", "cp-create-approved"), { ...pending("cp-assoc"), status: "approved" }))
+      await assertFails(setDoc(doc(db, "change_proposals", "cp-create-applied"), { ...pending("cp-assoc"), status: "applied" }))
+    })
+
+    it("staff can still read a proposal", async () => {
+      await assertSucceeds(getDoc(doc(await authed("cp-assoc", ASSOC), "change_proposals", "cp-read")))
     })
   })
 

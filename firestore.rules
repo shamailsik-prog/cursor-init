@@ -390,14 +390,13 @@ service cloud.firestore {
     // reads or writes them; partners see a summary through getDraft and the gate routes.
     match /draft_gate_results/{id} { allow read, write: if false; }
     match /draft_gate_overrides/{id} { allow read, write: if false; }
+    // FA-RULES-CP-001: no client write. A create could stamp approvedBy, approvedAt,
+    // decision or applied on a row whose status was still pending, and a partner token
+    // could set status, decidedBy or applied, including on its own proposal and with
+    // any decidedBy. No client path writes this collection. Reads stay with firm staff.
     match /change_proposals/{id} {
       allow read: if sameFirm() && isStaff();
-      allow create: if sameFirmNew() && isAuthor() && clearedNew() && request.resource.data.proposedBy == request.auth.uid
-        && request.resource.data.status == 'pending'
-        && !request.resource.data.keys().hasAny(['decidedBy', 'decidedAt', 'reason']);   // partner approval is the only way out of pending
-      allow update: if sameFirm() && isPartner() && firmIdUnchanged()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedBy', 'decidedAt', 'reason']);
-      allow delete: if false;
+      allow create, update, delete: if false;
     }
     match /master_versions/{id} {
       allow read: if sameFirm() && isStaff();
