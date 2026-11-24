@@ -8,11 +8,10 @@
 
 import { randomUUID } from "node:crypto"
 import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
-import { effectiveClass, writeMaster } from "@/platform/p6/masterWrite"
+import { effectiveClass, nextSnapshot, writeMaster } from "@/platform/p6/masterWrite"
 import {
   normalizeActorKey,
   payloadDigest,
-  sessionForWrite,
   type CommitVersionResult,
   type MasterDiff,
   type MasterSnapshot,
@@ -190,20 +189,6 @@ export async function approveProposal(
   })
 }
 
-function nextSnapshot(before: MasterSnapshot, row: PersistedProposal): MasterSnapshot {
-  return {
-    entries: {
-      ...before.entries,
-      [row.entryKey]: {
-        partition: "mutable",
-        key: row.entryKey,
-        body: row.payload,
-        classification: row.classification,
-      },
-    },
-  }
-}
-
 async function finishCommit(
   outcome: CommitVersionResult,
   store: MasterStore,
@@ -285,7 +270,7 @@ export async function applyChange(proposalId: string, store: MasterStore): Promi
         proposal: next,
         expectedBaseVersionId: base,
       },
-      sessionForWrite(tx),
+      tx,
       { declassify: row.declassify },
     )
     if (!committed.committed) throw new Error("master write did not commit")
@@ -326,7 +311,7 @@ export async function rollbackMaster(
         proposal: null,
         expectedBaseVersionId: base,
       },
-      sessionForWrite(tx),
+      tx,
       { declassify: input.actor.declassify === true },
     )
     if (!committed.committed) throw new Error("master write did not commit")

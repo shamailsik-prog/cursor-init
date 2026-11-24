@@ -8,8 +8,10 @@ import fs from "node:fs"
 import path from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
 import pg from "pg"
-import { createPgMasterStore } from "@/platform/p6/masterStore"
+import { createPgMasterStore, InMemoryMasterStore, type CommitVersionInput } from "@/platform/p6/masterStore"
+import * as storeModule from "@/platform/p6/masterStore"
 import { applyChange, approveProposal, proposeChange, rollbackMaster } from "@/platform/p6/proposeChange"
+import { masterWriteAuditLog } from "@/platform/p6/masterWrite"
 
 const postgresUrl = process.env.SIKANDER_POSTGRES_URL?.trim()
 if (process.env.CI && !postgresUrl) {
@@ -1898,6 +1900,230 @@ suite("G3 master grants on local Postgres", () => {
       expect(keys.rows[0]?.sharp).toBe("strasse")
       expect(keys.rows[0]?.wide).toBe("pa")
     } finally {
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  it("BYPASS-271: a rollback forge, a pending substantive, and a swapped snapshot are refused", async () => {
+    const db = await freshDb("p6bypass")
+    const pool = new pg.Pool({ connectionString: db.url, max: 1 })
+    try {
+      await db.client.query(DDL)
+      await db.client.query(ACTOR_KEY_DDL)
+      await db.client.query(`GRANT p6_service TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`)
+      const store = createPgMasterStore(pool)
+      const forged = {
+        entries: {
+          forged: {
+            partition: "mutable" as const,
+            key: "forged",
+            body: { wording: "forged" },
+            classification: "confidential" as const,
+          },
+        },
+      }
+      await expect(
+        store.commitVersion({
+          firmId: "firmA",
+          proposalId: null,
+          action: "rollback",
+          diff: { key: "*", partition: "mutable", before: { entries: {} }, after: forged },
+          snapshot: forged,
+          authorId: "clerk_x",
+          authorKind: "partner",
+          restoredFromVersionId: null,
+          classification: "confidential",
+          proposal: null,
+          expectedBaseVersionId: null,
+        }),
+      ).rejects.toThrow(/version not found/)
+      const pending = await store.insertProposal({
+        id: randomUUID(),
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        requestedClass: null,
+        partition: "mutable",
+        entryKey: "clause.pending",
+        payload: { wording: "stored" },
+        proposedBy: "learner-1",
+        status: "pending",
+        decidedBy: null,
+        decidedKind: null,
+        decidedRole: null,
+        declassify: false,
+        payloadHash: "pending",
+      })
+      const disguisedBefore = {
+        entries: {
+          [pending.entryKey]: {
+            partition: "mutable" as const,
+            key: pending.entryKey,
+            body: pending.payload,
+            classification: "confidential" as const,
+          },
+        },
+      }
+      await store.runExclusive(async (tx) => {
+        expect("pgClient" in tx).toBe(false)
+        expect("persistVersion" in tx).toBe(false)
+        const openRaw = (
+          storeModule as {
+            sessionForWrite?: (session: object) => { pgClient?: { query: (sql: string) => Promise<unknown> } }
+          }
+        ).sessionForWrite
+        if (openRaw) {
+          const raw = openRaw(tx)
+          await expect(raw.pgClient?.query("INSERT INTO master_versions DEFAULT VALUES")).rejects.toThrow()
+        }
+        expect(openRaw).toBeUndefined()
+        await expect(
+          tx.commitVersion({
+            firmId: pending.firmId,
+            proposalId: pending.id,
+            action: "apply",
+            diff: { key: pending.entryKey, partition: "mutable", before: disguisedBefore, after: forged },
+            snapshot: forged,
+            authorId: "p6",
+            authorKind: "system",
+            restoredFromVersionId: null,
+            classification: "confidential",
+            proposal: pending,
+            expectedBaseVersionId: null,
+          }),
+        ).rejects.toThrow(/bound to the proposal|partner approval/)
+      })
+      const approved = await proposeChange(
+        {
+          firmId: "firmA",
+          sourceModule: "15",
+          classification: "confidential",
+          changeClass: "substantive",
+          partition: "mutable",
+          entryKey: "clause.bound",
+          payload: { wording: "approved text" },
+          proposedBy: "learner-1",
+        },
+        store,
+      )
+      await approveProposal(approved.id, { actorId: "partner_b", kind: "partner", role: "partner" }, store)
+      const stored = await store.getProposal(approved.id)
+      await store.runExclusive(async (tx) => {
+        const head = await tx.currentSnapshot("firmA")
+        const applied = { ...stored!, status: "applied" as const }
+        expect(await tx.casProposal(applied, "approved")).toBe(true)
+        await expect(
+          tx.commitVersion({
+            firmId: "firmA",
+            proposalId: stored!.id,
+            action: "apply",
+            diff: { key: stored!.entryKey, partition: "mutable", before: head, after: forged },
+            snapshot: forged,
+            authorId: "partner_b",
+            authorKind: "partner",
+            restoredFromVersionId: null,
+            classification: "confidential",
+            proposal: applied,
+            expectedBaseVersionId: await tx.lockFirm("firmA"),
+          }),
+        ).rejects.toThrow(/bound to the proposal/)
+      })
+      const versions = await db.client.query(`SELECT count(*)::int AS n FROM master_versions`)
+      expect(versions.rows[0]?.n).toBe(0)
+      expect("sessionForWrite" in storeModule).toBe(false)
+      const memory = new InMemoryMasterStore({ role: "p6_service" })
+      const openRaw = (
+        storeModule as {
+          sessionForWrite?: (session: object) => {
+            persistVersion?: (input: CommitVersionInput) => Promise<{ committed: boolean }>
+          }
+        }
+      ).sessionForWrite
+      await memory.runExclusive(async (tx) => {
+        expect("persistVersion" in tx).toBe(false)
+        if (openRaw) {
+          const written = await openRaw(tx).persistVersion?.({
+            firmId: "firmA",
+            proposalId: null,
+            action: "rollback",
+            diff: { key: "*", partition: "mutable", before: { entries: {} }, after: forged },
+            snapshot: forged,
+            authorId: "clerk_x",
+            authorKind: "partner",
+            restoredFromVersionId: null,
+            classification: "confidential",
+            proposal: null,
+            expectedBaseVersionId: null,
+          })
+          expect(written?.committed).toBe(false)
+        }
+      })
+      expect(openRaw).toBeUndefined()
+      expect(await memory.listVersions("firmA")).toEqual([])
+    } finally {
+      await pool.end()
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  it("TEST-271-004: a deferred trigger fails COMMIT and the same proposal can retry", async () => {
+    const db = await freshDb("p6commit")
+    const pool = new pg.Pool({ connectionString: db.url, max: 1 })
+    try {
+      await db.client.query(DDL)
+      await db.client.query(ACTOR_KEY_DDL)
+      await db.client.query(`
+        CREATE TABLE public.p6_fail_commit (id int primary key);
+        CREATE FUNCTION public.p6_fail_commit_fn() RETURNS trigger
+        LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM public.p6_fail_commit) THEN
+            RAISE EXCEPTION 'master write did not commit';
+          END IF;
+          RETURN NULL;
+        END $$;
+        CREATE CONSTRAINT TRIGGER p6_fail_commit_trg
+          AFTER INSERT ON public.master_versions
+          DEFERRABLE INITIALLY DEFERRED
+          FOR EACH ROW EXECUTE FUNCTION public.p6_fail_commit_fn();
+        GRANT SELECT ON public.p6_fail_commit TO p6_service;
+      `)
+      await db.client.query(`GRANT p6_service TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`)
+      await db.client.query(`INSERT INTO public.p6_fail_commit (id) VALUES (1)`)
+      const store = createPgMasterStore(pool)
+      const pending = await proposeChange(
+        {
+          firmId: "firmA",
+          sourceModule: "15",
+          classification: "confidential",
+          changeClass: "substantive",
+          partition: "mutable",
+          entryKey: "clause.retry",
+          payload: { wording: "retry" },
+          proposedBy: "learner-1",
+        },
+        store,
+      )
+      await approveProposal(pending.id, { actorId: "partner_b", kind: "partner", role: "partner" }, store)
+      const auditBefore = masterWriteAuditLog().length
+      await expect(applyChange(pending.id, store)).rejects.toThrow(/did not commit/)
+      const failed = await db.client.query<{ n: number; status: string }>(
+        `SELECT (SELECT count(*)::int FROM master_versions) AS n, status FROM change_proposals WHERE id = $1`,
+        [pending.id],
+      )
+      expect(failed.rows[0]).toEqual({ n: 0, status: "approved" })
+      expect(masterWriteAuditLog().slice(auditBefore)).toEqual([])
+      await db.client.query(`DELETE FROM public.p6_fail_commit`)
+      const applied = await applyChange(pending.id, store)
+      expect(applied.masterWritten).toBe(true)
+      const committed = await db.client.query(`SELECT count(*)::int AS n FROM master_versions`)
+      expect(committed.rows[0]?.n).toBe(1)
+      expect(masterWriteAuditLog().slice(auditBefore)).toEqual([
+        expect.objectContaining({ proposalId: pending.id, versionId: applied.versionId, outcome: "committed" }),
+      ])
+    } finally {
+      await pool.end()
       await dropDb(db.name, db.client)
     }
   }, 60_000)

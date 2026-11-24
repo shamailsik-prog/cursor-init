@@ -114,8 +114,11 @@ export interface MasterSession {
   casProposal(row: PersistedProposal, fromStatus: PersistedProposal["status"]): Promise<boolean>
   /** The only pending → approved transition. Requires a different actor and partner attestation. */
   recordApproval(row: PersistedProposal): Promise<boolean>
+  getVersion(id: string): Promise<VersionRow | null>
   commitVersion(input: CommitVersionInput): Promise<CommitVersionResult>
   allowDeclassify(on: boolean): Promise<void>
+  /** Compares a caller-supplied proposal with the stored row. It does not write. */
+  assertCommitShape(input: CommitVersionInput): Promise<void>
 }
 
 export const P6_ROLE = "p6_service"
@@ -378,21 +381,26 @@ type MemoryState = {
   classes: Map<string, Classification>
 }
 
-const rawByPublic = new WeakMap<object, MasterWriteSession>()
-
-export function sessionForWrite(session: object): MasterWriteSession {
-  const raw = rawByPublic.get(session)
-  if (!raw) throw new Error("master session is closed")
-  return raw
+type RawWrite = {
+  allowDeclassify(on: boolean): Promise<void>
+  persistVersion?(input: CommitVersionInput): Promise<CommitVersionResult>
+  stageAfterCommit?(staged: StagedMasterWrite): void
+  pgClient?: import("pg").PoolClient
 }
 
-function bindMasterSession(session: object, raw: MasterWriteSession): void {
-  rawByPublic.set(session, raw)
-}
-
-async function guardedWrite(raw: MasterWriteSession, input: CommitVersionInput): Promise<CommitVersionResult> {
+async function guardedWrite(session: MasterWriteSession, input: CommitVersionInput): Promise<CommitVersionResult> {
   const { writeMaster } = await import("@/platform/p6/masterWrite")
-  return writeMaster(input, raw, { declassify: input.proposal?.declassify === true })
+  return writeMaster(input, session, { declassify: input.proposal?.declassify === true })
+}
+
+async function seal(session: MasterWriteSession, raw: RawWrite): Promise<void> {
+  const { sealMasterSession } = await import("@/platform/p6/masterWrite")
+  sealMasterSession(session, raw)
+}
+
+async function retire(session: object): Promise<void> {
+  const { closeMasterSession } = await import("@/platform/p6/masterWrite")
+  closeMasterSession(session)
 }
 
 async function publishStaged(staged: readonly StagedMasterWrite[]): Promise<void> {
@@ -415,6 +423,7 @@ export class InMemoryMasterStore implements MasterStore {
   private state: MemoryState = { proposals: new Map(), versions: [], heads: new Map(), classes: new Map() }
   private failCommit: "throw" | "uncommitted" | "commit" | undefined
   private gate: Promise<void> = Promise.resolve()
+  private readonly dead = new WeakSet<object>()
 
   constructor(options: { role: string; failCommit?: "throw" | "uncommitted" | "commit" }) {
     this.role = options.role
@@ -431,8 +440,9 @@ export class InMemoryMasterStore implements MasterStore {
     const snap = cloneState(this.state)
     const staged: StagedMasterWrite[] = []
     const raw = this.rawSession(staged)
-    const tx = this.publicSession(raw)
+    const tx = this.publicSession()
     try {
+      await seal(tx, raw)
       const result = await fn(tx)
       if (this.failCommit === "commit" && staged.length > 0) {
         this.failCommit = undefined
@@ -444,40 +454,76 @@ export class InMemoryMasterStore implements MasterStore {
       this.state = snap
       throw error
     } finally {
+      await this.endSession(tx)
       release()
     }
   }
 
-  private rawSession(staged: StagedMasterWrite[]): MasterWriteSession {
+  private assertLive(session: object): void {
+    if (this.dead.has(session)) throw new Error("master session is closed")
+  }
+
+  private async endSession(session: object): Promise<void> {
+    this.dead.add(session)
+    await retire(session)
+  }
+
+  private rawSession(staged: StagedMasterWrite[]): RawWrite {
     return {
       allowDeclassify: async () => {},
       stageAfterCommit: (item) => {
         staged.push(item)
       },
+      persistVersion: (input) => this.saveVersion(input),
+    }
+  }
+
+  private publicSession(): MasterSession {
+    const tx: MasterSession = {
+      getProposal: async (id) => {
+        this.assertLive(tx)
+        return this.getProposal(id)
+      },
+      currentSnapshot: async (firmId) => {
+        this.assertLive(tx)
+        return this.currentSnapshot(firmId)
+      },
+      currentClassification: async (firmId) => {
+        this.assertLive(tx)
+        return this.currentClassification(firmId)
+      },
+      lockFirm: async (firmId) => {
+        this.assertLive(tx)
+        return this.lockFirm(firmId)
+      },
+      casProposal: async (row, fromStatus) => {
+        this.assertLive(tx)
+        return this.casProposal(row, fromStatus)
+      },
+      recordApproval: async (row) => {
+        this.assertLive(tx)
+        return this.recordApproval(row)
+      },
+      getVersion: async (id) => {
+        this.assertLive(tx)
+        return this.getVersion(id)
+      },
+      allowDeclassify: async (on) => {
+        this.assertLive(tx)
+        return this.allowDeclassify(on)
+      },
       assertCommitShape: async (input) => {
+        this.assertLive(tx)
         if (!input.proposal) return
         assertCommitProposal(this.state.proposals.get(input.proposal.id), input.proposal)
         assertCommitBound(input)
       },
-      persistVersion: (input) => this.persistVersion(input),
-    }
-  }
-
-  private publicSession(raw: MasterWriteSession): MasterSession {
-    const tx: MasterSession = {
-      getProposal: (id) => this.getProposal(id),
-      currentSnapshot: (firmId) => this.currentSnapshot(firmId),
-      currentClassification: (firmId) => this.currentClassification(firmId),
-      lockFirm: (firmId) => this.lockFirm(firmId),
-      casProposal: (row, fromStatus) => this.casProposal(row, fromStatus),
-      recordApproval: (row) => this.recordApproval(row),
-      allowDeclassify: (on) => this.allowDeclassify(on),
-      commitVersion: (input) => {
+      commitVersion: async (input) => {
+        this.assertLive(tx)
         this.assertRole()
-        return guardedWrite(raw, input)
+        return guardedWrite(tx, input)
       },
     }
-    bindMasterSession(tx, raw)
     return tx
   }
 
@@ -572,12 +618,18 @@ export class InMemoryMasterStore implements MasterStore {
   async commitVersion(input: CommitVersionInput): Promise<CommitVersionResult> {
     this.assertRole()
     const staged: StagedMasterWrite[] = []
-    const outcome = await guardedWrite(this.rawSession(staged), input)
-    if (outcome.committed) await publishStaged(staged)
-    return outcome
+    const tx = this.publicSession()
+    try {
+      await seal(tx, this.rawSession(staged))
+      const outcome = await guardedWrite(tx, input)
+      if (outcome.committed) await publishStaged(staged)
+      return outcome
+    } finally {
+      await this.endSession(tx)
+    }
   }
 
-  private async persistVersion(input: CommitVersionInput): Promise<CommitVersionResult> {
+  private async saveVersion(input: CommitVersionInput): Promise<CommitVersionResult> {
     const snap = cloneState(this.state)
     try {
       const firmVersions = this.state.versions.filter((row) => row.firmId === input.firmId)
@@ -700,6 +752,17 @@ const PROPOSAL_COLUMNS = `id, firm_id, source_module, classification, change_cla
  * the caller must not treat that as masterWritten.
  */
 export function createPgMasterStore(pool: pg.Pool): MasterStore {
+  const dead = new WeakSet<object>()
+
+  function assertLive(session: object): void {
+    if (dead.has(session)) throw new Error("master session is closed")
+  }
+
+  async function endPgSession(session: object): Promise<void> {
+    dead.add(session)
+    await retire(session)
+  }
+
   async function withRole<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
     const client = await pool.connect()
     try {
@@ -836,7 +899,14 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
     async commitVersion(input) {
       const staged: StagedMasterWrite[] = []
       try {
-        const outcome = await withRole(async (client) => guardedWrite(pgRaw(client, staged), input))
+        const outcome = await withRole(async (client) => {
+          const tx = await openSession(client, staged)
+          try {
+            return await guardedWrite(tx, input)
+          } finally {
+            await endPgSession(tx)
+          }
+        })
         await publishStaged(staged)
         return outcome
       } catch (error) {
@@ -847,10 +917,12 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
     async runExclusive(fn) {
       const client = await pool.connect()
       const staged: StagedMasterWrite[] = []
+      let tx: MasterSession | undefined
       try {
         await client.query("BEGIN")
         await client.query("SET LOCAL ROLE p6_service")
-        const result = await fn(session(client, staged))
+        tx = await openSession(client, staged)
+        const result = await fn(tx)
         await client.query("COMMIT")
         await publishStaged(staged)
         return result
@@ -862,15 +934,17 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
         }
         throw error
       } finally {
+        if (tx) await endPgSession(tx)
         client.release()
       }
     },
   }
 
-  function session(client: pg.PoolClient, staged: StagedMasterWrite[]): MasterSession {
+  async function openSession(client: pg.PoolClient, staged: StagedMasterWrite[]): Promise<MasterSession> {
     const raw = pgRaw(client, staged)
     const tx: MasterSession = {
       async getProposal(id) {
+        assertLive(tx)
         const found = await client.query<ProposalQueryRow>(
           `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
           [id],
@@ -879,6 +953,7 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
         return row ? proposalFromRow(row) : null
       },
       async currentSnapshot(firmId) {
+        assertLive(tx)
         const found = await client.query<{ snapshot: MasterSnapshot }>(
           `SELECT snapshot FROM master_knowledge WHERE firm_id = $1`,
           [firmId],
@@ -886,9 +961,22 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
         return found.rows[0]?.snapshot ?? EMPTY_SNAPSHOT
       },
       async currentClassification(firmId) {
+        assertLive(tx)
         return readClassification(client, firmId)
       },
+      async getVersion(id) {
+        assertLive(tx)
+        const found = await client.query<VersionQueryRow>(
+          `SELECT id, firm_id, version_no, proposal_id, parent_version_id, action, diff, snapshot,
+                  author_id, author_kind, restored_from_version_id
+             FROM master_versions WHERE id = $1`,
+          [id],
+        )
+        const row = found.rows[0]
+        return row ? versionFromRow(row) : null
+      },
       async lockFirm(firmId) {
+        assertLive(tx)
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`p6:${firmId}`])
         const found = await client.query<{ version_id: string }>(
           `SELECT version_id FROM master_knowledge WHERE firm_id = $1 FOR UPDATE`,
@@ -897,6 +985,7 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
         return found.rows[0]?.version_id ?? null
       },
       async casProposal(row, fromStatus) {
+        assertLive(tx)
         const found = await client.query<ProposalQueryRow>(
           `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
           [row.id],
@@ -918,6 +1007,7 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
         return (updated.rowCount ?? 0) === 1
       },
       async recordApproval(row) {
+        assertLive(tx)
         const found = await client.query<ProposalQueryRow>(
           `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
           [row.id],
@@ -935,17 +1025,30 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
         return (updated.rowCount ?? 0) === 1
       },
       async allowDeclassify(on) {
+        assertLive(tx)
         await raw.allowDeclassify(on)
       },
+      async assertCommitShape(input) {
+        assertLive(tx)
+        if (!input.proposal) return
+        const found = await client.query<ProposalQueryRow>(
+          `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
+          [input.proposal.id],
+        )
+        const current = found.rows[0] ? proposalFromRow(found.rows[0]) : undefined
+        assertCommitProposal(current, input.proposal)
+        assertCommitBound(input)
+      },
       async commitVersion(input) {
+        assertLive(tx)
         try {
-          return await guardedWrite(raw, input)
+          return await guardedWrite(tx, input)
         } catch (error) {
           throw commitError(error)
         }
       },
     }
-    bindMasterSession(tx, raw)
+    await seal(tx, raw)
     return tx
   }
 }
@@ -962,7 +1065,7 @@ async function readClassification(client: pg.PoolClient, firmId: string): Promis
 function commitError(error: unknown): Error {
   if (
     error instanceof Error &&
-    /did not commit|non-P6 writer refused|master version conflict|proposal already has a version|declassify|frozen|proposedBy is immutable|proposal not found|approval is not a direct status change|proposal status transition is refused|commit is bound to the proposal|proposer key missing|partner approval|approver must differ|cosmetic proposal is not pending|proposal is already applied|master session is closed/.test(
+    /did not commit|non-P6 writer refused|master version conflict|proposal already has a version|declassify|frozen|proposedBy is immutable|proposal not found|version not found|approval is not a direct status change|proposal status transition is refused|commit is bound to the proposal|proposer key missing|partner approval|approver must differ|cosmetic proposal is not pending|proposal is already applied|master session is closed/.test(
       error.message,
     )
   ) {
@@ -971,7 +1074,7 @@ function commitError(error: unknown): Error {
   return new Error("master write did not commit", { cause: error })
 }
 
-function pgRaw(client: pg.PoolClient, staged: StagedMasterWrite[]): MasterWriteSession {
+function pgRaw(client: pg.PoolClient, staged: StagedMasterWrite[]): RawWrite {
   return {
     pgClient: client,
     allowDeclassify: async (on) => {
@@ -979,16 +1082,6 @@ function pgRaw(client: pg.PoolClient, staged: StagedMasterWrite[]): MasterWriteS
     },
     stageAfterCommit: (item) => {
       staged.push(item)
-    },
-    assertCommitShape: async (input) => {
-      if (!input.proposal) return
-      const found = await client.query<ProposalQueryRow>(
-        `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
-        [input.proposal.id],
-      )
-      const current = found.rows[0] ? proposalFromRow(found.rows[0]) : undefined
-      assertCommitProposal(current, input.proposal)
-      assertCommitBound(input)
     },
   }
 }

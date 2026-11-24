@@ -5,7 +5,6 @@ export type { LearnerPosture } from "@/platform/p6/learners"
 export { createPgMasterStore, InMemoryMasterStore, P6_ROLE } from "@/platform/p6/masterStore"
 export type { MasterDiff, MasterSnapshot, MasterStore, PersistedProposal, VersionRow } from "@/platform/p6/masterStore"
 export { isP6ConsolidationEnabled, P6_CONSOLIDATION_FLAG } from "@/platform/p6/consolidationFlag"
-export { writeMaster } from "@/platform/p6/masterWrite"
 export type { MasterWriteAuditEntry } from "@/platform/p6/masterWrite"
 export {
   learnContinuous,

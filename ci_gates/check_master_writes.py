@@ -19,6 +19,9 @@ _WRITE = re.compile(
 )
 _OTHER = re.compile(
     r"applyChange\s*\("
+    r"|writeMaster\s*\("
+    r"|sessionForWrite\s*\("
+    r"|\.persistVersion\s*\("
     r"|collection\(\s*['\"]master_versions['\"]"
     r"|match\s+/master_versions/",
     re.I,
@@ -63,7 +66,7 @@ def scan(root: pathlib.Path | None = None) -> list[str]:
     base = root or pathlib.Path(".")
     failed: list[str] = []
     for p in base.rglob("*"):
-        if p.suffix not in {".ts", ".tsx", ".js", ".py", ".sql"}:
+        if p.suffix.lower() not in {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".py", ".sql"}:
             continue
         rel = p.relative_to(base).as_posix()
         if any(part in SKIP_PARTS for part in rel.split("/")):

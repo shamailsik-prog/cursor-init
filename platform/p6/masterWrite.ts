@@ -13,18 +13,23 @@ import { randomUUID } from "node:crypto"
 import { closeSync, constants, openSync, readdirSync, readFileSync } from "node:fs"
 import { extname, join, relative, sep } from "node:path"
 import type { PoolClient } from "pg"
+import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
 import {
   canonicalPayload,
   normalizeActorKey,
   payloadHasPollutingKey,
   type CommitVersionInput,
   type CommitVersionResult,
+  type MasterSnapshot,
+  type PersistedProposal,
+  type VersionRow,
 } from "@/platform/p6/masterStore"
 
 export const CANONICAL_MASTER_WRITER = "platform/p6/masterWrite.ts"
-const MASTER_TABLES = new Set(["master_knowledge", "master_versions"])
-/** Same source suffixes as ci_gates/check_master_writes.py. */
-const SOURCE_SUFFIXES = new Set([".ts", ".tsx", ".js", ".py", ".sql"])
+/** Union of the repository guard's suffixes and the script forms that guard used to skip. */
+const SOURCE_SUFFIXES = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".py", ".sql"])
+const STORE_DELEGATE = "platform/p6/masterStore.ts"
+const APPLY_ENTRY = "platform/p6/proposeChange.ts"
 
 const QUALIFIED = '(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)(?:\\s*\\.\\s*(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*))*'
 const TABLE_WRITE = new RegExp(
@@ -47,17 +52,41 @@ export type StagedMasterWrite = {
 }
 
 /**
- * Raw persistence for writeMaster. Not the store API: callers receive a session
- * whose commitVersion goes through writeMaster, and this object stays inside it.
- * When `stageAfterCommit` is set, the ledger and the audit wait for the
- * transaction owner to publish them after COMMIT.
+ * Reads the caller may use. Persistence is not on this object. `sealMasterSession`
+ * keeps the raw write in a private map, and only a session sealed by the store is accepted.
  */
 export type MasterWriteSession = {
+  getProposal(id: string): Promise<PersistedProposal | null>
+  currentSnapshot(firmId: string): Promise<MasterSnapshot>
+  currentClassification(firmId: string): Promise<Classification>
+  lockFirm(firmId: string): Promise<string | null>
+  getVersion(id: string): Promise<VersionRow | null>
+  assertCommitShape(input: CommitVersionInput): Promise<void>
+}
+
+type SealedRaw = {
   allowDeclassify(on: boolean): Promise<void>
-  assertCommitShape?(input: CommitVersionInput): Promise<void>
   persistVersion?(input: CommitVersionInput): Promise<CommitVersionResult>
-  pgClient?: PoolClient
   stageAfterCommit?(staged: StagedMasterWrite): void
+  pgClient?: PoolClient
+}
+
+const sealBrand = Symbol("p6.masterSession")
+const sealedRaws = new WeakMap<object, SealedRaw>()
+
+export function sealMasterSession(session: object, raw: SealedRaw): void {
+  Object.defineProperty(session, sealBrand, { value: true })
+  sealedRaws.set(session, raw)
+}
+
+export function closeMasterSession(session: object): void {
+  sealedRaws.delete(session)
+}
+
+function sealedRaw(session: object): SealedRaw {
+  const raw = sealedRaws.get(session)
+  if (!raw) throw new Error("master session is closed")
+  return raw
 }
 
 export function publishStagedMasterWrites(staged: readonly StagedMasterWrite[]): void {
@@ -90,37 +119,93 @@ export function effectiveClass(
   return derived
 }
 
-function assertMayWrite(input: CommitVersionInput): void {
+function sameDocument(left: unknown, right: unknown): boolean {
+  return canonicalPayload(left) === canonicalPayload(right)
+}
+
+export function nextSnapshot(before: MasterSnapshot, row: PersistedProposal): MasterSnapshot {
+  return {
+    entries: {
+      ...before.entries,
+      [row.entryKey]: {
+        partition: "mutable",
+        key: row.entryKey,
+        body: row.payload,
+        classification: row.classification,
+      },
+    },
+  }
+}
+
+function higherClass(left: Classification, right: Classification): Classification {
+  return classificationRank(left) >= classificationRank(right) ? left : right
+}
+
+function snapshotClass(snapshot: MasterSnapshot, fallback: Classification): Classification {
+  let best = fallback
+  for (const entry of Object.values(snapshot.entries)) {
+    if (!isClassification(entry.classification)) continue
+    best = higherClass(best, entry.classification)
+  }
+  return best
+}
+
+async function assertStoredWrite(
+  input: CommitVersionInput,
+  session: MasterWriteSession,
+  gate: { declassify: boolean },
+): Promise<{ declassify: boolean }> {
+  const locked = await session.lockFirm(input.firmId)
+  if ((locked ?? null) !== input.expectedBaseVersionId) throw new Error("master version conflict")
+  const current = await session.currentSnapshot(input.firmId)
+  if (!sameDocument(input.diff.before, current)) throw new Error("commit is bound to the proposal")
   if (input.action === "rollback") {
+    if (input.proposalId !== null || input.proposal) throw new Error("proposal not found")
+    if (!input.restoredFromVersionId) throw new Error("version not found")
+    const target = await session.getVersion(input.restoredFromVersionId)
+    if (!target || target.firmId !== input.firmId) throw new Error("version not found")
+    if (!sameDocument(input.snapshot, target.snapshot)) throw new Error("commit is bound to the proposal")
     if (input.authorKind !== "partner" || normalizeActorKey(input.authorId) === "") {
       throw new Error("substantive proposal requires partner approval")
     }
-    return
+    const targetClass = snapshotClass(target.snapshot, "internal")
+    const currentClass = await session.currentClassification(input.firmId)
+    const classification = gate.declassify ? targetClass : higherClass(currentClass, targetClass)
+    if (input.classification !== classification) throw new Error("commit is bound to the proposal")
+    return { declassify: gate.declassify }
   }
-  if (!input.proposal) throw new Error("proposal not found")
-  const beforeBody = input.diff.before.entries[input.diff.key]?.body
-  const changeClass = effectiveClass(input.proposal.requestedClass, beforeBody, input.proposal.payload)
-  if (changeClass === "substantive") {
-    const decidedBy = input.proposal.decidedBy
-    const approver = normalizeActorKey(input.authorId)
-    const proposer = normalizeActorKey(input.proposal.proposedBy)
+  if (!input.proposalId) throw new Error("proposal not found")
+  const stored = await session.getProposal(input.proposalId)
+  if (!stored || stored.firmId !== input.firmId) throw new Error("commit is bound to the proposal")
+  const expected = nextSnapshot(current, stored)
+  if (!sameDocument(input.snapshot, expected) || !sameDocument(input.diff.after, input.snapshot)) {
+    throw new Error("commit is bound to the proposal")
+  }
+  if (input.diff.key !== stored.entryKey) throw new Error("commit is bound to the proposal")
+  if (stored.changeClass === "substantive") {
     if (
-      input.proposal.decidedKind !== "partner" ||
-      input.proposal.decidedRole !== "partner" ||
-      !decidedBy ||
+      (stored.status !== "approved" && stored.status !== "applied") ||
+      stored.decidedKind !== "partner" ||
+      stored.decidedRole !== "partner" ||
+      !stored.decidedBy ||
       input.authorKind !== "partner" ||
-      input.authorId !== decidedBy ||
-      approver === ""
+      input.authorId !== stored.decidedBy
     ) {
       throw new Error("substantive proposal requires partner approval")
     }
+    const approver = normalizeActorKey(input.authorId)
+    const proposer = normalizeActorKey(stored.proposedBy)
     if (proposer === "") throw new Error("proposer key missing")
-    if (approver === proposer) throw new Error("approver must differ from proposer")
-    return
+    if (approver === "" || approver === proposer) throw new Error("approver must differ from proposer")
+  } else if (stored.changeClass === "cosmetic") {
+    if (stored.status !== "pending" && stored.status !== "applied") throw new Error("cosmetic proposal is not pending")
+    if (input.authorKind !== "system" || input.authorId !== "p6") throw new Error("cosmetic proposal is not pending")
+  } else {
+    throw new Error("substantive proposal requires partner approval")
   }
-  if (input.authorKind !== "system" || input.authorId !== "p6") {
-    throw new Error("cosmetic proposal is not pending")
-  }
+  const classification = snapshotClass(input.snapshot, stored.classification)
+  if (input.classification !== classification) throw new Error("commit is bound to the proposal")
+  return { declassify: stored.declassify === true }
 }
 
 async function oneApply<T>(proposalId: string | null, fn: () => Promise<T>): Promise<T> {
@@ -152,10 +237,12 @@ export async function writeMaster(
   gate: { declassify: boolean },
 ): Promise<CommitVersionResult> {
   return oneApply(input.action === "apply" ? input.proposalId : null, async () => {
-    if (session.assertCommitShape) await session.assertCommitShape(input)
-    assertMayWrite(input)
-    await session.allowDeclassify(gate.declassify)
-    const outcome = await persistSession(session, input)
+    const raw = sealedRaw(session)
+    if (typeof session.assertCommitShape !== "function") throw new Error("master session is closed")
+    await session.assertCommitShape(input)
+    const bound = await assertStoredWrite(input, session, gate)
+    await raw.allowDeclassify(bound.declassify)
+    const outcome = await persistSession(raw, input)
     if (!outcome.committed) return outcome
     const staged: StagedMasterWrite = {
       proposalId: input.action === "apply" ? input.proposalId : null,
@@ -168,13 +255,13 @@ export async function writeMaster(
         outcome: "committed",
       },
     }
-    if (session.stageAfterCommit) session.stageAfterCommit(staged)
+    if (raw.stageAfterCommit) raw.stageAfterCommit(staged)
     else publishStagedMasterWrites([staged])
     return outcome
   })
 }
 
-async function persistSession(session: MasterWriteSession, input: CommitVersionInput): Promise<CommitVersionResult> {
+async function persistSession(session: SealedRaw, input: CommitVersionInput): Promise<CommitVersionResult> {
   if (session.pgClient) {
     const versionId = randomUUID()
     await executeMasterTableWrite(session.pgClient, input, versionId)
@@ -237,7 +324,7 @@ function relationName(token: string): string {
 function writesMasterTable(source: string): boolean {
   TABLE_WRITE.lastIndex = 0
   for (const hit of source.matchAll(TABLE_WRITE)) {
-    if (MASTER_TABLES.has(relationName(hit[2] ?? ""))) return true
+    if (relationName(hit[2] ?? "").startsWith("master_")) return true
   }
   return false
 }
@@ -247,6 +334,10 @@ function isSecondWriter(path: string, source: string): boolean {
   if (writesMasterTable(source)) return true
   if (/\.commitVersion\s*\(/.test(source)) return true
   if (/\bexecuteMasterTableWrite\s*\(/.test(source)) return true
+  if (/\.persistVersion\s*\(/.test(source)) return true
+  if (/\bsessionForWrite\s*\(/.test(source)) return true
+  if (/\bwriteMaster\s*\(/.test(source) && path !== STORE_DELEGATE && path !== APPLY_ENTRY) return true
+  if (/\bsealMasterSession\s*\(/.test(source) && path !== STORE_DELEGATE) return true
   if (/collection\(\s*['"]master(?:_knowledge|_versions)?['"]/i.test(source)) return true
   if (/match\s+\/master_versions\//i.test(source)) return true
   return false
