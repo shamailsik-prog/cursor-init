@@ -624,6 +624,8 @@ describe("getReadiness and blockIfIncomplete", () => {
       "2026-11-24T12:00:00-23:59",
       "2026-11-24T18:00:00+14:30",
       "2026-11-24T12:00:00-12:30",
+      "2026-11-24T12:00:00+14:01",
+      "2026-11-24T12:00:00-12:01",
     ]) {
       const readiness = getReadiness("civil_suit", {
         ...held,
@@ -753,7 +755,7 @@ describe("getReadiness and blockIfIncomplete", () => {
     ).toEqual(["Certified copies of the order for bail annexed", "Certified copies of the FIR annexed"])
   })
 
-  it("does not leave a fragment label on a non-certified and-of line", () => {
+  it("keeps both documents on a non-certified and-of line", () => {
     const base = getDocumentType("affidavit")!
     const judgment = itemsForDocumentType({
       ...base,
@@ -763,13 +765,54 @@ describe("getReadiness and blockIfIncomplete", () => {
       annexureRule: "Legal size",
     })
     const line = "Judgment of the trial court and of the appellate court annexed"
-    const labels = judgment.filter((entry) => entry.sourceLines.includes(line)).map((entry) => entry.label)
-    expect(labels).toEqual(["Judgment of the trial court annexed"])
-    expect(labels).not.toContain("of the appellate court annexed")
-    for (const label of labels) {
-      expect(label.replace(/\s+annexed\s*$/i, "")).not.toMatch(/^(?:of|for|to|in|on|with|under|from|and)\b/i)
-    }
-    const bothFragments = itemsForDocumentType({
+    const parts = judgment.filter((entry) => entry.sourceLines.includes(line))
+    expect(parts.map((entry) => entry.label)).toEqual([
+      "Judgment of the trial court annexed",
+      "Judgment of the appellate court annexed",
+    ])
+    expect(parts.every((entry) => entry.mandatory)).toBe(true)
+    const fir = itemsForDocumentType({
+      ...base,
+      id: "order_and_of_fir",
+      name: "Order and of the FIR",
+      checklist: ["Order for bail and of the FIR annexed"],
+      annexureRule: "Legal size",
+    })
+    const firLine = "Order for bail and of the FIR annexed"
+    const firParts = fir.filter((entry) => entry.sourceLines.includes(firLine))
+    expect(firParts.map((entry) => entry.label)).toEqual(["Order for bail annexed", "of the FIR annexed"])
+    expect(firParts.every((entry) => entry.mandatory)).toBe(true)
+    const statement = itemsForDocumentType({
+      ...base,
+      id: "plaint_and_of_statement",
+      name: "Plaint and of the written statement",
+      checklist: ["Plaint and of the written statement annexed"],
+      annexureRule: "Legal size",
+    })
+    const statementLine = "Plaint and of the written statement annexed"
+    const statementParts = statement.filter((entry) => entry.sourceLines.includes(statementLine))
+    expect(statementParts.map((entry) => entry.label)).toEqual(["Plaint annexed", "of the written statement annexed"])
+    expect(statementParts.every((entry) => entry.mandatory)).toBe(true)
+  })
+
+  it("emits a mandatory item for a certified continuation with nothing to inherit and for an all-fragment line", () => {
+    const base = getDocumentType("affidavit")!
+    const decree = itemsForDocumentType({
+      ...base,
+      id: "decree_and_of_tribunal",
+      name: "Decree and of the Tribunal",
+      checklist: ["Certified copy of the decree and of the Tribunal annexed"],
+      annexureRule: "Legal size",
+    })
+    const decreeLine = "Certified copy of the decree and of the Tribunal annexed"
+    const decreeParts = decree.filter((entry) => entry.sourceLines.includes(decreeLine))
+    expect(decreeParts.map((entry) => entry.label)).toEqual([
+      "Certified copy of the decree annexed",
+      "of the Tribunal annexed",
+    ])
+    expect(decreeParts.length).toBeGreaterThanOrEqual(1)
+    expect(decreeParts.every((entry) => entry.mandatory)).toBe(true)
+    const both = itemsForDocumentType({
       ...base,
       id: "and_of_two_courts",
       name: "And of two courts",
@@ -777,9 +820,44 @@ describe("getReadiness and blockIfIncomplete", () => {
       annexureRule: "Legal size",
     })
     const fragmentLine = "of the trial court and of the appellate court annexed"
-    const kept = bothFragments.filter((entry) => entry.sourceLines.includes(fragmentLine)).map((entry) => entry.label)
-    expect(kept).toEqual([])
-    expect(bothFragments.some((entry) => entry.label === fragmentLine)).toBe(false)
+    const kept = both.filter((entry) => entry.sourceLines.includes(fragmentLine))
+    expect(kept.map((entry) => entry.label)).toEqual(["of the trial court annexed", "of the appellate court annexed"])
+    expect(kept.length).toBeGreaterThanOrEqual(1)
+    expect(kept.every((entry) => entry.mandatory)).toBe(true)
+  })
+
+  it("does not label a Tribunal or the Supreme Court of Pakistan as the document", () => {
+    const base = getDocumentType("affidavit")!
+    const tribunal = itemsForDocumentType({
+      ...base,
+      id: "judgment_and_of_tribunal",
+      name: "Judgment and of the Tribunal",
+      checklist: ["Certified copy of the judgment of the trial court and of the Tribunal annexed"],
+      annexureRule: "Legal size",
+    })
+    const tribunalLine = "Certified copy of the judgment of the trial court and of the Tribunal annexed"
+    const tribunalParts = tribunal.filter((entry) => entry.sourceLines.includes(tribunalLine))
+    expect(tribunalParts.map((entry) => entry.label)).toEqual([
+      "Certified copy of the judgment of the trial court annexed",
+      "Certified copy of the judgment of the Tribunal annexed",
+    ])
+    expect(tribunalParts.every((entry) => entry.mandatory)).toBe(true)
+    expect(tribunalParts.some((entry) => entry.label === "Certified copy of the Tribunal annexed")).toBe(false)
+    const supreme = itemsForDocumentType({
+      ...base,
+      id: "judgment_and_of_supreme_court",
+      name: "Judgment and of the Supreme Court of Pakistan",
+      checklist: ["Certified copy of the judgment of the trial court and of the Supreme Court of Pakistan annexed"],
+      annexureRule: "Legal size",
+    })
+    const supremeLine = "Certified copy of the judgment of the trial court and of the Supreme Court of Pakistan annexed"
+    const supremeParts = supreme.filter((entry) => entry.sourceLines.includes(supremeLine))
+    expect(supremeParts.map((entry) => entry.label)).toEqual([
+      "Certified copy of the judgment of the trial court annexed",
+      "Certified copy of the judgment of the Supreme Court of Pakistan annexed",
+    ])
+    expect(supremeParts.every((entry) => entry.mandatory)).toBe(true)
+    expect(supremeParts.some((entry) => entry.label === "Certified copy of the Supreme Court of Pakistan annexed")).toBe(false)
   })
 
   it("every split part of every seed row is a document name", () => {
