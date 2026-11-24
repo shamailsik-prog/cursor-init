@@ -32,7 +32,7 @@ Condition notes, annotations, transfers, and the document link are new events. T
 
 ## Who may call
 
-Writes: partner, associate, or clerk, same firm, member of the matter, clearance at or above the stored label. Reads add intern. Accounts and client are refused. The label stored on create is at least the matter's current label. A link stores a label at least the linked document's label, and never a lower one.
+Writes: partner, associate, or clerk, same firm, member of the matter, clearance at or above the stored label. Reads add intern. Accounts and client are refused. The label stored on create is at least the matter's current label. A link stores a label at least the linked document's label, and never a lower one. A caller who is not a member is `not_member`. A tombstoned matter is `matter_deleted`. A matter row filed under another firm is `not_found`.
 
 ## Document link
 
