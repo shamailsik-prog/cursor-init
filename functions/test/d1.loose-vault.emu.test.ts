@@ -1,7 +1,7 @@
 import path from "node:path"
 import { readFileSync, readdirSync } from "node:fs"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { Timestamp } from "firebase-admin/firestore"
+import { FieldValue, Timestamp } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { CLASSIFICATION_RANKS } from "@/platform/p1/types"
 import { adminDb } from "../src/admin"
@@ -420,6 +420,72 @@ describe.skipIf(!EMULATORS)("loose vault (emulator)", () => {
       })
     }
     expect(listed.items.every((row) => ids.includes(row.docId) && row.malformed)).toBe(true)
+  })
+
+  it("a partner acknowledgement of a malformed loose row lifts the block and keeps the row listed", async () => {
+    const firmId = uniq("firm")
+    const clerk = user(firmId, "clerk", "confidential")
+    const partner = user(firmId, "partner", "confidential")
+    const outsider = user(uniq("firm"), "partner", "privileged-restricted")
+    const now30 = new Date(AGE_30D)
+    const id = await seedDoc(firmId, clerk.uid, { createdAt: Timestamp.fromMillis(0), sourceChannel: "evil" })
+    expect(await isLooseUploadBlocked(firmId, clerk.uid, now30)).toBe(true)
+    await expectRefuse(() => acknowledgeLooseHold(clerk, id, now30), 403, "partner_only")
+    await expect(acknowledgeLooseHold(outsider, id, now30)).rejects.toMatchObject({ status: 404, code: "not_found" })
+    expect(await isLooseUploadBlocked(firmId, clerk.uid, now30)).toBe(true)
+    await acknowledgeLooseHold(partner, id, now30)
+    expect(await isLooseUploadBlocked(firmId, clerk.uid, now30)).toBe(false)
+    const row = (await docRef(id).get()).data()
+    expect(row?.sourceChannel).toBe("evil")
+    expect(row?.matterId).toBeNull()
+    expect(row?.classification).toBe("confidential")
+    expect(row?.loosePartnerAck).toMatchObject({ partnerId: partner.uid })
+    const listed = await looseVaultEscalations(partner, firmId, now30)
+    expect(listed.items.find((item) => item.docId === id)).toMatchObject({
+      holderId: clerk.uid,
+      malformed: true,
+      acknowledged: true,
+    })
+    await acknowledgeLooseHold(partner, id, now30)
+    expect((await docRef(id).get()).data()?.loosePartnerAck.partnerId).toBe(partner.uid)
+    const ackAudit = await adminDb().collection("audit_log").where("firmId", "==", firmId).get()
+    expect(ackAudit.docs.map((entry) => entry.data())).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: "loose_vault.acknowledge", actorId: partner.uid, classification: "confidential", reason: "ok" }),
+      ])
+    )
+  })
+
+  it("a confidential clerk's escalations omit privileged, restricted and unlabelled malformed rows", async () => {
+    const firmId = uniq("firm")
+    const clerk = user(firmId, "clerk", "confidential")
+    const lowPartner = user(firmId, "partner", "confidential")
+    const partner = user(firmId, "partner", "privileged-restricted")
+    const now30 = new Date(AGE_30D)
+    const own = await seedDoc(firmId, clerk.uid, { sourceChannel: "evil", createdAt: Timestamp.fromMillis(0) })
+    const privileged = await seedDoc(firmId, "partner-holder", { sourceChannel: "evil", classification: "privileged", createdAt: Timestamp.fromMillis(0) })
+    const restricted = await seedDoc(firmId, "partner-holder", {
+      sourceChannel: "evil",
+      classification: "privileged-restricted",
+      createdAt: Timestamp.fromMillis(0),
+    })
+    const unlabelled = await seedDoc(firmId, "partner-holder", { sourceChannel: "evil", createdAt: Timestamp.fromMillis(0) })
+    await docRef(unlabelled).update({ classification: FieldValue.delete() })
+
+    const clerkItems = await looseVaultEscalations(clerk, firmId, now30)
+    expect(clerkItems.items.map((row) => row.docId)).toEqual([own])
+    for (const hidden of [privileged, restricted, unlabelled]) {
+      expect(clerkItems.items.map((row) => row.docId)).not.toContain(hidden)
+    }
+    const partnerItems = await looseVaultEscalations(partner, firmId, now30)
+    expect(partnerItems.items.map((row) => row.docId).sort()).toEqual([own, privileged, restricted, unlabelled].sort())
+    for (const hidden of [privileged, restricted, unlabelled]) {
+      expect(partnerItems.items.find((row) => row.docId === hidden)).toMatchObject({ malformed: true, acknowledged: false })
+    }
+
+    await expect(acknowledgeLooseHold(lowPartner, privileged, now30)).rejects.toMatchObject({ status: 404, code: "not_found" })
+    expect(await isLooseUploadBlocked(firmId, "partner-holder", now30)).toBe(true)
+    expect((await docRef(privileged).get()).data()?.loosePartnerAck).toBeUndefined()
   })
 
   it("a confidential clerk's escalations omit a privileged overdue row", async () => {

@@ -1,4 +1,5 @@
-import { Timestamp, type DocumentData } from "firebase-admin/firestore"
+import { Timestamp, type DocumentData, type DocumentReference, type Transaction } from "firebase-admin/firestore"
+import type { DocumentRecord } from "@/platform/spine/store"
 import { adminDb } from "../../admin"
 import { HttpError } from "../../http/errors"
 import type { Caller } from "../../p5/auth"
@@ -133,9 +134,16 @@ export async function isLooseUploadBlocked(firmId: string, uploaderId: string, n
   return false
 }
 
+/** A known stored label, or the fail-closed maximum when the row's label cannot be read. */
+function auditLabel(label: unknown): DocumentRecord["classification"] {
+  return isKnownClassification(label) ? label : "privileged-restricted"
+}
+
 /**
  * Partner acknowledgement of a loose hold. Lifts that row out of the upload block. Does not
  * change `matterId` or classification, and does not remove the row. Clerks are refused before any read.
+ * A malformed loose row is acknowledged from the raw document: same firm, `matterId === null`, and
+ * the caller's clearance covers the stored label (an unreadable label ranks as the maximum).
  */
 export async function acknowledgeLooseHold(actor: Caller, docId: string, now: Date): Promise<{ docId: string }> {
   assertLooseVaultActor(actor)
@@ -146,8 +154,14 @@ export async function acknowledgeLooseHold(actor: Caller, docId: string, now: Da
     const ref = adminDb().collection("documents").doc(docId)
     const snap = await tx.get(ref)
     const data = snap.data()
-    const record = snap.exists ? canonicalLoose(snap.id, data) : null
-    if (!record || record.firmId !== actor.firmId) throw looseNotFound()
+    if (!snap.exists || !data || data.firmId !== actor.firmId) throw looseNotFound()
+    const record = canonicalLoose(snap.id, data)
+    if (!record) {
+      if (data.matterId !== null || !clearanceCovers(actor, data.classification)) throw looseNotFound()
+      writeLooseAck(tx, ref, data, actor, docId, now, auditLabel(data.classification))
+      return
+    }
+    if (record.firmId !== actor.firmId) throw looseNotFound()
     if (record.matterId !== null) {
       const matterId = record.matterId
       const matterSnap = await tx.get(adminDb().collection("matters").doc(matterId))
@@ -161,20 +175,32 @@ export async function acknowledgeLooseHold(actor: Caller, docId: string, now: Da
       throw new HttpError(409, "not_loose")
     }
     if (!looseReader(actor)(record)) throw looseNotFound()
-    const reason = data && partnerAcknowledged(data) ? "already_acknowledged" : "ok"
-    if (reason === "ok") {
-      tx.update(ref, {
-        loosePartnerAck: { partnerId: actor.uid, acknowledgedAt: Timestamp.fromDate(now) },
-      })
-    }
-    auditLoose(tx, {
-      firmId: actor.firmId,
-      actorId: actor.uid,
-      action: "loose_vault.acknowledge",
-      docId,
-      classification: record.classification,
-      reason,
-    })
+    writeLooseAck(tx, ref, data, actor, docId, now, record.classification)
   })
   return { docId }
+}
+
+function writeLooseAck(
+  tx: Transaction,
+  ref: DocumentReference,
+  data: DocumentData,
+  actor: Caller,
+  docId: string,
+  now: Date,
+  classification: DocumentRecord["classification"]
+): void {
+  const reason = partnerAcknowledged(data) ? "already_acknowledged" : "ok"
+  if (reason === "ok") {
+    tx.update(ref, {
+      loosePartnerAck: { partnerId: actor.uid, acknowledgedAt: Timestamp.fromDate(now) },
+    })
+  }
+  auditLoose(tx, {
+    firmId: actor.firmId,
+    actorId: actor.uid,
+    action: "loose_vault.acknowledge",
+    docId,
+    classification,
+    reason,
+  })
 }

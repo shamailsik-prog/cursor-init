@@ -105,9 +105,11 @@ service cloud.firestore {
       return request.resource.data.matterId != null
         || (request.resource.data.uploadedBy == request.auth.uid && request.resource.data.createdAt == request.time);
     }
-    // HOLD-268-001: a client update may keep these fields only when they stay canonical. Absent fields stay
-    // absent (legacy rows). An unknown sourceChannel or a bad size makes readDocumentRecord refuse the row,
-    // which used to hide the hold. This does not grant any write main already refuses.
+    // HOLD-268-001 / HOLD-268-004: a client update may keep these fields only when they stay canonical.
+    // Absent fields stay absent (legacy rows). Deleting sourceChannel, byteSize, mimeType or objectVersion
+    // used to pass, because .get(field, default) treats a removed key as the default, and the row then
+    // became a hold nobody could acknowledge. objectBytesStatus may be absent: the reader treats that as
+    // 'missing', which is still canonical. This does not grant any write main already refuses.
     function documentFieldsTyped() {
       return request.resource.data.get('sourceChannel', 'web') in ['web', 'team_portal', 'whatsapp', 'bulk']
         && request.resource.data.get('byteSize', 0) is int
@@ -115,7 +117,9 @@ service cloud.firestore {
         && request.resource.data.get('mimeType', '') is string
         && request.resource.data.get('objectVersion', 0) is int
         && request.resource.data.get('objectVersion', 0) >= 0
-        && request.resource.data.get('objectBytesStatus', 'available') in ['available', 'missing'];
+        && request.resource.data.get('objectBytesStatus', 'available') in ['available', 'missing']
+        && !request.resource.data.diff(resource.data).removedKeys()
+            .hasAny(['sourceChannel', 'byteSize', 'mimeType', 'objectVersion']);
     }
     // Audit F14 / O-76: a matter-bound row is read under its matter's CURRENT label, not only the label it was written
     // with, so a matter raised after the row was written binds the row too (as drafts and draft_versions). A loose-vault

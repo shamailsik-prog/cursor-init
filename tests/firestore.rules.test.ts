@@ -520,12 +520,63 @@ describe("M2 — role, clearance and membership on core collections", () => {
       const db = await authed("lv-clerk", clerkClaims)
       await assertFails(updateDoc(doc(db, "documents", "lv-shape"), { sourceChannel: "evil" }))
       await assertFails(updateDoc(doc(db, "documents", "lv-shape"), { byteSize: -1 }))
+      await assertFails(updateDoc(doc(db, "documents", "lv-shape"), { byteSize: 1.5 }))
       await assertFails(updateDoc(doc(db, "documents", "lv-shape"), { mimeType: 1 }))
       await assertFails(updateDoc(doc(db, "documents", "lv-shape"), { objectVersion: 1.5 }))
+      await assertFails(updateDoc(doc(db, "documents", "lv-shape"), { objectVersion: -1 }))
       await assertFails(updateDoc(doc(db, "documents", "lv-shape"), { objectBytesStatus: "gone" }))
       await assertSucceeds(updateDoc(doc(db, "documents", "lv-shape"), { sourceChannel: "web" }))
       const colleague = await authed("lv-clerk-2", clerkClaims)
       await assertFails(updateDoc(doc(colleague, "documents", "lv-shape"), { sourceChannel: "evil" }))
+    })
+
+    it("a client cannot delete sourceChannel, byteSize, mimeType or objectVersion", async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), "documents", "lv-strip"), {
+          firmId: "firmA",
+          matterId: null,
+          classification: "confidential",
+          uploadedBy: "lv-clerk",
+          createdAt: new Date(0),
+          sourceChannel: "bulk",
+          byteSize: 12,
+          mimeType: "application/pdf",
+          objectVersion: 1,
+          objectBytesStatus: "available",
+        })
+        await setDoc(doc(ctx.firestore(), "documents", "lv-strip-bound"), {
+          firmId: "firmA",
+          matterId: "m1",
+          classification: "privileged",
+          uploadedBy: "m2-assoc-high",
+          createdAt: new Date(0),
+          sourceChannel: "web",
+          byteSize: 12,
+          mimeType: "application/pdf",
+          objectVersion: 1,
+          objectBytesStatus: "available",
+        })
+      })
+      const actors = [
+        ["lv-clerk", clerkClaims],
+        ["lv-clerk-2", clerkClaims],
+        ["lv-partner", partnerClaims],
+      ] as const
+      for (const [uid, claims] of actors) {
+        const db = await authed(uid, claims)
+        await assertFails(updateDoc(doc(db, "documents", "lv-strip"), { sourceChannel: deleteField() }))
+        await assertFails(updateDoc(doc(db, "documents", "lv-strip"), { byteSize: deleteField() }))
+        await assertFails(updateDoc(doc(db, "documents", "lv-strip"), { mimeType: deleteField() }))
+        await assertFails(updateDoc(doc(db, "documents", "lv-strip"), { objectVersion: deleteField() }))
+      }
+      const owner = await authed("lv-clerk", clerkClaims)
+      await assertSucceeds(updateDoc(doc(owner, "documents", "lv-strip"), { objectBytesStatus: deleteField() }))
+      await assertSucceeds(updateDoc(doc(owner, "documents", "lv-strip"), { title: "still loose" }))
+      const associate = await authed("m2-assoc-high", MEMBER_ASSOC_HIGH)
+      await assertFails(updateDoc(doc(associate, "documents", "lv-strip-bound"), { sourceChannel: deleteField() }))
+      await assertFails(updateDoc(doc(associate, "documents", "lv-strip-bound"), { byteSize: deleteField() }))
+      await assertFails(updateDoc(doc(associate, "documents", "lv-strip-bound"), { mimeType: deleteField() }))
+      await assertFails(updateDoc(doc(associate, "documents", "lv-strip-bound"), { objectVersion: deleteField() }))
     })
   })
 
