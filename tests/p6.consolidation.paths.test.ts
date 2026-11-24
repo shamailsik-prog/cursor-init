@@ -2,7 +2,7 @@
  * L16.3 — one learning path, one review path, one client path.
  * Off unless SIKANDER_FLAG_P6_CONSOLIDATION=true (unset means off).
  * None of these paths write the master. Learning proposes; user memory stays outside it.
- * platform/p6/learning/** is reserved for L4.6 and is not created here.
+ * platform/p6/learning/** is L4.6. This scan includes it. It does not write the master.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
@@ -121,7 +121,7 @@ describe("P6 consolidation — one path each", () => {
     )
     expect(stored).toEqual(["15", "L3.2", "L4.6", "L14.2"])
     expect(await memory.getProposal("memory.user")).toBeNull()
-    expect(existsSync("platform/p6/learning")).toBe(false)
+    expect(existsSync("platform/p6/learning")).toBe(true)
   })
 
   it("each old review entry routes through the one advisor pass", () => {
@@ -152,7 +152,7 @@ describe("P6 consolidation — one path each", () => {
   it("canonical modules do not import legacy governance, and the shims delegate", () => {
     const files: string[] = []
     walkTs("platform/p6", files)
-    expect(files.some((path) => path.split("/").includes("learning"))).toBe(false)
+    expect(files.some((path) => path.split("/").includes("learning"))).toBe(true)
     for (const path of files) {
       const source = readFileSync(path, "utf8")
       expect(source).not.toMatch(/workflowOps/)

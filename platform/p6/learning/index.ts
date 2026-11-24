@@ -1,0 +1,8 @@
+export { isP6LearningEnabled, P6_LEARNING_FLAG } from "@/platform/p6/learning/flag"
+export { LEARNING_LIMITS, decideLearning, proposeLearning, refuseDirectMasterWrite } from "@/platform/p6/learning/governance"
+export type { LearningDeps, LearningLimits } from "@/platform/p6/learning/governance"
+export { InMemoryLearningLedger } from "@/platform/p6/learning/ledger"
+export type { LearningLedger } from "@/platform/p6/learning/ledger"
+export { AUTHORISED_LEARNING_SOURCES } from "@/platform/p6/learning/sources"
+export type { LearningSource } from "@/platform/p6/learning/sources"
+export type { LearningActor, LearningProposalRecord, ProposeLearningInput } from "@/platform/p6/learning/types"
