@@ -1,8 +1,9 @@
 /**
  * P6 master-write rules (v19 L16.3 L5561–L5594; L17.5 L7051–L7086; G-3 L8488).
- * The store module owns the seal and the master_versions statements. This module
- * does not export a sealer and it does not read a caller-supplied proposal row.
- * The audit and the once-only apply gate live here. There is no new table.
+ * The store module owns the seal, the master_versions statements, the audit, and
+ * the once-only apply gate. This module does not export a sealer, a publisher,
+ * or the writer, and it does not read a caller-supplied proposal row.
+ * There is no new table.
  */
 import { closeSync, constants, openSync, readdirSync, readFileSync } from "node:fs"
 import { extname, join, relative, sep } from "node:path"
@@ -10,6 +11,7 @@ import type { Classification } from "@/platform/p1/types"
 import { masterBody } from "@/platform/p6/learning/baseline"
 import {
   canonicalPayload,
+  masterWriteAuditLog,
   payloadHasPollutingKey,
   type CommitVersionInput,
   type MasterSnapshot,
@@ -17,7 +19,7 @@ import {
   type VersionRow,
 } from "@/platform/p6/masterStore"
 
-export const CANONICAL_MASTER_WRITER = "platform/p6/masterWrite.ts"
+export { masterWriteAuditLog }
 /** Union of the repository guard's suffixes and the script forms that guard used to skip. */
 const SOURCE_SUFFIXES = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".py", ".sql"])
 const STORE_DELEGATE = "platform/p6/masterStore.ts"
@@ -46,7 +48,7 @@ export type StagedMasterWrite = {
 /**
  * Reads a public session may expose. They are not the writer's source for a stored
  * row or a version. The store keeps that handle private, and this module does not
- * export a sealer.
+ * export a sealer or a publisher.
  */
 export type MasterWriteSession = {
   getProposal(id: string): Promise<PersistedProposal | null>
@@ -55,21 +57,6 @@ export type MasterWriteSession = {
   lockFirm(firmId: string): Promise<string | null>
   getVersion(id: string): Promise<VersionRow | null>
   assertCommitShape(input: CommitVersionInput): Promise<void>
-}
-
-export function publishStagedMasterWrites(staged: readonly StagedMasterWrite[]): void {
-  for (const item of staged) {
-    if (item.proposalId) appliedProposalIds.add(item.proposalId)
-    audit.push(item.entry)
-  }
-}
-
-const audit: MasterWriteAuditEntry[] = []
-const appliedProposalIds = new Set<string>()
-const applyTails = new Map<string, Promise<void>>()
-
-export function masterWriteAuditLog(): readonly MasterWriteAuditEntry[] {
-  return audit.slice()
 }
 
 /** Cosmetic only when the diff is whitespace or object-key order. Anything else is substantive. A caller cannot lower that. */
@@ -101,25 +88,6 @@ export function nextSnapshot(before: MasterSnapshot, row: PersistedProposal): Ma
   }
 }
 
-export async function runOneApply<T>(proposalId: string | null, fn: () => Promise<T>): Promise<T> {
-  if (!proposalId) return fn()
-  const previous = applyTails.get(proposalId) ?? Promise.resolve()
-  let release!: () => void
-  const current = new Promise<void>((resolve) => {
-    release = resolve
-  })
-  const tail = previous.then(() => current)
-  applyTails.set(proposalId, tail)
-  await previous
-  try {
-    if (appliedProposalIds.has(proposalId)) throw new Error("proposal is already applied")
-    return await fn()
-  } finally {
-    release()
-    if (applyTails.get(proposalId) === tail) applyTails.delete(proposalId)
-  }
-}
-
 function relationName(token: string): string {
   const parts = [...token.matchAll(/"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*)/g)]
   const idents = parts.map((part) => part[1] || part[2] || "").filter((part) => part.length > 0)
@@ -135,7 +103,6 @@ function writesMasterTable(source: string): boolean {
 }
 
 function isSecondWriter(path: string, source: string): boolean {
-  if (path === CANONICAL_MASTER_WRITER) return false
   if (writesMasterTable(source) && path !== STORE_DELEGATE) return true
   if (/\.commitVersion\s*\(/.test(source)) return true
   if (/\bexecuteMasterTableWrite\s*\(/.test(source)) return true
@@ -145,6 +112,10 @@ function isSecondWriter(path: string, source: string): boolean {
   if (/\brollbackMaster\s*\(/.test(source) && path !== APPLY_ENTRY) return true
   if (/\bwriteMaster\s*\(/.test(source) && path !== STORE_DELEGATE && path !== APPLY_ENTRY) return true
   if (/\bwriteMaster\s+as\b/.test(source)) return true
+  if (/\bwriteMaster\s*:/.test(source)) return true
+  if (/\bwriteMaster\s*\.\s*call\b/.test(source)) return true
+  if (/\bwriteMaster\s*\.\s*apply\b/.test(source)) return true
+  if (/Reflect\s*\.\s*apply\s*\(\s*writeMaster\b/.test(source)) return true
   if (/\[['"]writeMaster['"]\]\s*\(/.test(source)) return true
   if (/collection\(\s*['"]master(?:_knowledge|_versions)?['"]/i.test(source)) return true
   if (/match\s+\/master_versions\//i.test(source)) return true

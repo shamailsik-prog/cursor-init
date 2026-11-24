@@ -6,7 +6,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import pg from "pg"
 import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
-import type { MasterWriteSession, StagedMasterWrite } from "@/platform/p6/masterWrite"
+import type { MasterWriteAuditEntry, MasterWriteSession, StagedMasterWrite } from "@/platform/p6/masterWrite"
 
 export type MasterSnapshot = {
   entries: Record<
@@ -549,12 +549,47 @@ async function assertStoredWrite(
   return { declassify: stored.declassify === true, stored }
 }
 
+const masterAudit: MasterWriteAuditEntry[] = []
+const appliedProposalIds = new Set<string>()
+const applyTails = new Map<string, Promise<void>>()
+
+/** Read API. The publisher that appends a committed entry is not exported. */
+export function masterWriteAuditLog(): readonly MasterWriteAuditEntry[] {
+  return masterAudit.slice()
+}
+
+function publishStagedMasterWrites(staged: readonly StagedMasterWrite[]): void {
+  for (const item of staged) {
+    if (item.proposalId) appliedProposalIds.add(item.proposalId)
+    masterAudit.push(item.entry)
+  }
+}
+
+async function runOneApply<T>(proposalId: string | null, fn: () => Promise<T>): Promise<T> {
+  if (!proposalId) return fn()
+  const previous = applyTails.get(proposalId) ?? Promise.resolve()
+  let release!: () => void
+  const current = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const tail = previous.then(() => current)
+  applyTails.set(proposalId, tail)
+  await previous
+  try {
+    if (appliedProposalIds.has(proposalId)) throw new Error("proposal is already applied")
+    return await fn()
+  } finally {
+    release()
+    if (applyTails.get(proposalId) === tail) applyTails.delete(proposalId)
+  }
+}
+
 export async function writeMaster(
   input: CommitVersionInput,
   session: object,
   gate: { declassify: boolean },
 ): Promise<CommitVersionResult> {
-  const { effectiveClass, nextSnapshot, publishStagedMasterWrites, runOneApply } = await import("@/platform/p6/masterWrite")
+  const { effectiveClass, nextSnapshot } = await import("@/platform/p6/masterWrite")
   return runOneApply(input.action === "apply" ? input.proposalId : null, async () => {
     const raw = sealedHandles.get(session)
     if (!raw) throw new Error("master session is closed")
@@ -594,9 +629,8 @@ async function guardedWrite(session: MasterWriteSession, input: CommitVersionInp
   return writeMaster(input, session, { declassify: input.proposal?.declassify === true })
 }
 
-async function publishStaged(staged: readonly StagedMasterWrite[]): Promise<void> {
+function publishStaged(staged: readonly StagedMasterWrite[]): void {
   if (staged.length === 0) return
-  const { publishStagedMasterWrites } = await import("@/platform/p6/masterWrite")
   publishStagedMasterWrites(staged)
 }
 
@@ -611,55 +645,55 @@ function cloneState(state: MemoryState): MemoryState {
 
 export class InMemoryMasterStore implements MasterStore {
   readonly role: string
-  private state: MemoryState = { proposals: new Map(), versions: [], heads: new Map(), classes: new Map() }
-  private failCommit: "throw" | "uncommitted" | "commit" | undefined
-  private gate: Promise<void> = Promise.resolve()
-  private readonly dead = new WeakSet<object>()
+  #state: MemoryState = { proposals: new Map(), versions: [], heads: new Map(), classes: new Map() }
+  #failCommit: "throw" | "uncommitted" | "commit" | undefined
+  #gate: Promise<void> = Promise.resolve()
+  readonly #dead = new WeakSet<object>()
 
   constructor(options: { role: string; failCommit?: "throw" | "uncommitted" | "commit" }) {
     this.role = options.role
-    this.failCommit = options.failCommit
+    this.#failCommit = options.failCommit
   }
 
   async runExclusive<T>(fn: (tx: MasterSession) => Promise<T>): Promise<T> {
-    const previous = this.gate
+    const previous = this.#gate
     let release!: () => void
-    this.gate = new Promise<void>((resolve) => {
+    this.#gate = new Promise<void>((resolve) => {
       release = resolve
     })
     await previous
-    const snap = cloneState(this.state)
+    const snap = cloneState(this.#state)
     const staged: StagedMasterWrite[] = []
-    const raw = this.rawSession(staged)
-    const tx = this.publicSession()
+    const raw = this.#rawSession(staged)
+    const tx = this.#publicSession()
     try {
       await seal(tx, raw)
       const result = await fn(tx)
-      if (this.failCommit === "commit" && staged.length > 0) {
-        this.failCommit = undefined
+      if (this.#failCommit === "commit" && staged.length > 0) {
+        this.#failCommit = undefined
         throw new Error("master write did not commit")
       }
       await publishStaged(staged)
       return result
     } catch (error) {
-      this.state = snap
+      this.#state = snap
       throw error
     } finally {
-      await this.endSession(tx)
+      await this.#endSession(tx)
       release()
     }
   }
 
-  private assertLive(session: object): void {
-    if (this.dead.has(session)) throw new Error("master session is closed")
+  #assertLive(session: object): void {
+    if (this.#dead.has(session)) throw new Error("master session is closed")
   }
 
-  private endSession(session: object): void {
-    this.dead.add(session)
+  #endSession(session: object): void {
+    this.#dead.add(session)
     retire(session)
   }
 
-  private rawSession(staged: StagedMasterWrite[]): RawWrite {
+  #rawSession(staged: StagedMasterWrite[]): RawWrite {
     return {
       allowDeclassify: async () => {},
       stageAfterCommit: (item) => {
@@ -673,55 +707,55 @@ export class InMemoryMasterStore implements MasterStore {
       lockFirm: (firmId) => this.lockFirm(firmId),
       assertCommitShape: async (input) => {
         if (!input.proposal) return
-        assertCommitProposal(this.state.proposals.get(input.proposal.id), input.proposal)
+        assertCommitProposal(this.#state.proposals.get(input.proposal.id), input.proposal)
         assertCommitBound(input)
       },
     }
   }
 
-  private publicSession(): MasterSession {
+  #publicSession(): MasterSession {
     const tx: MasterSession = {
       getProposal: async (id) => {
-        this.assertLive(tx)
+        this.#assertLive(tx)
         return this.getProposal(id)
       },
       currentSnapshot: async (firmId) => {
-        this.assertLive(tx)
+        this.#assertLive(tx)
         return this.currentSnapshot(firmId)
       },
       currentClassification: async (firmId) => {
-        this.assertLive(tx)
+        this.#assertLive(tx)
         return this.currentClassification(firmId)
       },
       lockFirm: async (firmId) => {
-        this.assertLive(tx)
+        this.#assertLive(tx)
         return this.lockFirm(firmId)
       },
       casProposal: async (row, fromStatus) => {
-        this.assertLive(tx)
+        this.#assertLive(tx)
         return this.casProposal(row, fromStatus)
       },
       recordApproval: async (row) => {
-        this.assertLive(tx)
+        this.#assertLive(tx)
         return this.recordApproval(row)
       },
       getVersion: async (id) => {
-        this.assertLive(tx)
+        this.#assertLive(tx)
         return this.getVersion(id)
       },
       allowDeclassify: async (on) => {
-        this.assertLive(tx)
+        this.#assertLive(tx)
         return this.allowDeclassify(on)
       },
       assertCommitShape: async (input) => {
-        this.assertLive(tx)
+        this.#assertLive(tx)
         if (!input.proposal) return
-        assertCommitProposal(this.state.proposals.get(input.proposal.id), input.proposal)
+        assertCommitProposal(this.#state.proposals.get(input.proposal.id), input.proposal)
         assertCommitBound(input)
       },
       commitVersion: async (input) => {
-        this.assertLive(tx)
-        this.assertRole()
+        this.#assertLive(tx)
+        this.#assertRole()
         return guardedWrite(tx, input)
       },
     }
@@ -729,13 +763,13 @@ export class InMemoryMasterStore implements MasterStore {
   }
 
   async lockFirm(firmId: string): Promise<string | null> {
-    const versions = this.state.versions.filter((row) => row.firmId === firmId)
+    const versions = this.#state.versions.filter((row) => row.firmId === firmId)
     return versions[versions.length - 1]?.id ?? null
   }
 
   async casProposal(row: PersistedProposal, fromStatus: PersistedProposal["status"]): Promise<boolean> {
-    this.assertRole()
-    const current = this.state.proposals.get(row.id)
+    this.#assertRole()
+    const current = this.#state.proposals.get(row.id)
     refuseDirectCas(current, row, fromStatus)
     if (!current || current.status !== fromStatus) return false
     assertCasShape(current, row)
@@ -745,53 +779,53 @@ export class InMemoryMasterStore implements MasterStore {
     const next = structuredClone(row)
     next.payload = structuredClone(current.payload)
     next.payloadHash = current.payloadHash
-    this.state.proposals.set(row.id, next)
+    this.#state.proposals.set(row.id, next)
     return true
   }
 
   async recordApproval(row: PersistedProposal): Promise<boolean> {
-    this.assertRole()
-    const current = this.state.proposals.get(row.id)
+    this.#assertRole()
+    const current = this.#state.proposals.get(row.id)
     if (!current || current.status !== "pending") return false
     assertPartnerApproval(current, row)
     const next = structuredClone(row)
     next.status = "approved"
     next.payload = structuredClone(current.payload)
     next.payloadHash = current.payloadHash
-    this.state.proposals.set(row.id, next)
+    this.#state.proposals.set(row.id, next)
     return true
   }
 
   async allowDeclassify(_on: boolean): Promise<void> {}
 
   async currentClassification(firmId: string): Promise<Classification> {
-    return this.state.classes.get(firmId) ?? "internal"
+    return this.#state.classes.get(firmId) ?? "internal"
   }
 
-  private assertRole(): void {
+  #assertRole(): void {
     if (this.role !== P6_ROLE) throw new Error("non-P6 writer refused")
   }
 
   async insertProposal(row: PersistedProposal): Promise<PersistedProposal> {
-    this.assertRole()
+    this.#assertRole()
     assertNewProposal(row)
-    if (this.state.proposals.has(row.id)) throw new Error(`proposal id already exists: ${row.id}`)
+    if (this.#state.proposals.has(row.id)) throw new Error(`proposal id already exists: ${row.id}`)
     const saved = structuredClone(row)
     saved.payloadHash = payloadDigest(saved.payload)
-    this.state.proposals.set(saved.id, saved)
+    this.#state.proposals.set(saved.id, saved)
     return structuredClone(saved)
   }
 
   async getProposal(id: string): Promise<PersistedProposal | null> {
-    const row = this.state.proposals.get(id)
+    const row = this.#state.proposals.get(id)
     return row ? structuredClone(row) : null
   }
 
   async saveProposal(row: PersistedProposal): Promise<void> {
-    this.assertRole()
+    this.#assertRole()
     if (row.status !== "pending") throw new Error("save refuses a status other than pending")
     assertNoApprovalStamp(row)
-    const current = this.state.proposals.get(row.id)
+    const current = this.#state.proposals.get(row.id)
     if (!current) throw new Error("proposal not found")
     if (current.status !== "pending") throw new Error("save refuses a status other than pending")
     assertProposedByUnchanged(current, row)
@@ -800,40 +834,40 @@ export class InMemoryMasterStore implements MasterStore {
     const next = structuredClone(row)
     next.payload = structuredClone(current.payload)
     next.payloadHash = current.payloadHash
-    this.state.proposals.set(row.id, next)
+    this.#state.proposals.set(row.id, next)
   }
 
   async listVersions(firmId: string): Promise<VersionRow[]> {
-    return this.state.versions.filter((row) => row.firmId === firmId).map((row) => structuredClone(row))
+    return this.#state.versions.filter((row) => row.firmId === firmId).map((row) => structuredClone(row))
   }
 
   async getVersion(id: string): Promise<VersionRow | null> {
-    const row = this.state.versions.find((item) => item.id === id)
+    const row = this.#state.versions.find((item) => item.id === id)
     return row ? structuredClone(row) : null
   }
 
   async currentSnapshot(firmId: string): Promise<MasterSnapshot> {
-    return structuredClone(this.state.heads.get(firmId) ?? EMPTY_SNAPSHOT)
+    return structuredClone(this.#state.heads.get(firmId) ?? EMPTY_SNAPSHOT)
   }
 
   async commitVersion(input: CommitVersionInput): Promise<CommitVersionResult> {
-    this.assertRole()
+    this.#assertRole()
     const staged: StagedMasterWrite[] = []
-    const tx = this.publicSession()
+    const tx = this.#publicSession()
     try {
-      seal(tx, this.rawSession(staged))
+      seal(tx, this.#rawSession(staged))
       const outcome = await guardedWrite(tx, input)
       if (outcome.committed) await publishStaged(staged)
       return outcome
     } finally {
-      await this.endSession(tx)
+      await this.#endSession(tx)
     }
   }
 
   async #saveVersion(input: CommitVersionInput): Promise<CommitVersionResult> {
-    const snap = cloneState(this.state)
+    const snap = cloneState(this.#state)
     try {
-      const firmVersions = this.state.versions.filter((row) => row.firmId === input.firmId)
+      const firmVersions = this.#state.versions.filter((row) => row.firmId === input.firmId)
       const parent = firmVersions[firmVersions.length - 1] ?? null
       if ((parent?.id ?? null) !== input.expectedBaseVersionId) {
         throw new Error("master version conflict")
@@ -854,11 +888,11 @@ export class InMemoryMasterStore implements MasterStore {
         authorKind: input.authorKind,
         restoredFromVersionId: input.restoredFromVersionId,
       }
-      this.state.versions.push(version)
-      this.state.heads.set(input.firmId, structuredClone(input.snapshot))
-      if (isClassification(input.classification)) this.state.classes.set(input.firmId, input.classification)
+      this.#state.versions.push(version)
+      this.#state.heads.set(input.firmId, structuredClone(input.snapshot))
+      if (isClassification(input.classification)) this.#state.classes.set(input.firmId, input.classification)
       if (input.action === "apply" && input.proposalId) {
-        const row = this.state.proposals.get(input.proposalId)
+        const row = this.#state.proposals.get(input.proposalId)
         if (row && row.status !== "applied") {
           if (row.status === "pending") {
             row.decidedBy = "p6"
@@ -868,17 +902,17 @@ export class InMemoryMasterStore implements MasterStore {
           row.status = "applied"
         }
       }
-      if (this.failCommit === "throw") {
-        this.state = snap
+      if (this.#failCommit === "throw") {
+        this.#state = snap
         throw new Error("master write did not commit")
       }
-      if (this.failCommit === "uncommitted") {
-        this.state = snap
+      if (this.#failCommit === "uncommitted") {
+        this.#state = snap
         return { committed: false }
       }
       return { committed: true, versionId: version.id }
     } catch (error) {
-      this.state = snap
+      this.#state = snap
       throw error
     }
   }
