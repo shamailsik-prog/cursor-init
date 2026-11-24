@@ -67,6 +67,10 @@ describe("D1 evidence flag", () => {
     await expect(logEvidence(actor, input, { now: "nope" as unknown as () => number })).rejects.toMatchObject({ code: "invalid_input" })
     await expect(logEvidence(actor, input, { now: () => Number.POSITIVE_INFINITY })).rejects.toMatchObject({ code: "invalid_input" })
     await expect(logEvidence(actor, input, { now: () => { throw new RangeError("bad clock") } })).rejects.toMatchObject({ code: "invalid_input" })
+    // A finite instant outside ±8.64e15 makes Date#toISOString throw RangeError. That is invalid_input, not a raw RangeError.
+    await expect(logEvidence(actor, input, { now: () => 8.64e15 + 1 })).rejects.toMatchObject({ name: "EvidenceError", code: "invalid_input" })
+    await expect(logEvidence(actor, input, { now: () => -8.64e15 - 1 })).rejects.toMatchObject({ name: "EvidenceError", code: "invalid_input" })
+    await expect(logEvidence(actor, input, { now: () => Number.MAX_VALUE })).rejects.toMatchObject({ name: "EvidenceError", code: "invalid_input" })
     expect(adminDb).not.toHaveBeenCalled()
   })
 

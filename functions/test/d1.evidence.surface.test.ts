@@ -271,6 +271,32 @@ describe("D1 evidence export surface and hash", () => {
     }
   })
 
+  it("the first text record carries its own author line", () => {
+    const row = item({ eventCount: 1, createdBy: "header-author" })
+    const origin = genesis(row, { actorId: "genesis-author" })
+    const laterBody = {
+      evidenceId: row.id,
+      firmId: row.firmId,
+      matterId: row.matterId,
+      seq: 1,
+      kind: "receipt" as const,
+      actorId: "later-author",
+      at: "2026-01-15T01:00:00.000Z",
+      note: "sealed bag",
+      custodian: row.custodian,
+      documentId: null,
+      classification: "internal" as const,
+      prevHash: origin.hash,
+    }
+    const later = event({ ...laterBody, id: "ev1_1", hash: custodyEventHash(laterBody) })
+    const rendered = exported.renderEvidenceLog({ ...row, headerHash: origin.hash, lastHash: later.hash }, [later], origin)
+    const first = rendered.text.split("\n---\n")[1] ?? ""
+    expect(first.startsWith("seq: 0\n")).toBe(true)
+    expect(first.split("\n")).toContain("actorId: genesis-author")
+    expect(first).not.toContain("later-author")
+    expect(first).not.toContain("header-author")
+  })
+
   it("a headerHash, createdBy, createdAt, or documentId edit fails inspect", () => {
     const row = item({ eventCount: 1 })
     const origin = genesis(row)

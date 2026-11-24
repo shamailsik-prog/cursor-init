@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { adminDb } from "../src/admin"
 import { addCustodyEvent, getCustodyTrail, verifyCustodyChain } from "../src/d1/evidence/custody"
 import { exportEvidenceLog } from "../src/d1/evidence/export"
@@ -38,6 +38,40 @@ async function seedMatter(caller: EvidenceActor, matterId: string, classificatio
     matterId,
     userId: caller.uid,
   })
+}
+
+/**
+ * The first logEvidence transaction commits, then the answer is lost as already-exists.
+ * `reenter` lets the retry run the writer again. `blind` throws on every later attempt
+ * before the writer runs. `poison` and `drop-genesis` change the committed row first.
+ */
+function lostCommit(
+  db: ReturnType<typeof adminDb>,
+  mode: "reenter" | "blind" | "poison" | "drop-genesis",
+  code: number | string
+): { count: number; restore: () => void } {
+  const real = db.runTransaction.bind(db)
+  const state = { count: 0 }
+  const spy = vi.spyOn(db, "runTransaction").mockImplementation((async (fn: (tx: unknown) => Promise<unknown>, opts?: { maxAttempts?: number }) => {
+    state.count += 1
+    if (state.count > 1 && mode === "blind") {
+      throw Object.assign(new Error("6 ALREADY_EXISTS: document already exists"), { code })
+    }
+    const result = await real(fn, opts)
+    if (state.count === 1 && result && typeof result === "object" && "headerHash" in result && "id" in result) {
+      const id = (result as { id: string }).id
+      if (mode === "poison") await db.collection(EVIDENCE_ITEMS).doc(id).update({ item: "forged-body" })
+      if (mode === "drop-genesis") await db.collection(CUSTODY_EVENTS).doc(`${id}_0`).delete()
+      throw Object.assign(new Error("6 ALREADY_EXISTS: document already exists"), { code })
+    }
+    return result
+  }) as typeof db.runTransaction)
+  return {
+    get count() {
+      return state.count
+    },
+    restore: () => spy.mockRestore(),
+  }
 }
 
 function documentData(caller: EvidenceActor, matterId: string | null, classification: string) {
@@ -709,6 +743,128 @@ describe.skipIf(!EMULATORS)("D1 evidence register and custody chain", () => {
     expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: false, brokenSeq: 0, reason: "header" })
     await db.collection(EVIDENCE_ITEMS).doc(item.id).update({ headerHash: item.headerHash })
     expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: true, eventCount: 0 })
+  })
+
+  it("a lost logEvidence commit replays the written item and does not open a second one", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    const db = adminDb()
+    const attempts = lostCommit(db, "reenter", 6)
+    const input = {
+      matterId,
+      item: "seized handset",
+      source: "recovery memo",
+      receiptDate: "2026-09-01",
+      custodian: "clerk A",
+      classification: "internal" as const,
+    }
+    let item: Awaited<ReturnType<typeof logEvidence>>
+    try {
+      item = await logEvidence(caller, input)
+    } finally {
+      attempts.restore()
+    }
+    expect(attempts.count).toBe(2)
+    expect(item.eventCount).toBe(0)
+    expect(item.item).toBe("seized handset")
+    const rows = await db.collection(EVIDENCE_ITEMS).where("matterId", "==", matterId).get()
+    expect(rows.docs.map((doc) => doc.id)).toEqual([item.id])
+    const events = await db.collection(CUSTODY_EVENTS).where("evidenceId", "==", item.id).get()
+    expect(events.docs.map((doc) => doc.id)).toEqual([`${item.id}_0`])
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: true, eventCount: 0 })
+    const second = await logEvidence(caller, { ...input, item: "second handset" })
+    expect(second.id).not.toBe(item.id)
+    expect((await db.collection(EVIDENCE_ITEMS).where("matterId", "==", matterId).get()).size).toBe(2)
+  })
+
+  it("a lost logEvidence commit is returned when every retry throws already-exists", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    const db = adminDb()
+    const attempts = lostCommit(db, "blind", "already-exists")
+    let item: Awaited<ReturnType<typeof logEvidence>>
+    try {
+      item = await logEvidence(caller, {
+        matterId,
+        item: "bundle",
+        source: "client",
+        receiptDate: "2026-09-02",
+        custodian: "clerk A",
+        classification: "internal",
+      })
+    } finally {
+      attempts.restore()
+    }
+    expect(attempts.count).toBe(8)
+    expect(item.item).toBe("bundle")
+    expect(item.eventCount).toBe(0)
+    expect((await db.collection(EVIDENCE_ITEMS).where("matterId", "==", matterId).get()).size).toBe(1)
+    expect((await db.collection(CUSTODY_EVENTS).where("evidenceId", "==", item.id).get()).size).toBe(1)
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: true, eventCount: 0 })
+  })
+
+  it("a lost logEvidence commit whose stored body differs is conflict and adds nothing", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    const db = adminDb()
+    const attempts = lostCommit(db, "poison", 6)
+    try {
+      await expect(
+        logEvidence(caller, {
+          matterId,
+          item: "original",
+          source: "desk",
+          receiptDate: "2026-09-03",
+          custodian: "clerk A",
+          classification: "internal",
+        })
+      ).rejects.toMatchObject({ name: "EvidenceError", code: "conflict" })
+    } finally {
+      attempts.restore()
+    }
+    expect(attempts.count).toBe(2)
+    const rows = await db.collection(EVIDENCE_ITEMS).where("matterId", "==", matterId).get()
+    expect(rows.size).toBe(1)
+    expect(rows.docs[0]?.get("item")).toBe("forged-body")
+    const evidenceId = rows.docs[0]?.id
+    const events = await db.collection(CUSTODY_EVENTS).where("evidenceId", "==", evidenceId).get()
+    expect(events.size).toBe(1)
+    expect(events.docs[0]?.get("item")).toBe("original")
+  })
+
+  it("a lost logEvidence commit with no genesis is conflict and does not append one", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    const db = adminDb()
+    const attempts = lostCommit(db, "drop-genesis", 6)
+    try {
+      await expect(
+        logEvidence(caller, {
+          matterId,
+          item: "tape",
+          source: "interview",
+          receiptDate: "2026-09-04",
+          custodian: "clerk A",
+          classification: "internal",
+        })
+      ).rejects.toMatchObject({ name: "EvidenceError", code: "conflict" })
+    } finally {
+      attempts.restore()
+    }
+    expect(attempts.count).toBe(2)
+    const rows = await db.collection(EVIDENCE_ITEMS).where("matterId", "==", matterId).get()
+    expect(rows.size).toBe(1)
+    const evidenceId = rows.docs[0]?.id ?? ""
+    expect((await db.collection(CUSTODY_EVENTS).where("evidenceId", "==", evidenceId).get()).size).toBe(0)
+    expect((await db.collection(CUSTODY_EVENTS).doc(`${evidenceId}_0`).get()).exists).toBe(false)
   })
 })
 

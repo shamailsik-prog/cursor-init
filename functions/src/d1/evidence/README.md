@@ -26,7 +26,9 @@ Concurrent appends contend on the evidence document and on that query, so two ca
 
 `verifyCustodyChain` and `getCustodyTrail` read the header and the trail in one transaction (`loadCustody` passes the same transaction into both reads). The verdict is the first broken seq (`gap`, `count`, `duplicate`, `prev`, `hash`, `identity`, `header`, or `malformed`). A malformed document is listed on the trail and is not dropped. A direct edit of a bound header field, of `headerHash`, of `createdBy`, of `createdAt`, of `documentId`, or of `lastHash`, fails verify.
 
-The chain is unkeyed. A direct database rewrite that recomputes every event hash, `headerHash`, and `lastHash` still verifies. The rules stop the client SDK from doing that. There is no idempotency key: a second `logEvidence` creates a second item. A retried call is a new row, not a replay.
+The chain is unkeyed. A direct database rewrite that recomputes every event hash, `headerHash`, and `lastHash` still verifies. The rules stop the client SDK from doing that. There is no caller-supplied idempotency key: a later `logEvidence` mints a new id and a new item.
+
+A retry of the same attempt keeps the id and the timestamp already chosen. If that evidence row and its genesis are already this attempt's body, the call returns that item. If either document is present and is not that body, including a torn pair, the call throws `conflict` and writes nothing. The raw already-exists error does not escape, a second genesis is not appended, and the chain is not extended.
 
 Condition notes, annotations, transfers, and the document link are new events. The evidence row may update only `custodian`, `eventCount`, `lastHash`, `documentId`, and a raised `classification`.
 
