@@ -1,5 +1,6 @@
 /** SQL helpers for multiset digests (R8) and manifest session settings. */
 export const MANIFEST_SESSION_SETTINGS = `
+RESET search_path;
 SET TimeZone = 'UTC';
 SET DateStyle = 'ISO, YMD';
 SET IntervalStyle = 'iso_8601';

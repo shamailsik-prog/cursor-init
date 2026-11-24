@@ -512,6 +512,52 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
+      # ubuntu-latest ships pg_dump/pg_restore/psql 17+ (18 on 26.04). Those clients emit
+      # `SET transaction_timeout = 0`, which this job's pinned pgvector:pg16 service rejects
+      # (run 45300770649, tests/p6.master.pg.test.ts). PGDG client 16 matches the service.
+      # /usr/bin/pg_dump is a wrapper that prefers the newest major, so the versioned
+      # directory has to lead PATH. The versioned binaries are checked in the next step,
+      # after GITHUB_PATH is applied.
+      - name: Install PostgreSQL 16 client tools (match the service)
+        run: |
+          set -euo pipefail
+          if ! command -v curl >/dev/null || ! command -v gpg >/dev/null; then
+            sudo DEBIAN_FRONTEND=noninteractive apt-get update
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates gpg
+          fi
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL --retry 3 -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo chmod a+r /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          gpg --show-keys /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc | grep -F 'B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8'
+          . /etc/os-release
+          sudo tee /etc/apt/sources.list.d/pgdg.sources >/dev/null <<EOF
+          Types: deb
+          URIs: https://apt.postgresql.org/pub/repos/apt
+          Suites: ${VERSION_CODENAME}-pgdg
+          Components: main
+          Signed-By: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          EOF
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-client-16
+          test -x /usr/lib/postgresql/16/bin/psql
+          test -x /usr/lib/postgresql/16/bin/pg_dump
+          test -x /usr/lib/postgresql/16/bin/pg_restore
+          /usr/lib/postgresql/16/bin/psql --version | grep -E 'PostgreSQL\) 16\.'
+          /usr/lib/postgresql/16/bin/pg_dump --version | grep -E 'PostgreSQL\) 16\.'
+          /usr/lib/postgresql/16/bin/pg_restore --version | grep -E 'PostgreSQL\) 16\.'
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
+      - name: Postgres 16 client tools lead PATH
+        run: |
+          set -euo pipefail
+          test "$(command -v psql)" = /usr/lib/postgresql/16/bin/psql
+          test "$(command -v pg_dump)" = /usr/lib/postgresql/16/bin/pg_dump
+          test "$(command -v pg_restore)" = /usr/lib/postgresql/16/bin/pg_restore
+          psql --version
+          pg_dump --version
+          pg_restore --version
+          psql --version | grep -E 'PostgreSQL\) 16\.'
+          pg_dump --version | grep -E 'PostgreSQL\) 16\.'
+          pg_restore --version | grep -E 'PostgreSQL\) 16\.'
       # Audit F19: 003 is additive and idempotent. Apply every DDL file in order as the superuser,
       # twice, with the same tool PR 2b's postgres init uses; the harness then applies them again.
       - name: Every postgres/ddl/*.sql applies in order as the superuser, twice (idempotent)
