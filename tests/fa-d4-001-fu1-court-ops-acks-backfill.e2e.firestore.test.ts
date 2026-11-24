@@ -128,10 +128,10 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001-FU1: legacy court-ops ac
     const [f, g, tag] = [firm(), firm(), short()]
     const [w1, fu2, fu5] = [await workflowItem(f), await followUp(g), await followUp(f)]
     const ids = [
-      await seed(legacyId("workflow", w1), ack(f, "workflow", w1)),
+      await seed(legacyId("workflow", w1), ack(f, "workflow", w1, { matterId: "mat_w1" })),
       await seed(legacyId("follow_up", fu2), ack(f, "follow_up", fu2)),
-      await seed(legacyId("follow_up", fu5), ack(f, "follow_up", fu5, { createdAt: 900, detail: "legacy is later" })),
-      await seed(ackId(f, "follow_up", fu5), ack(f, "follow_up", fu5, { createdAt: 500 })),
+      await seed(legacyId("follow_up", fu5), ack(f, "follow_up", fu5, { createdAt: 900, detail: "legacy is later", matterId: "mat_legacy" })),
+      await seed(ackId(f, "follow_up", fu5), ack(f, "follow_up", fu5, { createdAt: 500, matterId: "mat_target" })),
       ackId(f, "workflow", w1),
     ]
     const notInFirm = await data(legacyId("follow_up", fu2))
@@ -139,9 +139,9 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001-FU1: legacy court-ops ac
     const { lines, deps } = depsFor(ids, tag)
     expect(await runCourtOpsAckBackfill(["--apply"], { ...deps, runId })).toBe(2)
     // The moved row is the legacy row re-keyed: its own fields, with `id` the firm-qualified id (as the route writes it).
-    expect(await data(ackId(f, "workflow", w1))).toEqual({ id: ackId(f, "workflow", w1), ...ack(f, "workflow", w1) })
+    expect(await data(ackId(f, "workflow", w1))).toEqual({ id: ackId(f, "workflow", w1), ...ack(f, "workflow", w1, { matterId: "mat_w1" }) })
     expect(await data(legacyId("workflow", w1))).toBeUndefined()
-    expect(await data(ackId(f, "follow_up", fu5))).toMatchObject({ createdAt: 900, detail: "legacy is later", firmId: f })
+    expect(await data(ackId(f, "follow_up", fu5))).toMatchObject({ createdAt: 900, detail: "legacy is later", firmId: f, matterId: "mat_legacy" })
     expect(await data(legacyId("follow_up", fu5))).toBeUndefined()
     expect(await data(legacyId("follow_up", fu2))).toEqual(notInFirm)
     const out = lines.join("\n")
@@ -161,7 +161,7 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001-FU1: legacy court-ops ac
   it("a clean run (only movable and canonical rows) exits 0, and its rerun exits 0 with nothing to move", async () => {
     const [f, tag] = [firm(), short()]
     const w = await workflowItem(f)
-    const ids = [await seed(legacyId("workflow", w), ack(f, "workflow", w)), ackId(f, "workflow", w)]
+    const ids = [await seed(legacyId("workflow", w), ack(f, "workflow", w, { matterId: "mat_clean" })), ackId(f, "workflow", w)]
     const first = depsFor(ids, tag)
     expect(await runCourtOpsAckBackfill(["--apply"], { ...first.deps, runId: `fu1bf-clean-${tag}` })).toBe(0)
     expect(await data(ackId(f, "workflow", w))).toMatchObject({ firmId: f, documentId: w })
@@ -195,8 +195,8 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001-FU1: legacy court-ops ac
     const [f, tag] = [firm(), short()]
     const [w1, w2] = [await workflowItem(f), await workflowItem(f)]
     const ids = [
-      await seed(legacyId("workflow", w1), ack(f, "workflow", w1)),
-      await seed(legacyId("workflow", w2), ack(f, "workflow", w2)),
+      await seed(legacyId("workflow", w1), ack(f, "workflow", w1, { matterId: "mat_w1" })),
+      await seed(legacyId("workflow", w2), ack(f, "workflow", w2, { matterId: "mat_w2" })),
       ackId(f, "workflow", w1),
       ackId(f, "workflow", w2),
     ]
@@ -207,7 +207,7 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001-FU1: legacy court-ops ac
       move: async (planned) => {
         calls += 1
         if (planned.from === legacyId("workflow", w1)) {
-          await ref(planned.from).set(ack(f, "workflow", w1, { detail: "rewritten by an old instance" }))
+          await ref(planned.from).set(ack(f, "workflow", w1, { detail: "rewritten by an old instance", matterId: "mat_w1" }))
           return real.move(planned)
         }
         throw new Error("transient: deadline exceeded")
@@ -224,6 +224,17 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001-FU1: legacy court-ops ac
     const rerun = depsFor(ids, tag)
     expect(await runCourtOpsAckBackfill(["--apply"], { ...rerun.deps, runId: `fu1bf-flaky-${tag}-2` })).toBe(0)
     expect(await data(ackId(f, "workflow", w1))).toMatchObject({ detail: "rewritten by an old instance" })
-    expect(await data(ackId(f, "workflow", w2))).toMatchObject({ firmId: f })
+    expect(await data(ackId(f, "workflow", w2))).toMatchObject({ firmId: f, matterId: "mat_w2" })
+  })
+
+  it("WRITER-264-008: apply leaves a null-matter acknowledgement where it is and does not write the target", async () => {
+    const [f, tag] = [firm(), short()]
+    const w = await workflowItem(f)
+    const ids = [await seed(legacyId("workflow", w), ack(f, "workflow", w)), ackId(f, "workflow", w)]
+    const { lines, deps } = depsFor(ids, tag)
+    expect(await runCourtOpsAckBackfill(["--apply"], { ...deps, runId: `fu1bf-null-${tag}` })).toBe(2)
+    expect(await data(ackId(f, "workflow", w))).toBeUndefined()
+    expect(await data(legacyId("workflow", w))).toMatchObject({ firmId: f, matterId: null })
+    expect(lines.join("\n")).toContain(`needs operator review ${COLL}/${legacyId("workflow", w)} matter_unbound`)
   })
 })
