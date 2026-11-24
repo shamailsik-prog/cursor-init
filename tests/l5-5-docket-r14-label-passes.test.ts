@@ -151,8 +151,6 @@ describe("L5.5 R14 label passes", () => {
     "SEE ANNEXURES ON RECORD.",
     "The annexures are filed, etc.",
     "Annexures A, B, C, etc. are filed.",
-    "Esp. D.",
-    "Etc. D.",
     "cf. DEFGH.",
     "annex land",
     "mark time",
@@ -177,6 +175,14 @@ describe("L5.5 R14 label passes", () => {
     "annex the land",
     `${cited}\nLIST OF ANNEXURES\nA: Plaint\nB: Notice\nC: Vakalatnama\n${inOrder}`,
   ]
+
+  it.each(["Esp. D.", "Etc. D."])("names the bare capital after an abbreviation: %s", async (sentence) => {
+    const result = await resultFor(petition, `${cited} ${sentence}`)
+    expect(result.ok, sentence).toBe(false)
+    expect(result.pdf, sentence).toBeNull()
+    expect(result.docx, sentence).toBeNull()
+    expect(result.queue.some((entry) => entry.code === "unfiled_label" && entry.detail === 'unfiled label "D"'), sentence).toBe(true)
+  })
 
   it.each(generated)("generates text that is not a label token: %s", async (sentence) => {
     const body = sentence.startsWith(cited) ? sentence : `${cited} ${sentence}`

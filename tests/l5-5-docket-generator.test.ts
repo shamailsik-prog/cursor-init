@@ -373,6 +373,11 @@ describe("L5.5 ambiguity queue", () => {
         artifactId: null,
         detail: "body cites P/99, which is not an annexure in this filing set",
       }),
+      expect.objectContaining({
+        code: "unfiled_label",
+        artifactId: null,
+        detail: 'unfiled label "P/99"',
+      }),
     ])
   })
 
@@ -688,13 +693,15 @@ describe("L5.5 ambiguity queue", () => {
         body: "The witness proved P-1 and then P-2. House No. D-45, Clifton. R-123, Sector 11-A. Plot P-12. Form D-1.",
       },
     })
-    expect(addressed.ok).toBe(true)
-    expect(addressed.pdf).not.toBeNull()
-    expect(addressed.docx).not.toBeNull()
-    expect(addressed.queue).toEqual([])
+    expect(addressed.ok).toBe(false)
+    expect(addressed.pdf).toBeNull()
+    expect(addressed.docx).toBeNull()
+    for (const token of ["D-45", "R-123", "A", "P-12", "D-1"]) {
+      expect(addressed.queue.some((entry) => entry.code === "unfiled_label" && entry.detail === `unfiled label "${token}"`), token).toBe(true)
+    }
   })
 
-  it("generates when the letter expressions and the address lines are all present", async () => {
+  it("keeps filed letter expressions and names each unfiled address mark", async () => {
     enableFlag()
     const result = await generateDocket({
       ...petition,
@@ -712,10 +719,12 @@ describe("L5.5 ambiguity queue", () => {
         ].join(" "),
       },
     })
-    expect(result.ok).toBe(true)
-    expect(result.pdf).not.toBeNull()
-    expect(result.docx).not.toBeNull()
-    expect(result.queue).toEqual([])
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.docx).toBeNull()
+    for (const token of ["D-45", "R-123", "P-12", "D-1"]) {
+      expect(result.queue.some((entry) => entry.code === "unfiled_label" && entry.detail === `unfiled label "${token}"`), token).toBe(true)
+    }
   })
 
   it("refuses bare P, D, and R marks on every docket", async () => {
@@ -879,9 +888,12 @@ describe("L5.5 ambiguity queue", () => {
         assignedLabel: index === 0 ? "D/1" : "D/2",
       })),
     })
-    expect(caseNumber.ok).toBe(true)
-    expect(caseNumber.pdf).not.toBeNull()
-    expect(caseNumber.queue).toEqual([])
+    expect(caseNumber.ok).toBe(false)
+    expect(caseNumber.pdf).toBeNull()
+    expect(caseNumber.docx).toBeNull()
+    for (const token of ["D-1234/2025", "D-12"]) {
+      expect(caseNumber.queue.some((entry) => entry.code === "unfiled_label" && entry.detail === `unfiled label "${token}"`), token).toBe(true)
+    }
   })
 
   it("refuses the sub-annexure label Annexure A-1", async () => {
@@ -1218,15 +1230,16 @@ describe("L5.5 ambiguity queue", () => {
     expect(result.queue).toEqual([])
   })
 
-  it('generates "D-45/2, Block 5"', async () => {
+  it('names the unfiled address mark "D-45/2, Block 5"', async () => {
     enableFlag()
     const result = await generateDocket({
       ...petition,
       draft: { body: `${petition.draft.body} The house is D-45/2, Block 5.` },
     })
-    expect(result.ok).toBe(true)
-    expect(result.pdf).not.toBeNull()
-    expect(result.queue).toEqual([])
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.docx).toBeNull()
+    expect(result.queue.some((entry) => entry.code === "unfiled_label" && entry.detail === 'unfiled label "D-45/2"')).toBe(true)
   })
 
   it('generates glued "p.3, para 4"', async () => {
@@ -1580,19 +1593,21 @@ describe("L5.5 fail-closed reference allowlist", () => {
     }
   })
 
-  it("REF-015 generates dash-code addresses, an or-list, and a glued page reference", async () => {
-    const dash = [
-      "At P-12, Phase VIII, DHA.",
-      "At R-12, Gali No. 4, Mohalla Islampura.",
-      "D-12 Khayaban-e-Shamsheer",
-      "House No. D-45, Clifton",
-      "D-45/2, Block 5",
+  it("REF-015 names dash-code address marks and still generates an or-list and a glued page reference", async () => {
+    const dash: Array<{ sentence: string; token: string }> = [
+      { sentence: "At P-12, Phase VIII, DHA.", token: "P-12" },
+      { sentence: "At R-12, Gali No. 4, Mohalla Islampura.", token: "R-12" },
+      { sentence: "D-12 Khayaban-e-Shamsheer", token: "D-12" },
+      { sentence: "House No. D-45, Clifton", token: "D-45" },
+      { sentence: "D-45/2, Block 5", token: "D-45/2" },
     ]
-    for (const sentence of dash) {
-      await expectGeneration(
-        { ...marked(["P/1", "P/2"]), draft: { body: `Relies on P/1 and P/2. ${sentence}` } },
-        sentence,
-      )
+    for (const { sentence, token } of dash) {
+      enableFlag()
+      const result = await generateDocket({ ...marked(["P/1", "P/2"]), draft: { body: `Relies on P/1 and P/2. ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.pdf, sentence).toBeNull()
+      expect(result.docx, sentence).toBeNull()
+      expect(result.queue.some((entry) => entry.code === "unfiled_label" && entry.detail === `unfiled label "${token}"`), sentence).toBe(true)
     }
     await expectGeneration(
       { ...petition, draft: { body: "Annexure A, Annexure B or Annexure C" } },
@@ -1712,11 +1727,13 @@ describe("L5.5 fail-closed reference allowlist", () => {
     )
   })
 
-  it("generates when an incomplete bare range A-D follows a complete citation", async () => {
-    await expectGeneration(
-      { ...petition, draft: { body: "The petitioner relies on Annexures A, B and C. A-D." } },
-      "A-D",
-    )
+  it("names D when a bare range A-D follows a complete citation", async () => {
+    enableFlag()
+    const result = await generateDocket({ ...petition, draft: { body: "The petitioner relies on Annexures A, B and C. A-D." } })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.docx).toBeNull()
+    expect(result.queue.some((entry) => entry.code === "unfiled_label" && entry.detail === 'unfiled label "D"')).toBe(true)
   })
 
   it("reads P-1 after did not prove", async () => {
@@ -1782,20 +1799,27 @@ describe("L5.5 fail-closed reference allowlist", () => {
     }
   })
 
-  it("OVER-021 generates a case number with of and a year", async () => {
+  it("OVER-021 keeps the allowlisted C.P. shape and names every other case mark", async () => {
     const cited = "The petitioner relies on Annexures A, B and C."
-    for (const sentence of [
-      "C.P. No. D-1234 of 2023",
-      "CP No. D-1234 of 2023",
-      "Execution No. D-45 of 2024",
-      "Crl. Rev. No. D-45 of 2024",
-      "Crl. A. No. D-45 of 2024",
-      "H.C.A. No. D-45 of 2024",
-      "Const. P. No. D-45 of 2024",
-      "R.F.A. No. D-45 of 2024",
-      "Execution No. D-45/2024",
-    ]) {
+    for (const sentence of ["C.P. No. D-1234 of 2023", "CP No. D-1234 of 2023"]) {
       await expectGeneration({ ...petition, draft: { body: `${cited} ${sentence}` } }, sentence)
+    }
+    const refused: Array<{ sentence: string; token: string }> = [
+      { sentence: "Execution No. D-45 of 2024", token: "D-45" },
+      { sentence: "Crl. Rev. No. D-45 of 2024", token: "D-45" },
+      { sentence: "Crl. A. No. D-45 of 2024", token: "D-45" },
+      { sentence: "H.C.A. No. D-45 of 2024", token: "H" },
+      { sentence: "Const. P. No. D-45 of 2024", token: "P" },
+      { sentence: "R.F.A. No. D-45 of 2024", token: "R" },
+      { sentence: "Execution No. D-45/2024", token: "D-45/2024" },
+    ]
+    for (const { sentence, token } of refused) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body: `${cited} ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.pdf, sentence).toBeNull()
+      expect(result.docx, sentence).toBeNull()
+      expect(result.queue.some((entry) => entry.code === "unfiled_label" && entry.detail === `unfiled label "${token}"`), sentence).toBe(true)
     }
   })
 
@@ -1888,14 +1912,21 @@ describe("L5.5 fail-closed reference allowlist", () => {
       "Annexure A was issued by the DSP.",
       "See PW-1's deposition.",
       "See ECP.",
-      "See I. Ahmed v. State.",
       "See 2010 NLR 45.",
       "See 2010 KLR 45",
       "See 2015 PLJ 45",
-      "See 2015 PLC (C.S.) 45",
       "See (2010) 5 SCC 45",
       "See 2010.",
     ]
+    for (const sentence of ["See I. Ahmed v. State.", "See 2015 PLC (C.S.) 45"]) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body: `${cited} ${sentence}` } })
+      const token = sentence.includes("Ahmed") ? "I" : "S"
+      expect(result.ok, sentence).toBe(false)
+      expect(result.pdf, sentence).toBeNull()
+      expect(result.docx, sentence).toBeNull()
+      expect(result.queue.some((entry) => entry.code === "unfiled_label" && entry.detail === `unfiled label "${token}"`), sentence).toBe(true)
+    }
     for (const sentence of sentences) {
       await expectGeneration({ ...petition, draft: { body: `${cited} ${sentence}` } }, sentence)
     }
@@ -1968,12 +1999,24 @@ describe("L5.5 fail-closed reference allowlist", () => {
     }
   })
 
-  it("OVER-R8-002 generates prose letters and a head followed by a stopword", async () => {
+  it("OVER-R8-002 names a bare capital and still generates a lower-case clause and a stopword head", async () => {
     const cited = "The petitioner relies on Annexures A, B and C."
+    const named: Array<{ sentence: string; tokens: string[] }> = [
+      { sentence: "Schedules D and E of the Act apply.", tokens: ["D", "E"] },
+      { sentence: "The parties X and Y agreed.", tokens: ["X", "Y"] },
+      { sentence: "I and a colleague attended.", tokens: ["I"] },
+    ]
+    for (const { sentence, tokens } of named) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body: `${cited} ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.pdf, sentence).toBeNull()
+      expect(result.docx, sentence).toBeNull()
+      for (const token of tokens) {
+        expect(result.queue.some((entry) => entry.code === "unfiled_label" && entry.detail === `unfiled label "${token}"`), `${sentence} ${token}`).toBe(true)
+      }
+    }
     for (const sentence of [
-      "Schedules D and E of the Act apply.",
-      "The parties X and Y agreed.",
-      "I and a colleague attended.",
       "Under clauses (d) and (e) of the agreement.",
       "See exhibits on record.",
       "Refer annexures filed herewith.",

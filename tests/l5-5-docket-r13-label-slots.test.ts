@@ -125,8 +125,6 @@ describe("L5.5 label-slot grammar", () => {
     "The café is on the record.",
     "SEE ANNEXURES ON RECORD.",
     "The annexures are filed, etc.",
-    "Esp. D.",
-    "Etc. D.",
     "cf. DEFGH.",
     "Annexures relate to the FIR.",
     "Annexures relate to section 302 PPC.",
@@ -137,6 +135,14 @@ describe("L5.5 label-slot grammar", () => {
     "THE ANNEXURES ARE TRUE COPIES.",
     "ANNEXURES RELATE TO THE FIR.",
   ]
+
+  it.each(["Esp. D.", "Etc. D."])("names the bare capital after an abbreviation: %s", async (sentence) => {
+    const result = await resultFor(petition, `${cited} ${sentence}`)
+    expect(result.ok, sentence).toBe(false)
+    expect(result.pdf, sentence).toBeNull()
+    expect(result.docx, sentence).toBeNull()
+    expect(result.queue.some((entry) => entry.code === "unfiled_label" && entry.detail === 'unfiled label "D"'), sentence).toBe(true)
+  })
 
   it.each(generated)("generates text outside a label slot: %s", async (sentence) => {
     const result = await resultFor(petition, `${cited} ${sentence}`)

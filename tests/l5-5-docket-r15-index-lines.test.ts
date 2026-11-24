@@ -112,12 +112,26 @@ describe("L5.5 R15 index lines", () => {
   })
 
   const generated = [
-    `${cited} A.D. 2020.`,
     `${cited} The order in C.P. No. D-1234 of 2023 is impugned.`,
     `${cited} Suit No. 12 of 2020 is pending.`,
     `${cited} See Annexure A - u/s 80 CPC.`,
-    `${proved} Exh. P-1 is the plaint in Suit No. D-12 of 2020.`,
   ]
+
+  it("names D in A.D. 2020 because a year is not on the citation allowlist", async () => {
+    const result = await resultFor(petition, `${cited} A.D. 2020.`)
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.docx).toBeNull()
+    expect(result.queue.some((entry) => entry.code === "unfiled_label" && entry.detail === 'unfiled label "D"')).toBe(true)
+  })
+
+  it("names D-12 in Suit No. D-12 of 2020 because the allowlist takes a numeric suit number", async () => {
+    const result = await resultFor(withThirdExhibit(), `${proved} Exh. P-1 is the plaint in Suit No. D-12 of 2020.`)
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.docx).toBeNull()
+    expect(result.queue.some((entry) => entry.code === "unfiled_label" && entry.detail === 'unfiled label "D-12"')).toBe(true)
+  })
 
   it.each(generated)("generates a case number, a year, or a section cite: %s", async (body) => {
     const filing = body.includes("Exh. P-1") ? withThirdExhibit() : petition

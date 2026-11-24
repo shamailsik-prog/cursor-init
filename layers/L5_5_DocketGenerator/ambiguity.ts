@@ -1,5 +1,6 @@
 import { classifyAnnexureRule, letterToken, type ClassifiedRule } from "@/layers/L5_5_DocketGenerator/rules"
 import { assignedCitation, scanCitations, type CitationFamily } from "@/layers/L5_5_DocketGenerator/references"
+import { unfiledLabelFindings } from "@/layers/L5_5_DocketGenerator/unfiled"
 import type { AmbiguityItem, DocketAnnexure, DocketFilingSet, DocketPageSizeName } from "@/layers/L5_5_DocketGenerator/types"
 
 export type ResolvedAnnexure = {
@@ -329,6 +330,9 @@ export function resolveFilingSet(input: DocketFilingSet): ResolveResult {
     (scheme.kind === "letters" || scheme.kind === "enclosures" || scheme.kind === "manual") && scheme.requireReferenceOrder
   checkCitations(draft, annexures, requireReferenceOrder, queue, scheme)
   if (scheme.kind === "manual") checkManualRefs(draft, annexures, scheme.requireReferenceOrder, queue, scheme)
+  for (const finding of unfiledLabelFindings(draft, resolvedTokens)) {
+    queue.push(item(finding.code, null, finding.detail))
+  }
 
   if (queue.length > 0 || !spec) return { ok: false, queue }
   return {

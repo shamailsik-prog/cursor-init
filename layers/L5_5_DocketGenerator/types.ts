@@ -44,7 +44,12 @@ export type DocketFilingSet = {
   annexures: DocketAnnexure[]
 }
 
-export type AmbiguityCode = "order_unresolved" | "label_unresolved" | "ref_unresolved"
+export type AmbiguityCode =
+  | "order_unresolved"
+  | "label_unresolved"
+  | "ref_unresolved"
+  | "unfiled_label"
+  | "ambiguous_label"
 
 export type AmbiguityItem = {
   code: AmbiguityCode
