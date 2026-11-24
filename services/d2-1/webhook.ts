@@ -2,6 +2,13 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto"
 import type { AuditEntry, SpineStore } from "@/platform/spine/store"
 import { resetD2WhatsAppThreadsForTests, type WhatsAppDispatch } from "./dispatch"
 import { D2_WHATSAPP_GRAMMAR_FLAG, isD2WhatsAppGrammarEnabled } from "./grammar"
+import {
+  openWhatsAppOutboundKeyStore,
+  resetWhatsAppOutboundKeyStoreForTests,
+  sendWhatsAppOnce,
+  UNBOUND_OUTBOUND_FIRM,
+  type OutboundKeyStore,
+} from "./outboundKeys"
 import { webhookStub, type WhatsAppTransport } from "./transport"
 
 /**
@@ -34,6 +41,8 @@ const SECRET_PADDING = /[\p{Default_Ignorable_Code_Point}\p{Cf}\p{M}\p{White_Spa
 
 type Cached = { status: number; body: { ok: false } }
 
+type Attempt = Cached & { retain: boolean; retryAfter?: string }
+
 type Slot = {
   promise: Promise<Cached>
   /** 0 while the delivery is in flight. A positive value is the expiry. */
@@ -48,6 +57,7 @@ export function resetD2WhatsAppWebhookForTests(): void {
   settled.length = 0
   webhookStub.reset()
   resetD2WhatsAppThreadsForTests()
+  resetWhatsAppOutboundKeyStoreForTests()
 }
 
 export type WebhookDeps = {
@@ -61,12 +71,19 @@ export type WebhookDeps = {
   execute?: (store: SpineStore, userId: string, text: string) => Promise<WhatsAppDispatch>
   /** Ignored. No permission decision is made until a phone is linked. */
   persistAudit?: (rows: readonly AuditEntry[]) => Promise<void>
+  /**
+   * Durable outbound keys. Omitted uses the process store. The mode is
+   * resolvePersistenceMode: memory is refused when NODE_ENV=production.
+   * A transport that ignores keys still cannot send a sent key twice.
+   * A pending key is in flight, not a cached success.
+   */
+  outboundKeys?: OutboundKeyStore
 }
 
-function json(status: number, body: unknown): Response {
+function json(status: number, body: unknown, extra?: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...extra },
   })
 }
 
@@ -154,9 +171,11 @@ async function acknowledgeUnbound(
   idempotencyKey: string,
   signal: AbortSignal,
   onAccepted: () => void
-): Promise<Cached> {
+): Promise<Attempt> {
   deps.store()
-  await deps.transport.send(
+  const keys = deps.outboundKeys ?? (await openWhatsAppOutboundKeyStore())
+  const outcome = await sendWhatsAppOnce(
+    deps.transport,
     { toUserId: "unbound", text: WHATSAPP_NOT_LINKED_TEXT },
     {
       signal,
@@ -164,9 +183,15 @@ async function acknowledgeUnbound(
       now: deps.now ?? Date.now(),
       idempotencyTtlMs: WHATSAPP_DEDUPE_TTL_MS,
       onAccepted,
+      firmId: UNBOUND_OUTBOUND_FIRM,
+      keys,
     }
   )
-  return { status: 200, body: { ok: false } }
+  if (outcome.status === "inFlight") {
+    const seconds = Math.max(1, Math.ceil(outcome.retryAfterMs / 1000))
+    return { status: 503, body: { ok: false }, retain: false, retryAfter: String(seconds) }
+  }
+  return { status: 200, body: { ok: false }, retain: true }
 }
 
 function bodyReadTimeout(): Response {
@@ -261,15 +286,15 @@ export async function handleWhatsAppWebhook(request: Request, deps: WebhookDeps)
   const controller = new AbortController()
   let accepted = false
   try {
-    const cached = await withTimeout(
+    const attempt = await withTimeout(
       acknowledgeUnbound(deps, key, controller.signal, () => {
         accepted = true
       }),
       WHATSAPP_PROCESSING_TIMEOUT_MS,
       () => controller.abort()
     )
-    reserved.settle(cached, true)
-    return json(cached.status, cached.body)
+    reserved.settle(attempt, attempt.retain)
+    return json(attempt.status, attempt.body, attempt.retryAfter ? { "Retry-After": attempt.retryAfter } : undefined)
   } catch {
     controller.abort()
     if (accepted) {

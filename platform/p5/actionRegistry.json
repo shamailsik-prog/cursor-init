@@ -1,9 +1,9 @@
 {
   "base": "bb8fcc3f02b0fc0a6bcc1c705bcbc270ad3c7961",
-  "inventoryCount": 283,
+  "inventoryCount": 290,
   "uniqueLiveActionCount": 50,
-  "literalCount": 264,
-  "parameterCount": 19,
+  "literalCount": 272,
+  "parameterCount": 18,
   "genericActions": [
     "research",
     "draft",
@@ -3118,17 +3118,91 @@
     },
     {
       "file": "services/d2-1/dispatch.ts",
-      "line": 73,
+      "line": 111,
       "via": "checkPermission",
-      "binding": "parameter",
-      "action": null,
+      "binding": "literal",
+      "action": "list_matters",
       "actions": [
-        "client.read",
-        "draft",
-        "list_matters",
+        "list_matters"
+      ],
+      "note": null
+    },
+    {
+      "file": "services/d2-1/dispatch.ts",
+      "line": 113,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "client.read",
+      "actions": [
+        "client.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "services/d2-1/dispatch.ts",
+      "line": 115,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "services/d2-1/dispatch.ts",
+      "line": 117,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
         "research"
       ],
-      "note": "permitWhatsApp forwards `action` to checkPermission. The values are WHATSAPP_WEB_ACTION: matters, hearings, intake and help use list_matters; clients and presence use client.read; drafts uses draft (the per-draft call passes the literal \"draft\"); research uses research."
+      "note": null
+    },
+    {
+      "file": "services/d2-1/dispatch.ts",
+      "line": 180,
+      "via": "decide",
+      "binding": "literal",
+      "action": "list_matters",
+      "actions": [
+        "list_matters"
+      ],
+      "note": null
+    },
+    {
+      "file": "services/d2-1/dispatch.ts",
+      "line": 182,
+      "via": "decide",
+      "binding": "literal",
+      "action": "client.read",
+      "actions": [
+        "client.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "services/d2-1/dispatch.ts",
+      "line": 184,
+      "via": "decide",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "services/d2-1/dispatch.ts",
+      "line": 186,
+      "via": "decide",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
     },
     {
       "file": "services/d2-1/whatsapp.ts",

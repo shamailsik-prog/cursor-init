@@ -424,10 +424,10 @@ class RuntimeCheck(unittest.TestCase):
 
 # Wave-1 stores the deletion saga will read. Two already exist on 7ae1a33f with this profile and key
 # (evidence_items, custody_events); the gate forbids a duplicate, and the file lock forbids editing them.
-# Five stay pending on F42 until their writers land. draft_autosave_points landed with W1-L51, so its
-# pending flag is gone (ME I1): a pending flag on a store the tree now names is a note, and the pin
-# must not keep demanding it. `validatePolicy(policy, inventory())` in
-# functions/test/f42-retention.units.test.ts loads this same file; this pin is what makes that call see them.
+# Four stay pending on F42 until their writers land. Two have landed and their pending flags are gone
+# (ME I1): draft_autosave_points (W1-L51) and whatsapp_outbound_keys (W1-Q14R3). A pending flag on a
+# store the tree now names is a note, and the pin must not keep demanding it.
+# `validatePolicy(policy, inventory())` in functions/test/f42-retention.units.test.ts loads this same file.
 WAVE1_NEW = (
     {
         "id": "firestore:intakes",
@@ -463,18 +463,10 @@ WAVE1_NEW = (
         "key": {"kind": "objects", "via": "firestore:upload_sessions", "pathField": "storagePath"},
         "pending": "F42",
     },
-    {
-        "id": "firestore:whatsapp_outbound_keys",
-        "kind": "firestore",
-        "name": "whatsapp_outbound_keys",
-        "profile": "operational_ttl",
-        "key": {"kind": "none"},
-        "ageField": {"field": "expiresAt", "type": "timestamp"},
-        "pending": "F42",
-    },
 )
-# Landed by W1-L51. The matter-deletion key stays matterId. A null matterId is not that query;
-# W2-DEL finds it by firmId plus createdBy (functions/src/d4/autosave.README.md).
+# Landed writers. draft_autosave_points (W1-L51): matter-deletion key stays matterId; a null matterId
+# is not that query, and W2-DEL finds it by firmId plus createdBy (functions/src/d4/autosave.README.md).
+# whatsapp_outbound_keys (W1-Q14R3): same profile and TTL clock as the pre-registration, without pending.
 WAVE1_LANDED = (
     {
         "id": "firestore:draft_autosave_points",
@@ -482,6 +474,14 @@ WAVE1_LANDED = (
         "name": "draft_autosave_points",
         "profile": "matter_content",
         "key": {"kind": "field", "field": "matterId"},
+    },
+    {
+        "id": "firestore:whatsapp_outbound_keys",
+        "kind": "firestore",
+        "name": "whatsapp_outbound_keys",
+        "profile": "operational_ttl",
+        "key": {"kind": "none"},
+        "ageField": {"field": "expiresAt", "type": "timestamp"},
     },
 )
 WAVE1_ALREADY = ("firestore:evidence_items", "firestore:custody_events")

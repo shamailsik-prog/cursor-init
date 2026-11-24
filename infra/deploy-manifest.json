@@ -355,7 +355,8 @@
       { "collectionGroup": "idempotency_effects", "fieldPath": "expiresAt", "writers": ["functions/src/http/idempotency.ts"] },
       { "collectionGroup": "rate_limits", "fieldPath": "expiresAt", "writers": ["functions/src/http/rateLimit.ts"] },
       { "collectionGroup": "conflict_index_breaks", "fieldPath": "expiresAt", "writers": ["functions/src/d1/conflict/registryTriggers.ts"] },
-      { "collectionGroup": "counters", "fieldPath": "expiresAt", "writers": ["functions/src/d1/dailyLimit.ts"] }
+      { "collectionGroup": "counters", "fieldPath": "expiresAt", "writers": ["functions/src/d1/dailyLimit.ts"] },
+      { "collectionGroup": "whatsapp_outbound_keys", "fieldPath": "expiresAt", "writers": ["services/d2-1/outboundKeys.ts"] }
     ],
     "ttlExemptions": [
       { "path": "functions/src/p5/mfa.ts", "reason": "MFA approval validity; retention is F42" },

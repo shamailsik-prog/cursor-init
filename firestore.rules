@@ -289,6 +289,8 @@ service cloud.firestore {
     // Server-only: numbering and daily-cap counters, the firm transliteration map, the domain event outbox.
     match /counters/{id} { allow read, write: if false; }
     match /idempotency_keys/{id} { allow read, write: if false; }
+    // W1-Q14R3: outbound key hash and firmId only. Firestore TTL on expiresAt. No client read or write.
+    match /whatsapp_outbound_keys/{id} { allow read, write: if false; }
     match /idempotency_effects/{id} { allow read, write: if false; }
     match /rate_limits/{id} { allow read, write: if false; }
     match /transliteration_map/{id} { allow read, write: if false; }

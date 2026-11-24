@@ -140,6 +140,10 @@ function buildBaseTree(): string {
     // files hold the constants (AUDIT_OUTBOX_COLLECTION, MATTER_TOMBSTONES) the copied Functions sources name them by.
     "platform/persistence/auditOutboxContract.ts",
     "platform/retention/tombstone.ts",
+    // W1-Q14R3: whatsapp_outbound_keys is a manifest TTL writer and is named only by
+    // WHATSAPP_OUTBOUND_KEYS_COLLECTION. The stripped tree has to contain that file, the same
+    // way the two files above name server-only collections, or checks [20] and [22] fail.
+    "services/d2-1/outboundKeys.ts",
     // Check [20] (audit F42): the runbook of the retention.deletion_unacknowledged alert.
     "docs/runbooks/retention-deletion.md",
     // Check [24] (audit F46): hash-pinned runtime manifests, image digests, SBOM, and e2e scripts that must match.

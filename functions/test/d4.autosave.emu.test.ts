@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { FieldPath, Timestamp, type DocumentData } from "firebase-admin/firestore"
+import { FieldPath, FieldValue, Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { afterEach, describe, expect, it } from "vitest"
 import type { Classification } from "@/platform/p1/types"
 import { CLASSIFICATION_RANKS } from "@/platform/p1/types"
@@ -604,5 +604,94 @@ describe.skipIf(!EMULATORS)("L5.1 autosave points", () => {
     expect(CLASSIFICATION_RANKS[version?.classification as Classification]).toBeGreaterThanOrEqual(CLASSIFICATION_RANKS.internal)
     expect((await draftDoc(draft.draftId))?.classification).toBe("privileged")
     expect(versionShape(await versionDoc(draft.draftId, 1)).body).toBe("Original formal body.")
+  })
+
+  it("a restore's label is never below the current matter label", async () => {
+    enable()
+    const { matterId, partner } = await newMatter({ classification: "internal" })
+    const draft = await createDraft(partner, matterId, "Formal body stays on version 1.")
+    const recovered = "Point written while the matter was internal."
+    expect((await autosave(partner, draft.draftId, recovered, 1, 1)).written).toBe(true)
+    const point = (await pointsOf(draft.draftId))[0]
+    expect(point.data.classification).toBe("internal")
+
+    await adminDb().collection("matters").doc(matterId).update({ classification: "confidential" })
+    const restored = await restore(partner, draft.draftId, point.data.pointSeq as number)
+    expect(restored).toMatchObject({ restored: true, saved: true, pointSeq: 1 })
+    const version = await versionDoc(draft.draftId, 2)
+    const matterRank = CLASSIFICATION_RANKS.confidential
+    expect(CLASSIFICATION_RANKS[version?.classification as Classification]).toBeGreaterThanOrEqual(matterRank)
+    expect(version).toMatchObject({ version: 2, body: recovered, classification: "confidential", kind: "save" })
+    expect((await draftDoc(draft.draftId))?.classification).toBe("confidential")
+    expect((await pointsOf(draft.draftId))[0].data.classification).toBe("internal")
+    expect(versionShape(await versionDoc(draft.draftId, 1)).body).toBe("Formal body stays on version 1.")
+  })
+
+  it("a same-firm non-owner gets 404 on a pre-matter draft's timeline", async () => {
+    enable()
+    const { firmId } = await newMatter()
+    const owner = caller(firmId, "partner")
+    const preId = uniq("draft")
+    const secret = "Pre-matter timeline text a non-owner must not see."
+    await adminDb().collection("drafts").doc(preId).set({
+      firmId,
+      matterId: null,
+      createdBy: owner.uid,
+      classification: "internal",
+      currentVersion: 1,
+      title: TITLE,
+      status: "draft",
+      locked: false,
+      documentTypeId: TYPE,
+    })
+    expect((await autosave(owner, preId, secret, 1, 1)).written).toBe(true)
+
+    const nonOwner = caller(firmId, "partner")
+    const hidden = await refusal(timeline(nonOwner, preId))
+    expectErr(hidden, 404, "not_found")
+    expect(hidden.message).not.toContain(secret)
+    expect(await timeline(owner, preId)).toMatchObject({ items: [{ pointSeq: 1, classification: "internal" }], nextCursor: null })
+  })
+
+  it("re-checks membership, clearance, the head cursor and the draft inside the write", async () => {
+    enable()
+    const { firmId, matterId, partner } = await newMatter({ classification: "internal" })
+    const associate = caller(firmId, "associate", "internal")
+    await addMember(firmId, matterId, associate.uid)
+    const draft = await createDraft(partner, matterId, "Version one.")
+    expect((await autosave(partner, draft.draftId, "first point", 1, 1)).written).toBe(true)
+
+    await adminDb().collection("matter_members").doc(`${matterId}_${associate.uid}`).delete()
+    expectErr(await refusal(autosave(associate, draft.draftId, "after removal", 2, 1)), 404, "not_found")
+    expectErr(await refusal(timeline(associate, draft.draftId)), 404, "not_found")
+    expectErr(await refusal(restore(associate, draft.draftId, 1)), 404, "not_found")
+    expect(await pointsOf(draft.draftId)).toHaveLength(1)
+    expect(await versionDoc(draft.draftId, 2)).toBeUndefined()
+
+    const low = caller(firmId, "associate", "internal")
+    await addMember(firmId, matterId, low.uid)
+    await adminDb().collection("matters").doc(matterId).update({ classification: "confidential" })
+    expectErr(await refusal(autosave(low, draft.draftId, "above clearance", 2, 1)), 403, "clearance")
+    expectErr(await refusal(timeline(low, draft.draftId)), 403, "clearance")
+    expectErr(await refusal(restore(low, draft.draftId, 1)), 403, "clearance")
+    expect(await pointsOf(draft.draftId)).toHaveLength(1)
+    expect(await versionDoc(draft.draftId, 2)).toBeUndefined()
+
+    const headId = `${draft.draftId}~head`
+    const headBefore = (await adminDb().collection("draft_autosave_points").doc(headId).get()).data()
+    await adminDb().collection("draft_autosave_points").doc(headId).update({ firmId: uniq("firm") })
+    expectErr(await refusal(autosave(partner, draft.draftId, "bad head", 2, 1)), 409, "draft_changed")
+    expect(await pointsOf(draft.draftId)).toHaveLength(1)
+    await adminDb().collection("draft_autosave_points").doc(headId).update({ firmId: headBefore?.firmId })
+
+    await adminDb().collection("drafts").doc(draft.draftId).update({ currentVersion: "not-a-version" })
+    expectErr(await refusal(autosave(partner, draft.draftId, "bad version", 2, 1)), 409, "draft_changed")
+    expect(await pointsOf(draft.draftId)).toHaveLength(1)
+    await adminDb().collection("drafts").doc(draft.draftId).update({ currentVersion: 1 })
+
+    await adminDb().collection("drafts").doc(draft.draftId).update({ title: FieldValue.delete() })
+    expectErr(await refusal(restore(partner, draft.draftId, 1)), 404, "not_found")
+    expect(await versionDoc(draft.draftId, 2)).toBeUndefined()
+    expect((await pointsOf(draft.draftId))[0].data.referencedByRestore).toBe(false)
   })
 })
