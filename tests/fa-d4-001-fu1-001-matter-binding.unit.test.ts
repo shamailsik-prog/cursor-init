@@ -223,4 +223,28 @@ describe("FA-D4-001-FU1-001 deletion reach", () => {
     expect(reach).toBeGreaterThan(0)
     expect(enqueue).toBeGreaterThan(reach)
   })
+
+  it("C2: an empty matterId is unbound", () => {
+    expect(decideCourtOpsReach({
+      collection: "workflow_ops_activity",
+      id: `ops:court_ops:ack:${F}:follow_up:${X}`,
+      row: { firmId: F, matterId: "", followUpId: X, queueType: "follow_up", action: "court_ops_acknowledge", source: "court_ops" },
+      parent: { firmId: F, matterId: "" },
+    })).toEqual({ action: "report", reason: "matter_unbound" })
+  })
+
+  it("B9: prepare keeps the fenced court-ops-reach hold check", () => {
+    const src = readFileSync("functions/src/retention/saga.ts", "utf8")
+    const prep = src.slice(src.indexOf("async function prepareSteps"), src.indexOf("async function halt"))
+    const step = prep.indexOf('"court-ops-reach"')
+    expect(step).toBeGreaterThan(prep.indexOf("reachCourtOpsDeletion"))
+    expect(prep.slice(step, step + 220)).toContain("assertNoHold(tx, firmId, req.matterId)")
+  })
+
+  it("A3: the deleting matter's hold is read inside the page transaction", () => {
+    const src = readFileSync("functions/src/retention/courtOpsDeletionReach.ts", "utf8")
+    const page = src.slice(src.indexOf("return input.db.runTransaction"), src.indexOf("function writeCourtOpsPage"))
+    expect(page).toContain("const hold = await tx.get(input.db.collection(LEGAL_HOLDS_COLLECTION).doc(input.deletingMatterId))")
+    expect(page).not.toContain(".doc(input.deletingMatterId).get()")
+  })
 })

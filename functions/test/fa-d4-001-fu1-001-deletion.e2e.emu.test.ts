@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { Timestamp } from "firebase-admin/firestore"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import shippedPolicy from "@/infra/retention/policy.json"
@@ -10,7 +13,7 @@ import { enqueueJob } from "../src/p2/enqueue"
 import { JobError } from "../src/p2/errors"
 import { runJobTask } from "../src/p2/worker"
 import { retentionTestSeam, storeKey, type RetentionPolicy } from "../src/retention/config"
-import { reachCourtOpsDeletion } from "../src/retention/courtOpsDeletionReach"
+import { courtOpsUnlinkedCollection, courtOpsUnlinkedSample, reachCourtOpsDeletion } from "../src/retention/courtOpsDeletionReach"
 import { DELETION_REQUESTS_COLLECTION, LEGAL_HOLDS_COLLECTION, PREPARE_JOB_TYPE, PURGE_JOB_TYPE } from "../src/retention/model"
 import { viaApi } from "./api"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
@@ -50,6 +53,18 @@ describe.skipIf(!EMULATORS)("FA-D4-001-FU1-001 deletion reach", () => {
     delete seam.courtOpsReachMaxPages
     delete seam.afterCourtOpsReachPage
     delete retentionTestSeam.policy
+    if (firms.length > 0) {
+      const db = adminDb()
+      const reqs = await db.collection(DELETION_REQUESTS_COLLECTION).where("firmId", "in", firms.slice(0, 30)).get()
+      for (const req of reqs.docs) {
+        const chunks = await req.ref.collection(courtOpsUnlinkedCollection()).get()
+        for (let start = 0; start < chunks.size; start += 400) {
+          const batch = db.batch()
+          for (const doc of chunks.docs.slice(start, start + 400)) batch.delete(doc.ref)
+          await batch.commit()
+        }
+      }
+    }
     if (firms.length === 0 && uids.length === 0) return
     await deleteFirmScopedData(firms.splice(0), uids.splice(0))
   })
@@ -119,7 +134,9 @@ describe.skipIf(!EMULATORS)("FA-D4-001-FU1-001 deletion reach", () => {
     const goneItem = uniq("doc")
     await db.collection("document_workflow").doc(liveItem).set({ documentId: liveItem, firmId, matterId: live })
     await db.collection("document_workflow").doc(goneItem).set({ documentId: goneItem, firmId, matterId: gone })
-    await db.collection(MATTER_TOMBSTONES).doc(gone).set({ firmId, matterId: gone })
+    const yRequest = uniq("yreq")
+    await db.collection(DELETION_REQUESTS_COLLECTION).doc(yRequest).set({ firmId, matterId: gone, status: "in_progress", plan: PURGE })
+    await db.collection(MATTER_TOMBSTONES).doc(gone).set({ firmId, matterId: gone, requestId: yRequest })
     const liveAck = `ops:court_ops:ack:${firmId}:workflow:${liveItem}`
     const goneAck = `ops:court_ops:ack:${firmId}:workflow:${goneItem}`
     await db.collection("workflow_ops_activity").doc(liveAck).set({
@@ -229,10 +246,15 @@ describe.skipIf(!EMULATORS)("FA-D4-001-FU1-001 deletion reach", () => {
     }
     await reachCourtOpsDeletion({ db, firmId, deletingMatterId: matterId, requestId })
     const request = (await db.collection(DELETION_REQUESTS_COLLECTION).doc(requestId).get()).data()
-    expect(request?.courtOpsUnlinked).toHaveLength(401)
+    expect(request?.courtOpsUnlinked).toHaveLength(courtOpsUnlinkedSample())
     expect(request?.courtOpsUnlinkedCount).toBe(401)
-    expect(request?.courtOpsUnlinkedTruncated).not.toBe(true)
-    expect(request?.courtOpsUnlinked).toEqual(expect.arrayContaining([ids[0], ids[400]]))
+    expect(request?.courtOpsUnlinkedTruncated).toBe(true)
+    expect(request?.courtOpsUnlinked).toContain(ids[0])
+    const stored = new Set<string>()
+    const chunks = await db.collection(DELETION_REQUESTS_COLLECTION).doc(requestId).collection(courtOpsUnlinkedCollection()).get()
+    for (const doc of chunks.docs) for (const id of doc.get("ids") as string[]) stored.add(id)
+    expect(stored.size).toBe(401)
+    expect(stored.has(ids[400])).toBe(true)
     expect((await db.collection("follow_ups").doc(ids[400]).get()).exists).toBe(true)
   }, 120_000)
 
@@ -435,6 +457,111 @@ describe.skipIf(!EMULATORS)("FA-D4-001-FU1-001 deletion reach", () => {
     expect(stored?.plan?.[storeKey("firestore:follow_ups")]).toBe("retained")
     expect(stored?.courtOpsUnlinked).toEqual(expect.arrayContaining([loose, orphan]))
   }, 120_000)
+
+  it("DEL-264-R2-001: deleting X keeps Y's rows when Y is approved, held, and halted, and when Y's own plan is not purge", async () => {
+    const { db, firmId, matterId, requestId } = await opened()
+    const held = uniq("heldy")
+    const retained = uniq("retny")
+    const heldRequest = uniq("heldreq")
+    const retainedRequest = uniq("retreq")
+    await db.collection(DELETION_REQUESTS_COLLECTION).doc(heldRequest).set({
+      firmId, matterId: held, status: "in_progress", plan: PURGE, halted: { code: "legal_hold_active" },
+    })
+    await db.collection(DELETION_REQUESTS_COLLECTION).doc(retainedRequest).set({
+      firmId, matterId: retained, status: "in_progress", plan: RETAIN,
+    })
+    await db.collection(LEGAL_HOLDS_COLLECTION).doc(held).set({ firmId, active: true })
+    await db.collection(MATTER_TOMBSTONES).doc(held).set({ firmId, matterId: held, requestId: heldRequest })
+    await db.collection(MATTER_TOMBSTONES).doc(retained).set({ firmId, matterId: retained, requestId: retainedRequest })
+    const heldItem = uniq("helddoc")
+    const retainedItem = uniq("retdoc")
+    await db.collection("document_workflow").doc(heldItem).set({ documentId: heldItem, firmId, matterId: held })
+    await db.collection("document_workflow").doc(retainedItem).set({ documentId: retainedItem, firmId, matterId: retained })
+    const heldAck = `ops:court_ops:ack:${firmId}:workflow:${heldItem}`
+    const retainedAck = `ops:court_ops:ack:${firmId}:workflow:${retainedItem}`
+    await db.collection("workflow_ops_activity").doc(heldAck).set({
+      firmId, matterId: null, documentId: heldItem, queueType: "workflow", action: "court_ops_acknowledge", source: "court_ops",
+    })
+    await db.collection("workflow_ops_activity").doc(retainedAck).set({
+      firmId, matterId: null, documentId: retainedItem, queueType: "workflow", action: "court_ops_acknowledge", source: "court_ops",
+    })
+    const result = await reachCourtOpsDeletion({ db, firmId, deletingMatterId: matterId, requestId })
+    expect(result.removed).toBe(0)
+    expect((await db.collection("workflow_ops_activity").doc(heldAck).get()).get("matterId")).toBe(held)
+    expect((await db.collection("workflow_ops_activity").doc(retainedAck).get()).get("matterId")).toBe(retained)
+    const request = (await db.collection(DELETION_REQUESTS_COLLECTION).doc(requestId).get()).data()
+    expect(request?.courtOpsUnlinkedReasons?.[heldAck]).toBe("tombstoned")
+    expect(request?.courtOpsUnlinkedReasons?.[retainedAck]).toBe("tombstoned")
+  })
+
+  it("CAP-264-R2-003: eleven thousand unlinked ids are stored off the request and the reach finishes", async () => {
+    const { db, firmId, matterId, requestId } = await opened()
+    const n = 11_000
+    const ids = Array.from({ length: n }, (_, i) => `k${String(i).padStart(5, "0")}${firmId}`)
+    for (let start = 0; start < n; start += 400) {
+      const batch = db.batch()
+      for (const id of ids.slice(start, start + 400)) batch.set(db.collection("follow_ups").doc(id), { firmId, matterId: null, raw: "k" })
+      await batch.commit()
+    }
+    const result = await reachCourtOpsDeletion({ db, firmId, deletingMatterId: matterId, requestId })
+    expect(result.removed).toBe(0)
+    expect(result.reported).toBe(n)
+    const request = (await db.collection(DELETION_REQUESTS_COLLECTION).doc(requestId).get()).data()
+    expect(request?.courtOpsUnlinked).toHaveLength(courtOpsUnlinkedSample())
+    expect(request?.courtOpsUnlinkedCount).toBe(n)
+    expect(request?.courtOpsUnlinkedTruncated).toBe(true)
+    const stored = new Set<string>()
+    const chunks = await db.collection(DELETION_REQUESTS_COLLECTION).doc(requestId).collection(courtOpsUnlinkedCollection()).get()
+    for (const doc of chunks.docs) for (const id of doc.get("ids") as string[]) stored.add(id)
+    expect(stored.size).toBe(n)
+    expect(stored.has(ids[0])).toBe(true)
+    expect(stored.has(ids[n - 1])).toBe(true)
+    expect((await db.collection("follow_ups").doc(ids[n - 1]).get()).exists).toBe(true)
+  }, 240_000)
+
+  it("R2-004: a request with the wrong firm, matter, or status changes nothing", async () => {
+    const { db, firmId, matterId, requestId } = await opened()
+    const id = uniq("guard")
+    await db.collection("follow_ups").doc(id).set({ firmId, matterId: null, raw: "x" })
+    const reach = () => reachCourtOpsDeletion({ db, firmId, deletingMatterId: matterId, requestId })
+    await db.collection(DELETION_REQUESTS_COLLECTION).doc(requestId).set({ firmId: uniq("other"), matterId, status: "in_progress", plan: PURGE })
+    await expect(reach()).rejects.toMatchObject({ code: "deletion_request_invalid" })
+    await db.collection(DELETION_REQUESTS_COLLECTION).doc(requestId).set({ firmId, matterId: uniq("other"), status: "in_progress", plan: PURGE })
+    await expect(reach()).rejects.toMatchObject({ code: "deletion_request_invalid" })
+    await db.collection(DELETION_REQUESTS_COLLECTION).doc(requestId).set({ firmId, matterId, status: "completed", plan: PURGE })
+    await expect(reach()).rejects.toMatchObject({ code: "deletion_request_invalid" })
+    expect((await db.collection("follow_ups").doc(id).get()).get("matterId")).toBeNull()
+    expect((await db.collection(DELETION_REQUESTS_COLLECTION).doc(requestId).get()).get("courtOpsUnlinked")).toBeUndefined()
+  })
+
+  it("C2: an acknowledgement whose parent matterId is empty is recorded, not stamped", async () => {
+    const { db, firmId, matterId, requestId } = await opened()
+    const parent = uniq("blank")
+    await db.collection("follow_ups").doc(parent).set({ firmId, matterId: "", raw: "blank parent" })
+    const ack = `ops:court_ops:ack:${firmId}:follow_up:${parent}`
+    await db.collection("workflow_ops_activity").doc(ack).set({
+      firmId, matterId: null, followUpId: parent, queueType: "follow_up", action: "court_ops_acknowledge", source: "court_ops",
+    })
+    await reachCourtOpsDeletion({ db, firmId, deletingMatterId: matterId, requestId })
+    expect((await db.collection("workflow_ops_activity").doc(ack).get()).get("matterId")).toBeNull()
+    const request = (await db.collection(DELETION_REQUESTS_COLLECTION).doc(requestId).get()).data()
+    expect(request?.courtOpsUnlinkedReasons?.[ack]).toBe("matter_unbound")
+  })
+
+  it("A3: the deleting matter's hold is read inside the page transaction", () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../src/retention/courtOpsDeletionReach.ts"), "utf8")
+    const page = src.slice(src.indexOf("return input.db.runTransaction"), src.indexOf("function writeCourtOpsPage"))
+    expect(page).toContain("const hold = await tx.get(input.db.collection(LEGAL_HOLDS_COLLECTION).doc(input.deletingMatterId))")
+    expect(page).not.toContain(".doc(input.deletingMatterId).get()")
+  })
+
+  it("B9: prepare keeps the fenced court-ops-reach hold check", () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../src/retention/saga.ts"), "utf8")
+    const prep = src.slice(src.indexOf("async function prepareSteps"), src.indexOf("async function halt"))
+    const step = prep.indexOf('"court-ops-reach"')
+    expect(step).toBeGreaterThan(prep.indexOf("reachCourtOpsDeletion"))
+    expect(prep.slice(step, step + 220)).toContain("assertNoHold(tx, firmId, req.matterId)")
+  })
 
   it("A27: a reach failure fails the prepare job and enqueues no purge", async () => {
     const { db, firmId, matterId, requestId } = await opened()
