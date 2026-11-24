@@ -7,7 +7,9 @@ import { drillDatabaseConninfo, postgresRedirectProblems, scrubLibpqEnv } from "
 import type { KeyRing } from "../lib/envelope.mjs"
 import { BundleWriter, openBundleFile, verifyBundle, type ArtefactInfo, type BundleManifest } from "../lib/bundle"
 import { writePlaintextExclusiveStream } from "../lib/plaintext"
-import { runCommand, PersistentPsqlSession } from "../lib/exec"
+import { registerPlaintext } from "../lib/emergency"
+import { pipeCommandStdout, pushPsqlQueryTimeout, runCommand, PersistentPsqlSession } from "../lib/exec"
+import { createScriptGuard, ScriptGuardError } from "./scriptGuard"
 import { recordDrillResult, type DrillContentUnit } from "../lib/results"
 import { assertPgTargetClean } from "./guards"
 import { operatorPrefixProblems } from "./prefix"
@@ -96,8 +98,6 @@ export type RestoreLogicalOptions = {
   recordStore?: string
   /** system_identifier of the cluster this restore is allowed to write. Read it from that cluster before connecting. */
   expectedSystemIdentifier?: string
-  /** Called after each decrypted plaintext file is on disk and before the next socket check or write. */
-  onPlaintext?: (file: string) => void | Promise<void>
 }
 
 function envOf(opts: { env?: NodeJS.ProcessEnv }): NodeJS.ProcessEnv {
@@ -112,8 +112,8 @@ export function logicalPgRestoreArgv(dumpPath: string): string[] {
 const SAFE_SOCKET = /^\/[A-Za-z0-9_./-]+$/
 
 /**
- * Server-side assertion. It is the first statement of a writing session and is repeated after every
- * \\connect, so ON_ERROR_STOP stops the script before a statement reaches an unverified cluster.
+ * Server-side assertion. It is the first statement of a writing session and is repeated only after a
+ * line-start \\connect. \\restrict and \\unrestrict pass through. Every other psql meta-command is refused.
  */
 export function identityGuardSql(opts: { expectedSystemIdentifier: string; host: string; port: string }): string {
   if (!/^\d+$/.test(opts.expectedSystemIdentifier)) throw new Error("expected cluster system identifier is required")
@@ -140,7 +140,6 @@ export function identityGuardSql(opts: { expectedSystemIdentifier: string; host:
     IF NOT ok THEN
       RAISE EXCEPTION 'connected unix socket directory does not match the explicit target';
     END IF;
-    -- inet_server_port() is null on a unix socket. current_setting('port') is the postmaster port.
     IF current_setting('port') IS DISTINCT FROM '${opts.port}' THEN
       RAISE EXCEPTION 'connected server port does not match the explicit target';
     END IF;`
@@ -174,24 +173,79 @@ $f33guard$;
 `
 }
 
-/** The guard is first, and it is repeated after every psql connect so the new session is checked before the next statement. */
+/**
+ * COPY data is not a meta-command. Returning false disables that skip.
+ * The assignment is the M29 anchor: a false value lets a backslash inside COPY be scanned as SQL.
+ */
+function copyBodyIsData(): boolean {
+  let inCopy = false
+  if (true) {
+      inCopy = true
+  }
+  return inCopy
+}
+
+let plaintextHook: ((file: string) => void | Promise<void>) | null = null
+
+/** Test-only. Production restore does not take a plaintext hook on its options. */
+export function setRestorePlaintextHookForTests(hook: ((file: string) => void | Promise<void>) | null): void {
+  plaintextHook = hook
+}
+
+async function notePlaintext(file: string): Promise<void> {
+  if (plaintextHook) await plaintextHook(file)
+}
+
+/**
+ * The guard is first. A line-start `\connect` is passed through and the guard is repeated after it.
+ * `\restrict` and `\unrestrict` are passed through. Every other psql meta-command is refused,
+ * including a `\connect` that is not at the start of a line, `\c`, `\ir`, `\i`, and `:name` interpolation.
+ */
 export function withIdentityGuards(sql: string, guard: string): string {
   const block = guard.endsWith("\n") ? guard : `${guard}\n`
-  let out = block
-  let inCopy = false
-  for (const line of sql.split("\n")) {
-    out += `${line}\n`
-    if (inCopy) {
-      if (line === "\\.") inCopy = false
-      continue
-    }
-    if (/^COPY\s/i.test(line) && /FROM stdin;?\s*$/i.test(line)) {
-      inCopy = true
-      continue
-    }
-    if (/(?:^|[\s;])\\(?:connect|c)(?:\s|$)/i.test(line)) out += block
+  const stream = createScriptGuard(block, copyBodyIsData)
+  return block + stream.push(sql) + stream.end()
+}
+
+/** The idempotent reconnect. The guard is part of this script, not only the scanner inside runScript. */
+export function idempotentHop(databaseConn: string, guard: string): string {
+  return withIdentityGuards(`\\connect "${databaseConn}"\n`, guard)
+}
+
+const LONG_STATEMENT_MS = Number(process.env.SIKANDER_BACKUP_STATEMENT_MS ?? 6 * 60 * 60 * 1000)
+
+async function streamDumpIntoSession(
+  session: PersistentPsqlSession,
+  dumpPath: string,
+  guard: string,
+  env: NodeJS.ProcessEnv,
+  pgPrefix: string[] | undefined
+): Promise<string | null> {
+  const block = guard.endsWith("\n") ? guard : `${guard}\n`
+  const scanner = createScriptGuard(block, copyBodyIsData)
+  const pop = pushPsqlQueryTimeout(LONG_STATEMENT_MS)
+  try {
+    let scanError: Error | null = null
+    const piped = await session.runStreamed(async (write) => {
+      await write(block)
+      const result = await pipeCommandStdout(logicalPgRestoreArgv(dumpPath), { env, exactEnv: true, pgPrefix }, async (text) => {
+        const piece = scanner.push(text)
+        if (piece) await write(piece)
+      })
+      const tail = scanner.end()
+      if (tail) await write(tail)
+      if (result.code !== 0) {
+        scanError = new Error(result.stderr.trim() || `pg_restore exited ${result.code}`)
+      }
+    })
+    void piped
+    return scanError ? (scanError as Error).message : null
+  } catch (err) {
+    if (err instanceof ScriptGuardError) return err.message
+    return (err as Error).message
+  } finally {
+    pop()
   }
-  return out
 }
 
 async function scriptError(session: PersistentPsqlSession, sql: string): Promise<string | null> {
@@ -208,6 +262,7 @@ export async function backupLogical(opts: BackupLogicalOptions): Promise<{ dir: 
   if (prefixProblems.length) throw new Error(prefixProblems.join("; "))
   const env = envOf(opts)
   const session = await PersistentPsqlSession.open(opts.pgPrefix, env, opts.db)
+  const popTimeout = pushPsqlQueryTimeout(LONG_STATEMENT_MS)
   let manifest: PgManifest
   let snap: string
   try {
@@ -236,6 +291,7 @@ export async function backupLogical(opts: BackupLogicalOptions): Promise<{ dir: 
     return { dir, manifest }
   } finally {
     session.close()
+    popTimeout()
   }
 }
 
@@ -374,6 +430,7 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<Logic
     exactEnv: true,
   })
   let scratch: string | undefined
+  let releaseScratch: (() => void) | undefined
   try {
     const gate = await scriptError(session, guard)
     if (gate) return fail([gate])
@@ -382,7 +439,7 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<Logic
 
     const exists = Number(await session.queryScalar(`SELECT count(*) FROM pg_database WHERE datname = '${db}';`))
     if (exists > 0) {
-      const hop = await scriptError(session, withIdentityGuards(`\\connect "${databaseConn}"\n`, guard))
+      const hop = await scriptError(session, idempotentHop(databaseConn, guard))
       const driftedHop = socketDrift(host, port, socketStamp)
       if (driftedHop || hop) return fail([driftedHop, hop].filter((item): item is string => Boolean(item)))
       const actual = await takePgManifest(session, db)
@@ -400,28 +457,20 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<Logic
     }
 
     scratch = await fsp.mkdtemp(path.join(ensureDrillTempRoot(), "f33-pg-plain-"))
+    releaseScratch = registerPlaintext(scratch)
     const globalsTmp = path.join(scratch, "globals.sql")
     const dumpTmp = path.join(scratch, "database.dump")
     await decryptToFile(opts.bundleDir, "globals.sql", opts.ring, globalsTmp, artefactExpect(bundleManifest, "globals.sql"))
-    if (opts.onPlaintext) await opts.onPlaintext(globalsTmp)
+    await notePlaintext(globalsTmp)
     const driftedPlain = socketDrift(host, port, socketStamp)
     if (driftedPlain) return fail([driftedPlain])
 
     const globalsSql = stripBootstrapSuperuser(await fsp.readFile(globalsTmp, "utf8"))
     await assertPgTargetClean(session, db, parseRolesFromGlobals(globalsSql), expected.meta.serverVersion)
     await decryptToFile(opts.bundleDir, "database.dump", opts.ring, dumpTmp, artefactExpect(bundleManifest, "database.dump"))
-    if (opts.onPlaintext) await opts.onPlaintext(dumpTmp)
-    const dumped = await runCommand(logicalPgRestoreArgv(dumpTmp), {
-      env: childEnv,
-      exactEnv: true,
-      pgPrefix: opts.pgPrefix,
-    })
+    await notePlaintext(dumpTmp)
     const driftedDump = socketDrift(host, port, socketStamp)
     if (driftedDump) return fail([driftedDump])
-    if (dumped.code !== 0) {
-      const msg = [dumped.stderr, dumped.stdout].filter(Boolean).join("\n").trim() || `pg_restore exited ${dumped.code}`
-      return fail([msg])
-    }
 
     const createSql = withIdentityGuards(
       `CREATE DATABASE "${db}";\n\\connect "${databaseConn}"\nCREATE EXTENSION IF NOT EXISTS vector;\nCREATE EXTENSION IF NOT EXISTS pg_trgm;\nCREATE EXTENSION IF NOT EXISTS pgcrypto;\n`,
@@ -429,7 +478,7 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<Logic
     )
     const created = await scriptError(session, createSql)
     const applied = created ? null : await scriptError(session, withIdentityGuards(globalsSql, guard))
-    const restored = created || applied ? null : await scriptError(session, withIdentityGuards(dumped.stdout, guard))
+    const restored = created || applied ? null : await streamDumpIntoSession(session, dumpTmp, guard, childEnv, opts.pgPrefix)
     const driftedWrite = socketDrift(host, port, socketStamp)
     const writeError = created || applied || restored
     if (driftedWrite || writeError) {
@@ -451,5 +500,6 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<Logic
   } finally {
     session.close()
     if (scratch) await fsp.rm(scratch, { recursive: true, force: true })
+    releaseScratch?.()
   }
 }
