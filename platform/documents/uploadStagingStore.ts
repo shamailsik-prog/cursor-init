@@ -17,6 +17,7 @@ import {
   objectRoot,
   resolveDocumentObjectBackendKind,
 } from "@/platform/documents/documentObjectStore"
+import { DocumentObjectStoreError } from "@/platform/documents/documentObjectStoreTypes"
 
 const SAFE_SEGMENT = /^[A-Za-z0-9_-]+$/
 
@@ -35,6 +36,59 @@ export const UPLOAD_SESSIONS_COLLECTION = "upload_sessions"
 export const UPLOAD_STAGING_OBJECT_PREFIX = "upload-staging/"
 export const UPLOAD_STAGING_LIFECYCLE_DAYS = 1
 export const LOOSE_MATTER_SEGMENT = "loose"
+
+/**
+ * Firestore allows 500 writes in one batch or transaction. Session deletes stay under that.
+ */
+export const STAGING_FIRESTORE_WRITE_LIMIT = 450
+
+/** A DeleteObject is gone only on 204 (deleted) or 404 (already absent). 403 is not gone. */
+export function stagingDeleteCountsAsGone(status: number | null): boolean {
+  return status === 204 || status === 404
+}
+
+export function chunkFirestoreWrites<T>(items: readonly T[], size = STAGING_FIRESTORE_WRITE_LIMIT): T[][] {
+  if (!Number.isSafeInteger(size) || size < 1 || size > 500) {
+    throw new Error("firestore batch failed validation")
+  }
+  const batches: T[][] = []
+  for (let i = 0; i < items.length; i += size) batches.push(items.slice(i, i + size))
+  return batches
+}
+
+type DeleteStatusProbe = (storagePath: string) => Promise<number>
+let deleteStatusProbe: DeleteStatusProbe | null = null
+
+/** Test-only: the HTTP status the next staging delete observes, in place of a live bucket. */
+export function setStagingDeleteStatusForTests(probe: DeleteStatusProbe | null): void {
+  assertDocumentObjectTestHooksAllowed()
+  deleteStatusProbe = probe
+}
+
+/**
+ * Staging chunks use the document-object bucket. In production that bucket is the vault,
+ * and `applyVaultProtection` sets COMPLIANCE retention on the whole bucket. The one-day
+ * staging lifecycle is not applied, so an S3 backend cannot honestly ack a purge.
+ */
+export function stagingSharesLockedVaultBucket(): boolean {
+  return resolveDocumentObjectBackendKind() === "s3"
+}
+
+export function stagingDeletionAck(sharesLockedVault: boolean): {
+  outcome: "retained" | "purged"
+  detail: { reason: string; locked: boolean; prefix: string; matterScoped: true }
+} {
+  if (sharesLockedVault) {
+    return {
+      outcome: "retained",
+      detail: { reason: "locked_vault_bucket", locked: true, prefix: UPLOAD_STAGING_OBJECT_PREFIX, matterScoped: true },
+    }
+  }
+  return {
+    outcome: "purged",
+    detail: { reason: "prefix_empty", locked: false, prefix: UPLOAD_STAGING_OBJECT_PREFIX, matterScoped: true },
+  }
+}
 
 // L9.1 upload-staging. Chunks are ciphertext in the same AES-GCM format as
 // originals. The key is upload-staging/${firmId}/${matterSegment}/${sessionId}/${fileIdx}/${chunkIdx}.
@@ -138,13 +192,28 @@ async function readStagingPayload(storagePath: string): Promise<Buffer> {
 
 async function removeStagingPayload(storagePath: string): Promise<void> {
   assertStagingPath(storagePath)
+  if (deleteStatusProbe) {
+    const status = await deleteStatusProbe(storagePath)
+    if (!stagingDeleteCountsAsGone(status)) {
+      throw new DocumentObjectStoreError("delete", "http", status, null, `staging delete refused: HTTP ${status}`)
+    }
+    stagingMemory.delete(storagePath)
+    return
+  }
   const kind = resolveDocumentObjectBackendKind()
   if (kind === "memory") {
     stagingMemory.delete(storagePath)
     return
   }
   if (kind === "s3") {
-    await deleteS3Payload(storagePath)
+    // A completed strict DeleteObject is HTTP 204. A thrown 404 is already gone.
+    // Every other status, including 403 from the vault lock, is still there.
+    try {
+      await deleteS3Payload(storagePath, { strict: true })
+    } catch (err) {
+      if (err instanceof DocumentObjectStoreError && stagingDeleteCountsAsGone(err.httpStatus)) return
+      throw err
+    }
     return
   }
   try {
@@ -265,7 +334,7 @@ async function listFsStaging(keyPrefix: string): Promise<ListedStagingObject[]> 
       }
       if (!entry.isFile() || !entry.name.endsWith(".enc")) continue
       const key = path.relative(root, child).replace(/\.enc$/, "").split(path.sep).join("/")
-      if (!key.startsWith(keyPrefix) || key.split("/").includes("documents")) continue
+      if (!key.startsWith(keyPrefix)) continue
       const info = await stat(child)
       out.push({ storagePath: `${FS_STORAGE_SCHEME}${key}`, key, writtenAtMs: info.mtimeMs })
     }
@@ -287,7 +356,7 @@ export async function listStagingObjects(keyPrefix: string): Promise<ListedStagi
     const out: ListedStagingObject[] = []
     for (const [storagePath, record] of stagingMemory) {
       const key = keyOfStoragePath(storagePath)
-      if (!key.startsWith(keyPrefix) || key.split("/").includes("documents")) continue
+      if (!key.startsWith(keyPrefix)) continue
       out.push({ storagePath, key, writtenAtMs: record.writtenAtMs })
     }
     return out
@@ -295,16 +364,21 @@ export async function listStagingObjects(keyPrefix: string): Promise<ListedStagi
   if (kind === "s3") {
     const listed = await listS3Keys(keyPrefix)
     return listed
-      .filter((item) => item.key.startsWith(keyPrefix) && !item.key.split("/").includes("documents"))
+      .filter((item) => item.key.startsWith(keyPrefix))
       .map((item) => ({ storagePath: `${S3_STORAGE_SCHEME}${item.key}`, key: item.key, writtenAtMs: item.lastModifiedMs }))
   }
   return listFsStaging(keyPrefix)
 }
 
-/** Deletes every staging object under `keyPrefix`. Refuses a prefix outside upload-staging/. */
+/**
+ * Deletes every staging object under `keyPrefix`. A delete counts only when the
+ * object is gone (204 or 404). The prefix is listed again and must be empty.
+ */
 export async function deleteStagingObjectsByPrefix(keyPrefix: string): Promise<number> {
   const listed = await listStagingObjects(keyPrefix)
   for (const item of listed) await removeStagingPayload(item.storagePath)
+  const left = await listStagingObjects(keyPrefix)
+  if (left.length > 0) throw new Error("staging prefix is not empty")
   return listed.length
 }
 
@@ -312,9 +386,13 @@ export async function deleteStagingObjectsByPrefix(keyPrefix: string): Promise<n
  * Deletes staging objects whose own age is at least `ttlMs`. Listing is the object
  * store, not a session index. Original document paths are not listed.
  */
-export async function sweepExpiredStagingObjects(now: number, ttlMs: number): Promise<number> {
+export async function sweepExpiredStagingObjects(
+  now: number,
+  ttlMs: number,
+  keyPrefix: string = UPLOAD_STAGING_OBJECT_PREFIX
+): Promise<number> {
   if (!Number.isSafeInteger(ttlMs) || ttlMs < 1) throw new Error("staging expiry failed validation")
-  const listed = await listStagingObjects(UPLOAD_STAGING_OBJECT_PREFIX)
+  const listed = await listStagingObjects(keyPrefix)
   let removed = 0
   for (const item of listed) {
     if (now - item.writtenAtMs < ttlMs) continue
@@ -326,4 +404,5 @@ export async function sweepExpiredStagingObjects(now: number, ttlMs: number): Pr
 
 export function resetUploadStagingForTests(): void {
   stagingMemory.clear()
+  deleteStatusProbe = null
 }

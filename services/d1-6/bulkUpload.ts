@@ -106,20 +106,79 @@ function sessionPayload(session: BulkUploadSessionRow): Record<string, unknown> 
   return uploadSessionRecord(session)
 }
 
-function sessionFromPayload(id: string, data: Record<string, unknown>): BulkUploadSessionRow | undefined {
-  if (typeof data.firmId !== "string" || !data.firmId) return undefined
-  if (!Array.isArray(data.files) || data.files.some((file) => !file || (file as BulkUploadFileRow).firmId !== data.firmId)) {
+const FILE_STATES = new Set<BulkUploadFileState>(["pending", "uploading", "deduped", "finalised", "failed"])
+
+function storedStagingPath(firmId: string, storagePath: string): boolean {
+  const key = storagePath.startsWith("s3://")
+    ? storagePath.slice("s3://".length)
+    : storagePath.startsWith("fs://")
+      ? storagePath.slice("fs://".length)
+      : ""
+  return key.startsWith(`upload-staging/${firmId}/`) && !key.includes("..")
+}
+
+function parseStoredFile(firmId: string, raw: unknown): BulkUploadFileRow | undefined {
+  if (!raw || typeof raw !== "object") return undefined
+  const file = raw as Record<string, unknown>
+  if (file.firmId !== firmId) return undefined
+  if (typeof file.name !== "string" || file.name.length < 1 || file.name.length > 240) return undefined
+  if (typeof file.size !== "number" || !Number.isSafeInteger(file.size) || file.size < 1) return undefined
+  if (typeof file.sha256 !== "string" || !SHA256_HEX.test(file.sha256)) return undefined
+  if (typeof file.classification !== "string" || !isClassification(file.classification)) return undefined
+  if (typeof file.state !== "string" || !FILE_STATES.has(file.state as BulkUploadFileState)) return undefined
+  if (typeof file.chunkCount !== "number" || !Number.isSafeInteger(file.chunkCount) || file.chunkCount < 1) return undefined
+  if (!Array.isArray(file.receivedChunks) || file.receivedChunks.some((n) => typeof n !== "number" || !Number.isSafeInteger(n))) {
     return undefined
+  }
+  const row: BulkUploadFileRow = {
+    firmId,
+    name: file.name,
+    size: file.size,
+    sha256: file.sha256,
+    classification: file.classification,
+    state: file.state as BulkUploadFileState,
+    chunkCount: file.chunkCount,
+    receivedChunks: [...file.receivedChunks],
+  }
+  if (file.mimeType !== undefined) {
+    if (typeof file.mimeType !== "string" || !MIME.test(file.mimeType)) return undefined
+    row.mimeType = file.mimeType
+  }
+  if (file.docId !== undefined) {
+    if (typeof file.docId !== "string" || file.docId.length < 1) return undefined
+    row.docId = file.docId
+  }
+  return row
+}
+
+/** A stored `upload_sessions` row. Invalid shapes are refused, not coerced into a live session. */
+export function parseStoredUploadSession(id: string, data: Record<string, unknown>): BulkUploadSessionRow | undefined {
+  if (typeof data.firmId !== "string" || !SAFE_SEGMENT.test(data.firmId)) return undefined
+  if (data.matterId !== null && (typeof data.matterId !== "string" || !SAFE_SEGMENT.test(data.matterId) || data.matterId === "loose")) {
+    return undefined
+  }
+  if (typeof data.callerId !== "string" || !SAFE_SEGMENT.test(data.callerId)) return undefined
+  if (typeof data.storagePath !== "string" || !storedStagingPath(data.firmId, data.storagePath)) return undefined
+  if (typeof data.createdAtMs !== "number" || !Number.isFinite(data.createdAtMs)) return undefined
+  if (typeof data.expiresAtMs !== "number" || !Number.isFinite(data.expiresAtMs) || data.expiresAtMs < data.createdAtMs) {
+    return undefined
+  }
+  if (!Array.isArray(data.files) || data.files.length < 1 || data.files.length > BULK_UPLOAD_MAX_FILES) return undefined
+  const files: BulkUploadFileRow[] = []
+  for (const raw of data.files) {
+    const file = parseStoredFile(data.firmId, raw)
+    if (!file) return undefined
+    files.push(file)
   }
   return {
     id,
     firmId: data.firmId,
-    matterId: typeof data.matterId === "string" ? data.matterId : null,
-    callerId: typeof data.callerId === "string" ? data.callerId : "",
-    storagePath: typeof data.storagePath === "string" ? data.storagePath : "",
-    createdAtMs: typeof data.createdAtMs === "number" ? data.createdAtMs : 0,
-    expiresAtMs: typeof data.expiresAtMs === "number" ? data.expiresAtMs : 0,
-    files: data.files as BulkUploadFileRow[],
+    matterId: data.matterId,
+    callerId: data.callerId,
+    storagePath: data.storagePath,
+    createdAtMs: data.createdAtMs,
+    expiresAtMs: data.expiresAtMs,
+    files,
   }
 }
 
@@ -136,15 +195,21 @@ async function forget(store: SpineStore, session: BulkUploadSessionRow): Promise
 }
 
 async function recall(store: SpineStore, sessionId: string): Promise<BulkUploadSessionRow | undefined> {
-  const cached = uploadSessionsOf(store).get(sessionId)
-  if (cached) return cached
-  if (resolvePersistenceMode() !== "firestore") return undefined
-  const data = await readRuntimeDocument(staging.UPLOAD_SESSIONS_COLLECTION, sessionId)
-  if (!data) return undefined
-  const row = sessionFromPayload(sessionId, data)
-  if (!row) return undefined
-  uploadSessionsOf(store).set(sessionId, row)
-  return row
+  if (resolvePersistenceMode() === "firestore") {
+    const data = await readRuntimeDocument(staging.UPLOAD_SESSIONS_COLLECTION, sessionId)
+    if (!data) {
+      uploadSessionsOf(store).delete(sessionId)
+      return undefined
+    }
+    const row = parseStoredUploadSession(sessionId, data)
+    if (!row) {
+      uploadSessionsOf(store).delete(sessionId)
+      return undefined
+    }
+    uploadSessionsOf(store).set(sessionId, row)
+    return row
+  }
+  return uploadSessionsOf(store).get(sessionId)
 }
 
 async function deleteSessionStaging(session: BulkUploadSessionRow): Promise<void> {
@@ -161,10 +226,19 @@ async function deleteSessionStaging(session: BulkUploadSessionRow): Promise<void
  * rows. Does not read or delete original documents. The flag does not gate this:
  * turning the feature off must not keep expired chunks.
  */
-export async function sweepExpiredBulkUploads(store: SpineStore, now: number = Date.now()): Promise<number> {
-  const removed = await staging.sweepExpiredStagingObjects(now, BULK_UPLOAD_STAGING_TTL_MS)
+export async function sweepExpiredBulkUploads(
+  store: SpineStore,
+  now: number = Date.now(),
+  firmId?: string
+): Promise<number> {
+  if (firmId !== undefined && !SAFE_SEGMENT.test(firmId)) {
+    throw new PublicError("bulk upload refused", "bulk_upload_refused")
+  }
+  const prefix = firmId === undefined ? staging.UPLOAD_STAGING_OBJECT_PREFIX : `upload-staging/${firmId}/`
+  const removed = await staging.sweepExpiredStagingObjects(now, BULK_UPLOAD_STAGING_TTL_MS, prefix)
   for (const session of [...uploadSessionsOf(store).values()]) {
     if (!session.firmId || session.expiresAtMs > now) continue
+    if (firmId !== undefined && session.firmId !== firmId) continue
     await forget(store, session)
   }
   return removed
@@ -256,17 +330,17 @@ export async function startBulkUpload(
   caller: BulkUploadCaller
 ): Promise<{ sessionId: string; files: Array<{ fileIdx: number; state: BulkUploadFileState; docId?: string }> }> {
   assertEnabled()
-  // TODO(W1-L45): when isLooseUploadBlocked is on main, refuse a loose-vault
-  // session (matterId === null) before any write when it returns true. It is
-  // not on main at 7ae1a33f, so this module does not call it. The skipped test
-  // is named isLooseUploadBlocked.
+  // TODO(W1-L45): isLooseUploadBlocked is on main and this module does not call
+  // it. Wiring is a follow-up. When it is wired, catch only (404, feature_disabled)
+  // and rethrow every other error. Matter authorization stays in the route.
+  // The skipped test is named isLooseUploadBlocked.
   if (!caller || typeof firmId !== "string" || caller.firmId !== firmId) {
     throw new PublicError("bulk upload refused", "bulk_upload_refused")
   }
-  await sweepExpiredBulkUploads(store)
   if (!SAFE_SEGMENT.test(firmId) || !SAFE_SEGMENT.test(caller.userId)) {
     throw new PublicError("bulk upload refused", "bulk_upload_refused")
   }
+  await sweepExpiredBulkUploads(store, Date.now(), firmId)
   if (matterId !== null && (typeof matterId !== "string" || !SAFE_SEGMENT.test(matterId) || matterId === "loose")) {
     throw new PublicError("bulk upload refused", "bulk_upload_refused")
   }
