@@ -1,20 +1,18 @@
 /**
- * P6 Master Knowledge — the only writer of master tables and master_versions.
- * Every other service calls proposeChange. CI master-write-guard fails any other writer.
- *
- * proposeChange stores a proposal. It does not write the master.
- * applyChange writes one version row and the diff, and returns masterWritten only after that
+ * P6 Master Knowledge. proposeChange stores a proposal and does not write the master.
+ * applyChange and rollbackMaster delegate the write to writeMaster, the only writer of
+ * master tables and master_versions. applyChange returns masterWritten only after the
  * version can be read back. A failed commit throws. Substantive changes need a partner.
  * Model and autonomous actors are refused (L17.5; Layer 18 §10 G-3).
  */
 
 import { randomUUID } from "node:crypto"
 import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
+import { effectiveClass, nextSnapshot } from "@/platform/p6/masterWrite"
 import {
-  canonicalPayload,
   normalizeActorKey,
   payloadDigest,
-  payloadHasPollutingKey,
+  writeMaster,
   type CommitVersionResult,
   type MasterDiff,
   type MasterSnapshot,
@@ -60,21 +58,6 @@ export type RolledBackMaster = {
 }
 
 const IMMUTABLE_KEYS = new Set(["citation_protocol", "verification_protocol"])
-
-/** Cosmetic only when the diff is whitespace or object-key order. Anything else is substantive. A caller cannot lower that. A payload that carries __proto__, constructor, or prototype at any depth is substantive. */
-function effectiveClass(
-  requested: "cosmetic" | "substantive" | null | undefined,
-  before: unknown,
-  after: unknown,
-): "cosmetic" | "substantive" {
-  if (payloadHasPollutingKey(after) || (before !== undefined && payloadHasPollutingKey(before))) {
-    return "substantive"
-  }
-  const formatOnly = before !== undefined && canonicalPayload(before, true) === canonicalPayload(after, true)
-  const derived = formatOnly ? "cosmetic" : "substantive"
-  if (requested === "substantive") return "substantive"
-  return derived
-}
 
 function actorKey(value: string): string {
   return normalizeActorKey(value)
@@ -207,20 +190,6 @@ export async function approveProposal(
   })
 }
 
-function nextSnapshot(before: MasterSnapshot, row: PersistedProposal): MasterSnapshot {
-  return {
-    entries: {
-      ...before.entries,
-      [row.entryKey]: {
-        partition: "mutable",
-        key: row.entryKey,
-        body: row.payload,
-        classification: row.classification,
-      },
-    },
-  }
-}
-
 async function finishCommit(
   outcome: CommitVersionResult,
   store: MasterStore,
@@ -288,20 +257,23 @@ export async function applyChange(proposalId: string, store: MasterStore): Promi
     }
     const saved = await tx.casProposal(next, fromStatus)
     if (!saved) throw new Error("proposal status changed")
-    await tx.allowDeclassify(row.declassify)
-    const committed = await tx.commitVersion({
-      firmId: row.firmId,
-      proposalId: row.id,
-      action: "apply",
-      diff,
-      snapshot: after,
-      authorId,
-      authorKind,
-      restoredFromVersionId: null,
-      classification: snapshotClass(after, row.classification),
-      proposal: next,
-      expectedBaseVersionId: base,
-    })
+    const committed = await writeMaster(
+      {
+        firmId: row.firmId,
+        proposalId: row.id,
+        action: "apply",
+        diff,
+        snapshot: after,
+        authorId,
+        authorKind,
+        restoredFromVersionId: null,
+        classification: snapshotClass(after, row.classification),
+        proposal: next,
+        expectedBaseVersionId: base,
+      },
+      tx,
+      { declassify: row.declassify },
+    )
     if (!committed.committed) throw new Error("master write did not commit")
     return committed
   })
@@ -326,20 +298,23 @@ export async function rollbackMaster(
     const targetClass = snapshotClass(after, "internal")
     const classification = input.actor.declassify === true ? targetClass : higherClass(current, targetClass)
     const diff: MasterDiff = { key: "*", partition: "mutable", before, after }
-    await tx.allowDeclassify(input.actor.declassify === true)
-    const committed = await tx.commitVersion({
-      firmId: input.firmId,
-      proposalId: null,
-      action: "rollback",
-      diff,
-      snapshot: after,
-      authorId: input.actor.actorId,
-      authorKind: "partner",
-      restoredFromVersionId: target.id,
-      classification,
-      proposal: null,
-      expectedBaseVersionId: base,
-    })
+    const committed = await writeMaster(
+      {
+        firmId: input.firmId,
+        proposalId: null,
+        action: "rollback",
+        diff,
+        snapshot: after,
+        authorId: input.actor.actorId,
+        authorKind: "partner",
+        restoredFromVersionId: target.id,
+        classification,
+        proposal: null,
+        expectedBaseVersionId: base,
+      },
+      tx,
+      { declassify: input.actor.declassify === true },
+    )
     if (!committed.committed) throw new Error("master write did not commit")
     return committed
   })

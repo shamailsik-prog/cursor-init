@@ -136,6 +136,10 @@ export type LateWrite = {
   reads: Array<{ read: LateRead; specs: TraceSource[] }>
 }
 
+// PURGE-264-R3-003: court-ops reach does not treat a completed request as live. Another matter's deletion
+// stamps that matter's leftover rows and records them for an operator sweep; it does not delete them.
+// This seam still treats completed as live. A P1 write that lands after the request has finished must
+// lose the matter id. Removing completed here would keep that write bound to the deleted matter.
 const LIVE_REQUEST: ReadonlySet<unknown> = new Set(["in_progress", "completed"])
 
 /**
