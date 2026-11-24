@@ -34,7 +34,7 @@ export type ManualTick = {
   at: string
 }
 
-/** What has already been produced. There is no fee input: the fee tick is manual. */
+/** What has already been produced. There is no fee input: the fee tick is manual. An annexure id ticks only the annexure item with that same id. */
 export type Produced = {
   affidavitId?: string | null
   docketId?: string | null
@@ -136,9 +136,14 @@ function text(value: unknown): string | null {
   return trimmed === "" ? null : trimmed
 }
 
-function annexuresPresent(value: unknown): boolean {
-  if (!Array.isArray(value)) return false
-  return value.some((entry) => typeof entry === "string" && entry.trim() !== "")
+function annexureIdSet(value: unknown): Set<string> {
+  const ids = new Set<string>()
+  if (!Array.isArray(value)) return ids
+  for (const entry of value) {
+    const id = text(entry)
+    if (id !== null) ids.add(id)
+  }
+  return ids
 }
 
 function ticksOf(produced: Produced): Map<string, Actor> {
@@ -160,12 +165,12 @@ function normalizeProduced(produced: Produced | null | undefined): Produced {
   return produced
 }
 
-function settle(item: ChecklistItem, produced: Produced, ticks: Map<string, Actor>): ReadinessItem {
+function settle(item: ChecklistItem, produced: Produced, ticks: Map<string, Actor>, annexureIds: Set<string>): ReadinessItem {
   const manual = ticks.get(item.id) ?? null
   if (item.completion === "affidavit" && text(produced.affidavitId) !== null) {
     return { ...item, done: true, completedBy: "affidavit", actor: null }
   }
-  if (item.completion === "annexures" && annexuresPresent(produced.annexureIds)) {
+  if (item.completion === "annexures" && annexureIds.has(item.id)) {
     return { ...item, done: true, completedBy: "annexures", actor: null }
   }
   if (item.completion === "docket" && DOCKET_AUTO_TICK_WIRED && text(produced.docketId) !== null) {
@@ -188,7 +193,8 @@ export function getReadiness(documentTypeId: string, produced?: Produced | null)
   if (found.kind !== "ready") return refuseReadiness(refusalReason(found.kind))
   const input = normalizeProduced(produced)
   const ticks = ticksOf(input)
-  const items = found.items.map((item) => settle(item, input, ticks))
+  const annexureIds = annexureIdSet(input.annexureIds)
+  const items = found.items.map((item) => settle(item, input, ticks, annexureIds))
   const mandatory = items.filter((item) => item.mandatory)
   const missingMandatory = mandatory.filter((item) => !item.done).map((item) => item.id)
   const done = items.filter((item) => item.done).length

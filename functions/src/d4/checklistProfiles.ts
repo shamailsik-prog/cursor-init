@@ -17,8 +17,18 @@ const EXHIBIT = /\bexhibits?\b/i
 const VAKALATNAMA = /\bvakalatnama\b/i
 const INDEX = /\bindex(?:ed|ing)?\b|\bdocket\b/i
 const COURT_FEE = /\bcourt fee\b/i
-/** "if any" matches `if`. "where applicable" is the other conditional exhibit phrase. */
-const CONDITIONAL = /\bif\b|\bwhere applicable\b/i
+/**
+ * Explicit conditionals stay optional. "as applicable" is the seed's wording of
+ * "where applicable" (judgment particulars as applicable). A bare "if", as in
+ * "if counsel" or "if facts asserted", is not one of these phrases.
+ */
+const EXPLICIT = /\bif any\b|\bwhere applicable\b|\bas applicable\b/i
+/** Vakalatnama, the index and the court fee still treat a bare "if" as conditional. */
+const LOOSE = /\bif\b|\bwhere applicable\b|\bas applicable\b/i
+const NAMED_DOCUMENT = /\bcertified copy\b|\bannexed\b|\bjudgments?\b|\bdecrees?\b|\bimpugned order\b/i
+const IMPUGNED_DOCUMENT = /\bcertified copy\b|\bimpugned\b|\bjudgments?\b|\bdecrees?\b/i
+const COMPUTATION = /\bdate and limitation\b|\bcomputed\b/i
+const RECORD = /\brecord relied on\b/i
 
 export type ChecklistItemKind =
   | "pleading"
@@ -53,9 +63,47 @@ function unique(lines: readonly string[]): string[] {
   return out
 }
 
-function mandatoryFrom(checklistLines: readonly string[], rule: string | null): boolean {
-  if (checklistLines.length > 0) return checklistLines.some((line) => !CONDITIONAL.test(line))
-  return rule !== null && !CONDITIONAL.test(rule)
+function mandatoryFrom(checklistLines: readonly string[], rule: string | null, conditional: RegExp): boolean {
+  if (checklistLines.length > 0) return checklistLines.some((line) => !conditional.test(line))
+  return rule !== null && !conditional.test(rule)
+}
+
+function isSeparateDocument(line: string): boolean {
+  return NAMED_DOCUMENT.test(line) && !EXPLICIT.test(line) && !COMPUTATION.test(line)
+}
+
+function annexureItemId(line: string, used: Set<string>): string {
+  const slug = line.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80) || "item"
+  let id = `annexure:${slug}`
+  let n = 2
+  while (used.has(id)) {
+    id = `annexure:${slug}_${n}`
+    n += 1
+  }
+  used.add(id)
+  return id
+}
+
+function coversImpugned(items: readonly ChecklistItem[]): boolean {
+  return items.some((item) => IMPUGNED_DOCUMENT.test(item.label) && !COMPUTATION.test(item.label))
+}
+
+type ClauseKind = "skip" | "conditional" | "impugned" | "record" | "generic"
+
+function clauseKind(clause: string): ClauseKind {
+  if (EXPLICIT.test(clause)) return "conditional"
+  if (RECORD.test(clause)) return "record"
+  if (IMPUGNED_DOCUMENT.test(clause)) return "impugned"
+  if (/\baffidavits?\b/i.test(clause) && !ANNEXURE.test(clause) && !EXHIBIT.test(clause)) return "skip"
+  if (/\b(legal size|page size|a4)\b/i.test(clause) && !ANNEXURE.test(clause) && !EXHIBIT.test(clause) && !/\bpaper-?book\b|\bindexed\b/i.test(clause)) {
+    return "skip"
+  }
+  if (ANNEXURE.test(clause) || EXHIBIT.test(clause) || /\bpaper-?book\b|\bindexed\b|\bdocuments relied on\b/i.test(clause)) return "generic"
+  return "skip"
+}
+
+function isGeneralDocumentBundle(label: string): boolean {
+  return /\bdocuments\b/i.test(label) && /\bannexed\b/i.test(label) && !IMPUGNED_DOCUMENT.test(label)
 }
 
 function ruleIf(type: DocumentType, pattern: RegExp): string | null {
@@ -83,17 +131,38 @@ function specificId(line: string, used: Set<string>): string {
 }
 
 function consumed(line: string): boolean {
-  return AFFIDAVIT.test(line) || ANNEXURE.test(line) || EXHIBIT.test(line) || VAKALATNAMA.test(line) || INDEX.test(line) || COURT_FEE.test(line)
+  return (
+    AFFIDAVIT.test(line) ||
+    ANNEXURE.test(line) ||
+    EXHIBIT.test(line) ||
+    VAKALATNAMA.test(line) ||
+    INDEX.test(line) ||
+    COURT_FEE.test(line) ||
+    isSeparateDocument(line)
+  )
+}
+
+function annexureItem(id: string, label: string, mandatory: boolean, sourceLines: string[]): ChecklistItem {
+  return {
+    id,
+    kind: "annexures",
+    label,
+    mandatory,
+    completion: "annexures",
+    autoTickWired: true,
+    sourceLines,
+  }
 }
 
 /**
  * The filing items for one verified row, in the spec's order, then the row's other
- * checklist lines. Conditional evidence ("if", "if any", "where applicable") is not
- * mandatory. An unconditional "annexed" line is an annexure and overrides a
- * conditional exhibit rule, as "Death certificate annexed" does against
- * "Exhibits, if any". Lines that are not one of the filing
- * slots stay on the list so the row is not dropped, and they do not block filing.
- * Blocking on them would re-do the citation gate and the F06 review checklist.
+ * checklist lines. Each mandatory annexure is its own item. An annexure id ticks
+ * only the item whose id it is. "if any", "where applicable" and "as applicable"
+ * stay optional. A certified copy, impugned order, judgment, decree, annexed
+ * document or affidavit is mandatory without those phrases. "Affidavit if facts
+ * asserted" is mandatory. "Vakalatnama if counsel" stays optional. The Module 44
+ * limitation line stays optional: it is the computation, not the certified copy.
+ * Other non-slot lines stay visible and do not block filing.
  */
 export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
   const lines = unique(type.checklist)
@@ -113,20 +182,55 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
     used.add("pleading")
   }
 
-  const annexLines = linesMatching(lines, ANNEXURE)
-  const exhibitLines = linesMatching(lines, EXHIBIT)
-  const annexChecklist = unique([...annexLines, ...exhibitLines])
-  const annexRule = ruleIf(type, ANNEXURE) ?? ruleIf(type, EXHIBIT)
-  if (annexChecklist.length > 0 || annexRule !== null) {
-    items.push({
-      id: "annexures",
-      kind: "annexures",
-      label: annexChecklist.find((line) => !CONDITIONAL.test(line)) ?? annexChecklist[0] ?? annexRule ?? type.annexureRule,
-      mandatory: mandatoryFrom(annexChecklist, annexRule),
-      completion: "annexures",
-      autoTickWired: true,
-      sourceLines: sources(annexChecklist, annexRule),
-    })
+  for (const line of lines) {
+    if (!isSeparateDocument(line)) continue
+    const id = annexureItemId(line, used)
+    items.push(annexureItem(id, line, true, [line]))
+  }
+
+  const clauses = type.annexureRule
+    .split(";")
+    .map((clause) => clause.replace(/^\s*then\s+/i, "").trim())
+    .filter((clause) => clause !== "")
+  const impugnedClauses: string[] = []
+  const recordClauses: string[] = []
+  const genericClauses: string[] = []
+  const conditionalClauses: string[] = []
+  for (const clause of clauses) {
+    const kind = clauseKind(clause)
+    if (kind === "impugned") impugnedClauses.push(clause)
+    else if (kind === "record") recordClauses.push(clause)
+    else if (kind === "generic") genericClauses.push(clause)
+    else if (kind === "conditional") conditionalClauses.push(clause)
+  }
+
+  if (!coversImpugned(items)) {
+    for (const clause of impugnedClauses) {
+      items.push(annexureItem(annexureItemId(clause, used), clause, true, [type.annexureRule]))
+    }
+  }
+  if (!items.some((item) => RECORD.test(item.label))) {
+    for (const clause of recordClauses) {
+      items.push(annexureItem(annexureItemId(clause, used), clause, true, [type.annexureRule]))
+    }
+  }
+
+  const genericLines = lines.filter((line) => (ANNEXURE.test(line) || EXHIBIT.test(line)) && !isSeparateDocument(line))
+  const bundle = items.find((item) => isGeneralDocumentBundle(item.label))
+  const markingOnly = genericClauses.length > 0 && genericLines.length === 0 && bundle !== undefined
+  if (markingOnly && bundle) {
+    bundle.sourceLines = unique([...bundle.sourceLines, type.annexureRule])
+  } else if (genericLines.length > 0 || genericClauses.length > 0 || conditionalClauses.length > 0) {
+    const mandatory =
+      genericLines.some((line) => !EXPLICIT.test(line)) || (genericLines.length === 0 && genericClauses.length > 0)
+    const label =
+      genericLines.find((line) => !EXPLICIT.test(line)) ??
+      genericLines[0] ??
+      genericClauses[0] ??
+      conditionalClauses[0] ??
+      type.annexureRule
+    const ruleOnItem = genericClauses.length > 0 || conditionalClauses.length > 0 ? type.annexureRule : null
+    items.push(annexureItem("annexures", label, mandatory, sources(genericLines, ruleOnItem)))
     used.add("annexures")
   }
 
@@ -137,7 +241,7 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
       id: "verification",
       kind: "verification",
       label: affidavitLines[0] ?? affidavitRule ?? "Verification",
-      mandatory: mandatoryFrom(affidavitLines, affidavitRule),
+      mandatory: mandatoryFrom(affidavitLines, affidavitRule, EXPLICIT),
       completion: "affidavit",
       autoTickWired: true,
       sourceLines: sources(affidavitLines, affidavitRule),
@@ -151,7 +255,7 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
       id: "vakalatnama",
       kind: "vakalatnama",
       label: vakalatnamaLines[0] ?? "Vakalatnama",
-      mandatory: mandatoryFrom(vakalatnamaLines, null),
+      mandatory: mandatoryFrom(vakalatnamaLines, null, LOOSE),
       completion: "manual",
       autoTickWired: false,
       sourceLines: vakalatnamaLines,
@@ -166,7 +270,7 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
       id: "index_docket",
       kind: "index_docket",
       label: indexLines[0] ?? indexRule ?? "Index",
-      mandatory: mandatoryFrom(indexLines, indexRule),
+      mandatory: mandatoryFrom(indexLines, indexRule, LOOSE),
       completion: "docket",
       autoTickWired: false,
       sourceLines: sources(indexLines, indexRule),
@@ -180,7 +284,7 @@ export function itemsForDocumentType(type: DocumentType): ChecklistItem[] {
       id: "court_fee",
       kind: "court_fee",
       label: feeLines[0] ?? "Court fee",
-      mandatory: mandatoryFrom(feeLines, null),
+      mandatory: mandatoryFrom(feeLines, null, LOOSE),
       completion: "manual",
       autoTickWired: false,
       sourceLines: feeLines,

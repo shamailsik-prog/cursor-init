@@ -177,7 +177,8 @@ describe("getChecklistForType (L5.4, every verified id)", () => {
     expect(nazir.checklist).toContain("Affidavit if facts asserted")
     expect(nazir.annexureRule).not.toMatch(/\bindex/i)
     const nazirList = asKnown(nazir.id)
-    expect(item(nazirList, "verification").mandatory).toBe(false)
+    expect(item(nazirList, "verification").mandatory).toBe(true)
+    expect(item(asKnown("bail_cancellation"), "vakalatnama").mandatory).toBe(false)
     expect(nazirList.items.some((entry) => entry.id === "court_fee")).toBe(false)
     expect(nazirList.items.some((entry) => entry.id === "index_docket")).toBe(false)
 
@@ -254,16 +255,89 @@ describe("getReadiness and blockIfIncomplete", () => {
     expect(blocked.missingMandatory).toEqual(readiness.missingMandatory)
   })
 
+  it("one annexure id does not tick every mandatory annexure", () => {
+    const checklist = asKnown("civil_appeal")
+    const annexureItems = checklist.items.filter((entry) => entry.mandatory && entry.completion === "annexures")
+    expect(annexureItems.length).toBeGreaterThan(1)
+    const produced: Produced = {
+      affidavitId: "aff-1",
+      annexureIds: [annexureItems[0].id],
+      manualTicks: mandatoryTicks(checklist).filter(
+        (tick) => tick.itemId !== "verification" && !annexureItems.some((entry) => entry.id === tick.itemId)
+      ),
+    }
+    const readiness = getReadiness("civil_appeal", produced)
+    expect(readiness.known).toBe(true)
+    if (!readiness.known) return
+    const done = readiness.items.filter((entry) => annexureItems.some((item) => item.id === entry.id) && entry.done)
+    expect(done).toHaveLength(1)
+    expect(done[0]?.id).toBe(annexureItems[0].id)
+    expect(readiness.readyToFile).toBe(false)
+  })
+
+  it("a civil appeal is not ready to file without the certified copy of the impugned order", () => {
+    const checklist = asKnown("civil_appeal")
+    const certified = checklist.items.filter(
+      (entry) => entry.mandatory && /certified copy/i.test(entry.label) && /impugned order|decree/i.test(entry.label)
+    )
+    expect(certified.length).toBeGreaterThan(0)
+    expect(certified.every((entry) => entry.id !== "annexures")).toBe(true)
+    const annexureIds = checklist.items
+      .filter((entry) => entry.mandatory && entry.completion === "annexures" && !certified.some((item) => item.id === entry.id))
+      .map((entry) => entry.id)
+    expect(annexureIds.length).toBeGreaterThan(0)
+    const produced: Produced = {
+      affidavitId: "aff-1",
+      annexureIds,
+      manualTicks: mandatoryTicks(checklist).filter(
+        (tick) => tick.itemId !== "verification" && !checklist.items.some((entry) => entry.completion === "annexures" && entry.id === tick.itemId)
+      ),
+    }
+    const readiness = getReadiness("civil_appeal", produced)
+    expect(readiness.known).toBe(true)
+    if (!readiness.known) return
+    expect(readiness.readyToFile).toBe(false)
+    expect(readiness.missingMandatory).toEqual(certified.map((entry) => entry.id))
+    const blocked = blockIfIncomplete("civil_appeal", produced)
+    expect(blocked.blocked).toBe(true)
+    expect(blocked.missingMandatory).toEqual(certified.map((entry) => entry.id))
+  })
+
+  it("a contempt application is not ready to file without the certified copy of the order disobeyed", () => {
+    const checklist = asKnown("contempt_application")
+    const copy = checklist.items.find((entry) => entry.label === "Certified copy of the order disobeyed")
+    expect(copy).toBeDefined()
+    expect(copy?.mandatory).toBe(true)
+    expect(copy?.id).not.toBe("annexures")
+    const annexureIds = checklist.items
+      .filter((entry) => entry.mandatory && entry.completion === "annexures" && entry.id !== copy?.id)
+      .map((entry) => entry.id)
+    const produced: Produced = {
+      affidavitId: "aff-1",
+      annexureIds,
+      manualTicks: mandatoryTicks(checklist).filter(
+        (tick) => tick.itemId !== "verification" && tick.itemId !== copy?.id && !annexureIds.includes(tick.itemId)
+      ),
+    }
+    const readiness = getReadiness("contempt_application", produced)
+    expect(readiness.known).toBe(true)
+    if (!readiness.known) return
+    expect(readiness.readyToFile).toBe(false)
+    expect(readiness.missingMandatory).toEqual([copy?.id])
+    expect(readiness.items.find((entry) => entry.id === copy?.id)?.label).toBe("Certified copy of the order disobeyed")
+  })
+
   it("treats an unconditional annexed line as a required annexure and leaves a conditional exhibit optional", () => {
-    const conditional = /\bif\b|\bwhere applicable\b/i
+    const conditional = /\bif any\b|\bwhere applicable\b|\bas applicable\b/i
     for (const type of listDocumentTypes({})) {
       const annexed = type.checklist.filter((line) => /\bannexed\b/i.test(line) && !conditional.test(line))
       if (annexed.length === 0) continue
       const checklist = asKnown(type.id)
-      const slot = item(checklist, "annexures")
-      expect(slot.mandatory, type.id).toBe(true)
       for (const line of annexed) {
-        expect(slot.sourceLines, `${type.id} ${line}`).toContain(line)
+        const slot = checklist.items.find((entry) => entry.kind === "annexures" && entry.sourceLines.includes(line))
+        expect(slot, `${type.id} ${line}`).toBeDefined()
+        expect(slot?.mandatory, type.id).toBe(true)
+        expect(slot?.id, type.id).not.toBe("annexures")
         expect(
           checklist.items.some((entry) => entry.kind === "type_specific" && entry.sourceLines.includes(line)),
           type.id
@@ -284,6 +358,18 @@ describe("getReadiness and blockIfIncomplete", () => {
       annexureRule: "Exhibits where applicable",
     })
     expect(applicable.find((entry) => entry.id === "annexures")).toMatchObject({ mandatory: false })
+    const decree = itemsForDocumentType({
+      ...getDocumentType("affidavit")!,
+      id: "decree_copy",
+      name: "Decree copy",
+      checklist: ["Certified copy of the decree"],
+      annexureRule: "Exhibits, if any",
+    })
+    expect(decree.find((entry) => entry.label === "Certified copy of the decree")).toMatchObject({
+      mandatory: true,
+      completion: "annexures",
+    })
+    expect(decree.find((entry) => entry.id === "annexures")?.mandatory).toBe(false)
   })
 
   it("a missing mandatory item is not ready to file, and names that item", () => {
@@ -307,7 +393,7 @@ describe("getReadiness and blockIfIncomplete", () => {
     const checklist = asKnown("civil_suit")
     const produced: Produced = {
       affidavitId: "affidavit-1",
-      annexureIds: ["", "  ", "annex-a"],
+      annexureIds: ["", "  ", "annexures"],
       docketId: "docket-not-wired",
       manualTicks: mandatoryTicks(checklist).filter((tick) => tick.itemId !== "verification" && tick.itemId !== "annexures"),
     }
@@ -343,7 +429,7 @@ describe("getReadiness and blockIfIncomplete", () => {
     })
   })
 
-  it("leaves an optional item open without blocking, and does not treat a conditional affidavit as mandatory", () => {
+  it("leaves an optional item open without blocking, and requires an affidavit that is not an explicit conditional", () => {
     const suit = asKnown("civil_suit")
     const cause = suit.items.find((entry) => entry.sourceLines.includes("Cause title and court correct"))
     expect(cause?.mandatory).toBe(false)
@@ -355,12 +441,23 @@ describe("getReadiness and blockIfIncomplete", () => {
     expect(ready.items.find((entry) => entry.id === cause?.id)?.done).toBe(false)
 
     const nazir = asKnown("court_nazir_application")
-    const nazirReady = getReadiness("court_nazir_application", { manualTicks: mandatoryTicks(nazir) })
-    expect(nazirReady.known).toBe(true)
-    if (!nazirReady.known) return
-    expect(nazirReady.readyToFile).toBe(true)
-    expect(nazirReady.missingMandatory).toEqual([])
-    expect(nazirReady.items.find((entry) => entry.id === "verification")).toMatchObject({ mandatory: false, done: false })
+    expect(item(nazir, "verification").label).toBe("Affidavit if facts asserted")
+    expect(item(nazir, "verification").mandatory).toBe(true)
+    const open = getReadiness("court_nazir_application", { manualTicks: mandatoryTicks(nazir, ["verification"]) })
+    expect(open.known).toBe(true)
+    if (!open.known) return
+    expect(open.readyToFile).toBe(false)
+    expect(open.missingMandatory).toEqual(["verification"])
+    const sworn = getReadiness("court_nazir_application", { affidavitId: "aff-1", manualTicks: mandatoryTicks(nazir, ["verification"]) })
+    expect(sworn.known).toBe(true)
+    if (!sworn.known) return
+    expect(sworn.readyToFile).toBe(true)
+    expect(item(asKnown("bail_cancellation"), "vakalatnama")).toMatchObject({ mandatory: false })
+    const particulars = asKnown("criminal_revision").items.find((entry) => entry.label === "FIR / complaint / judgment particulars as applicable")
+    expect(particulars?.mandatory).toBe(false)
+    const limitation = asKnown("civil_appeal").items.find((entry) => /date and limitation/i.test(entry.label))
+    expect(limitation?.mandatory).toBe(false)
+    expect(limitation?.kind).toBe("type_specific")
   })
 
   it("does not auto-tick the index from a docket id while the L5.5 seam is unwired", () => {
