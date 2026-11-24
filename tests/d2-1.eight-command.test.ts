@@ -1595,7 +1595,10 @@ describe("signed webhook, dedupe, stub transport, flag default off", () => {
       const retry = await handleWhatsAppWebhook(signed(payload), deps(newStore(), transport))
       expect(retry.status).toBe(200)
       expect(await retry.json()).toEqual({ ok: false })
-      expect(calls).toBe(1003)
+      // The live whatsapp_outbound_keys row is the once-only gate. Evicting the
+      // in-memory slot does not call the transport again, and the accepted
+      // message stays the one record below.
+      expect(calls).toBe(1002)
       expect(transport.sent.length).toBe(sentAfterEviction)
       expect(vi.getTimerCount()).toBe(0)
     } finally {

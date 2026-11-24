@@ -1,12 +1,40 @@
+import { isClassification, type Classification } from "@/platform/p1/types"
 import { checkPermission } from "@/platform/p5/checkPermission"
+import { decide, type PermissionDecision } from "@/platform/p5/permissionDecision"
+import { recordOperationMatter } from "@/platform/retention/operationMatters"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { listMattersForUser } from "@/services/d1-2/matters"
-import { rankOf, rankOfStoredOrMax, type SpineStore } from "@/platform/spine/store"
+import {
+  rankOf,
+  rankOfStoredOrMax,
+  type DraftRecord,
+  type Matter,
+  type MatterMember,
+  type SpineStore,
+} from "@/platform/spine/store"
 import {
   INCLUDED_WHATSAPP_COMMANDS,
   commandUsage,
   parseWhatsAppMessage,
   type IncludedCommand,
 } from "./grammar"
+
+/**
+ * PARITY-006, the web route's authority before the decision. The webhook is
+ * still unbound, so this is not a bearer withF02Authority wrap. It is the same
+ * sync and the same one permission_check row the web route writes.
+ *
+ * | Command | Sync, then one audited decision |
+ * |---|---|
+ * | matters, hearings, intake, help | syncFirmMembers, syncFirmMatters, checkPermission(list_matters) |
+ * | clients | those syncs, then the web intern denial or checkPermission(client.read) |
+ * | drafts | those syncs plus the firm's drafts, one checkPermission(draft); each draft is decide() only |
+ * | research, presence | those syncs, one checkPermission |
+ * | open | those syncs, drafts when the list was drafts, one row, title read now |
+ *
+ * A missing, other-firm, tombstoned or above-clearance open replies "not found".
+ * A decide() denial such as not-member stays "permission denied".
+ */
 
 /**
  * Permission parity with the web. Every included command calls checkPermission,
@@ -69,8 +97,96 @@ export function resetD2WhatsAppThreadsForTests(): void {
   threads.clear()
 }
 
+export type WhatsAppSyncRepos = {
+  members: { listByFirm(firmId: string): Promise<readonly MatterMember[]> }
+  matters: { listByFirm(firmId: string): Promise<readonly Matter[]> }
+  drafts?: { listByFirm(firmId: string): Promise<readonly DraftRecord[]> }
+}
+
 export function permitWhatsApp(store: SpineStore, userId: string, action: string, matterId?: string) {
   return checkPermission(store, userId, action, matterId)
+}
+
+/** The store itself, which is what memory-mode repositories list. */
+function storeRepos(store: SpineStore): WhatsAppSyncRepos {
+  return {
+    members: {
+      async listByFirm(firmId) {
+        return [...store.members.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+    matters: {
+      async listByFirm(firmId) {
+        return [...store.matters.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+    drafts: {
+      async listByFirm(firmId) {
+        return [...store.drafts.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+  }
+}
+
+function reposFor(store: SpineStore, override?: WhatsAppSyncRepos): WhatsAppSyncRepos {
+  if (!override) return storeRepos(store)
+  return { ...storeRepos(store), ...override, drafts: override.drafts ?? storeRepos(store).drafts }
+}
+
+/** Same drop rule as syncFirmMatters: only a row cached before the listing, and still the same object, is removed. */
+async function syncFirmDrafts(store: SpineStore, repos: WhatsAppSyncRepos, firmId: string): Promise<void> {
+  if (!repos.drafts) return
+  const before = new Map([...store.drafts.entries()].filter(([, row]) => row.firmId === firmId))
+  const rows = (await repos.drafts.listByFirm(firmId)).filter((row) => typeof row.id === "string" && row.id !== "")
+  const listed = new Set(rows.map((row) => row.id))
+  for (const [key, row] of before) {
+    if (!listed.has(key) && store.drafts.get(key) === row) store.drafts.delete(key)
+  }
+  for (const row of rows) store.drafts.set(row.id, row)
+}
+
+async function syncBeforeDecision(store: SpineStore, repos: WhatsAppSyncRepos, userId: string, needsDrafts: boolean): Promise<void> {
+  const user = store.users.get(userId)
+  if (!user) return
+  await syncFirmMembers(store, repos, user.firmId)
+  await syncFirmMatters(store, repos, user.firmId)
+  if (needsDrafts) await syncFirmDrafts(store, repos, user.firmId)
+}
+
+/** decide() without an audit row. Per-item filters use this so a command writes one row. */
+function judge(store: SpineStore, userId: string, action: string, matterId?: string): PermissionDecision {
+  if (matterId !== undefined) recordOperationMatter(matterId)
+  const user = store.users.get(userId) ?? null
+  const matter = matterId ? (store.matters.get(matterId) ?? null) : undefined
+  const isMember = matterId ? store.members.has(store.memberKey(matterId, userId)) : false
+  return decide(user, action, matter, isMember)
+}
+
+/** The web checkPermission row (platform/p5/checkPermission.ts appendPermissionAudit). */
+function recordPermissionAudit(
+  store: SpineStore,
+  userId: string,
+  action: string,
+  decision: PermissionDecision,
+  matterId?: string
+): void {
+  const user = store.users.get(userId)
+  const matter = matterId ? store.matters.get(matterId) : undefined
+  const classification: Classification = matter
+    ? isClassification(matter.classification)
+      ? matter.classification
+      : "privileged-restricted"
+    : "internal"
+  store.audit.push({
+    id: store.id("aud"),
+    firmId: user?.firmId ?? matter?.firmId ?? "_unresolved",
+    at: Date.now(),
+    action: "permission_check",
+    actorId: userId,
+    target: matterId ?? action,
+    classification,
+    reason: `${decision.allow ? "allow" : "deny"}:${action}:${decision.reason}`,
+  })
 }
 
 function denied(command: string | undefined, permission: { allow: boolean; reason: string }): WhatsAppDispatch {
@@ -89,22 +205,24 @@ function tombstoned(matter: object): boolean {
   return "deleted" in matter && (matter as { deleted?: unknown }).deleted === true
 }
 
-/** The cached row is checked again against the store: membership, clearance, and the draft's own classification. */
-function visibleNow(store: SpineStore, userId: string, action: string, item: Numbered): { allow: boolean; reason: string } {
+const HIDDEN_OPEN = new Set(["cross-firm", "matter-deleted", "clearance"])
+
+/** The cached row is checked again against the store: membership, clearance, and the draft's own classification. No audit. */
+function visibleNow(store: SpineStore, userId: string, action: string, item: Numbered): PermissionDecision {
   const user = store.users.get(userId)
   if (!user) return { allow: false, reason: "no-user" }
 
   if (action === "draft") {
     const draft = store.drafts.get(item.id)
     if (!draft || draft.firmId !== user.firmId) return { allow: false, reason: "cross-firm" }
-    const permission = permitWhatsApp(store, userId, "draft", draft.matterId)
+    const permission = judge(store, userId, "draft", draft.matterId)
     if (!permission.allow) return permission
     if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(draft.classification)) return { allow: false, reason: "clearance" }
     return permission
   }
 
   if (action === "list_matters") {
-    const permission = permitWhatsApp(store, userId, action)
+    const permission = judge(store, userId, action)
     if (!permission.allow) return permission
     const matter = store.matters.get(item.id)
     if (!matter || matter.firmId !== user.firmId) return { allow: false, reason: "cross-firm" }
@@ -115,7 +233,7 @@ function visibleNow(store: SpineStore, userId: string, action: string, item: Num
   }
 
   if (action === "client.read") {
-    const permission = permitWhatsApp(store, userId, action)
+    const permission = judge(store, userId, action)
     if (!permission.allow) return permission
     const entity = store.entities.get(item.id)
     if (!entity || entity.firmId !== user.firmId) return { allow: false, reason: "cross-firm" }
@@ -126,7 +244,27 @@ function visibleNow(store: SpineStore, userId: string, action: string, item: Num
     return permission
   }
 
-  return permitWhatsApp(store, userId, action)
+  return judge(store, userId, action)
+}
+
+function titleNow(store: SpineStore, action: string, item: Numbered): string | null {
+  if (action === "list_matters") return store.matters.get(item.id)?.title ?? null
+  if (action === "draft") return store.drafts.get(item.id)?.title ?? null
+  if (action === "client.read") return store.entities.get(item.id)?.canonicalName ?? null
+  return item.title
+}
+
+function openedMatterId(store: SpineStore, action: string, item: Numbered): string | undefined {
+  if (action === "list_matters") return item.id
+  if (action === "draft") return store.drafts.get(item.id)?.matterId
+  return undefined
+}
+
+function openDenied(permission: PermissionDecision): WhatsAppDispatch {
+  if (HIDDEN_OPEN.has(permission.reason)) {
+    return { ok: false, denied: true, command: "open", permission: { allow: false, reason: "not-found" }, text: "not found" }
+  }
+  return denied("open", permission)
 }
 
 export async function dispatchWhatsApp(
@@ -136,6 +274,8 @@ export async function dispatchWhatsApp(
   options: {
     now?: number
     readResearch?: (query: string) => Promise<ResearchHit[]>
+    /** Authoritative members, matters and drafts. Omitted reads the store, as memory mode does. */
+    repos?: WhatsAppSyncRepos
   } = {}
 ): Promise<WhatsAppDispatch> {
   const now = options.now ?? Date.now()
@@ -144,9 +284,12 @@ export async function dispatchWhatsApp(
   if (parsed.kind === "unsupported") return { ok: false, error: "unsupported", text: "unsupported command" }
   if (parsed.kind === "malformed") return { ok: false, error: "malformed", command: parsed.name, text: "unsupported command grammar" }
 
+  const repos = reposFor(store, options.repos)
+
   if (parsed.kind === "reply") {
     const stored = threads.get(userId)
     const action = stored?.action ?? "research"
+    await syncBeforeDecision(store, repos, userId, action === "draft")
     const item = stored?.items[parsed.n - 1]
     if (!item) {
       const permission = permitWhatsApp(store, userId, action)
@@ -154,15 +297,31 @@ export async function dispatchWhatsApp(
       return { ok: false, error: "no_list", command: "open", permission, text: "no list" }
     }
     const permission = visibleNow(store, userId, action, item)
-    if (!permission.allow) return denied("open", permission)
-    return { ok: true, command: "open", permission, opened: item, text: `${item.n}. ${item.title}` }
+    const matterId = openedMatterId(store, action, item)
+    if (!permission.allow) {
+      recordPermissionAudit(store, userId, action, permission, matterId)
+      return openDenied(permission)
+    }
+    const title = titleNow(store, action, item)
+    if (title === null) {
+      const missing = { allow: false, reason: "cross-firm" }
+      recordPermissionAudit(store, userId, action, missing, matterId)
+      return openDenied(missing)
+    }
+    recordPermissionAudit(store, userId, action, permission, matterId)
+    const opened = { ...item, title }
+    return { ok: true, command: "open", permission, opened, text: `${item.n}. ${title}` }
   }
 
+  await syncBeforeDecision(store, repos, userId, parsed.name === "drafts")
+
   // GET /api/d1/clients denies an intern before the registry read. decide()
-  // client.read allows an intern, so this route guard runs first and does not
-  // write an allow audit. Presence keeps client.read.
+  // client.read allows an intern, so this route guard runs first. It writes
+  // one deny row and no allow row. Presence keeps client.read.
   if (parsed.name === "clients" && store.users.get(userId)?.role === "intern") {
-    return denied(parsed.name, { allow: false, reason: "user role not allowed for client registry reads" })
+    const permission = { allow: false, reason: "user role not allowed for client registry reads" }
+    recordPermissionAudit(store, userId, "client.read", permission)
+    return denied(parsed.name, permission)
   }
 
   const action = WHATSAPP_WEB_ACTION[parsed.name]
@@ -227,7 +386,7 @@ export async function dispatchWhatsApp(
     const matters = listMattersForUser(store, userId).filter((matter) => !parsed.args || matter.caseNumber === parsed.args)
     const visible = [...store.drafts.values()]
       .filter((draft) => draft.firmId === user.firmId && matters.some((matter) => matter.id === draft.matterId))
-      .filter((draft) => permitWhatsApp(store, userId, "draft", draft.matterId).allow)
+      .filter((draft) => judge(store, userId, "draft", draft.matterId).allow)
       .filter((draft) => rankOf(user.clearanceLevel) >= rankOfStoredOrMax(draft.classification))
       .sort((a, b) => a.id.localeCompare(b.id))
       .slice(0, PAGE)

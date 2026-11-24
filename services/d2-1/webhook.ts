@@ -2,6 +2,13 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto"
 import type { AuditEntry, SpineStore } from "@/platform/spine/store"
 import { resetD2WhatsAppThreadsForTests, type WhatsAppDispatch } from "./dispatch"
 import { D2_WHATSAPP_GRAMMAR_FLAG, isD2WhatsAppGrammarEnabled } from "./grammar"
+import {
+  openWhatsAppOutboundKeyStore,
+  resetWhatsAppOutboundKeyStoreForTests,
+  sendWhatsAppOnce,
+  UNBOUND_OUTBOUND_FIRM,
+  type OutboundKeyStore,
+} from "./outboundKeys"
 import { webhookStub, type WhatsAppTransport } from "./transport"
 
 /**
@@ -48,6 +55,7 @@ export function resetD2WhatsAppWebhookForTests(): void {
   settled.length = 0
   webhookStub.reset()
   resetD2WhatsAppThreadsForTests()
+  resetWhatsAppOutboundKeyStoreForTests()
 }
 
 export type WebhookDeps = {
@@ -61,6 +69,12 @@ export type WebhookDeps = {
   execute?: (store: SpineStore, userId: string, text: string) => Promise<WhatsAppDispatch>
   /** Ignored. No permission decision is made until a phone is linked. */
   persistAudit?: (rows: readonly AuditEntry[]) => Promise<void>
+  /**
+   * Durable outbound keys. Omitted uses the process store (memory, or Firestore
+   * when SIKANDER_PERSISTENCE_MODE=firestore). A transport that ignores keys
+   * still cannot send a live key twice.
+   */
+  outboundKeys?: OutboundKeyStore
 }
 
 function json(status: number, body: unknown): Response {
@@ -156,7 +170,9 @@ async function acknowledgeUnbound(
   onAccepted: () => void
 ): Promise<Cached> {
   deps.store()
-  await deps.transport.send(
+  const keys = deps.outboundKeys ?? (await openWhatsAppOutboundKeyStore())
+  await sendWhatsAppOnce(
+    deps.transport,
     { toUserId: "unbound", text: WHATSAPP_NOT_LINKED_TEXT },
     {
       signal,
@@ -164,6 +180,8 @@ async function acknowledgeUnbound(
       now: deps.now ?? Date.now(),
       idempotencyTtlMs: WHATSAPP_DEDUPE_TTL_MS,
       onAccepted,
+      firmId: UNBOUND_OUTBOUND_FIRM,
+      keys,
     }
   )
   return { status: 200, body: { ok: false } }
