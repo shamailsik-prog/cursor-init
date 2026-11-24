@@ -504,6 +504,21 @@ describe("getReadiness and blockIfIncomplete", () => {
     expect(readiness.missingMandatory).toContain(copy.id)
   })
 
+  it("accepts an offset that crosses UTC midnight", () => {
+    const suit = asKnown("civil_suit")
+    const held = withoutItem(suit, "pleading")
+    for (const at of ["2026-11-24T03:00:00+05:00", "2026-11-24T22:00:00-05:00"]) {
+      const readiness = getReadiness("civil_suit", {
+        ...held,
+        manualTicks: [...(held.manualTicks ?? []), { itemId: "pleading", by: "clerk", at }],
+      })
+      expect(readiness.known).toBe(true)
+      if (!readiness.known) continue
+      expect(readiness.items.find((entry) => entry.id === "pleading")?.done, at).toBe(true)
+      expect(readiness.readyToFile, at).toBe(true)
+    }
+  })
+
   it("rejects a date-only day that does not round-trip", () => {
     const dated = getReadiness("civil_suit", {
       manualTicks: [{ itemId: "pleading", by: "clerk", at: "2026-02-31" }],
@@ -516,7 +531,7 @@ describe("getReadiness and blockIfIncomplete", () => {
   it("rejects an impossible calendar day and a year outside 1900 through 2100", () => {
     const suit = asKnown("civil_suit")
     const held = withoutItem(suit, "pleading")
-    for (const at of ["2026-02-30T00:00:00Z", "2026-02-31", "9999-12-31", "0000-01-01"]) {
+    for (const at of ["2026-02-30T00:00:00Z", "2026-02-31", "2026-02-29", "9999-12-31", "0000-01-01", "1899-12-31", "2101-01-01"]) {
       const readiness = getReadiness("civil_suit", {
         ...held,
         manualTicks: [...(held.manualTicks ?? []), { itemId: "pleading", by: "clerk", at }],
@@ -535,6 +550,34 @@ describe("getReadiness and blockIfIncomplete", () => {
       expect(readiness.known).toBe(true)
       if (!readiness.known) continue
       expect(readiness.items.find((entry) => entry.id === "pleading")?.done, at).toBe(true)
+    }
+  })
+
+  it("rejects a clock that is not a real time", () => {
+    const suit = asKnown("civil_suit")
+    const held = withoutItem(suit, "pleading")
+    for (const at of ["2026-11-24T24:00:00Z", "2026-11-24T03:60:00+05:00", "2026-11-24T03:00:60Z"]) {
+      const readiness = getReadiness("civil_suit", {
+        ...held,
+        manualTicks: [...(held.manualTicks ?? []), { itemId: "pleading", by: "clerk", at }],
+      })
+      expect(readiness.known).toBe(true)
+      if (!readiness.known) continue
+      expect(readiness.items.find((entry) => entry.id === "pleading")?.done, at).toBe(false)
+    }
+  })
+
+  it("rejects an offset that is not a real zone", () => {
+    const suit = asKnown("civil_suit")
+    const held = withoutItem(suit, "pleading")
+    for (const at of ["2026-11-24T03:00:00+24:00", "2026-11-24T12:00:00+05:60"]) {
+      const readiness = getReadiness("civil_suit", {
+        ...held,
+        manualTicks: [...(held.manualTicks ?? []), { itemId: "pleading", by: "clerk", at }],
+      })
+      expect(readiness.known).toBe(true)
+      if (!readiness.known) continue
+      expect(readiness.items.find((entry) => entry.id === "pleading")?.done, at).toBe(false)
     }
   })
 
@@ -604,7 +647,39 @@ describe("getReadiness and blockIfIncomplete", () => {
       annexureRule: "Legal size",
     })
     const line = "Certified copy of the judgment of the trial court and of the appellate court annexed"
-    expect(courts.filter((entry) => entry.sourceLines.includes(line)).map((entry) => entry.label)).toEqual([line])
+    expect(courts.filter((entry) => entry.sourceLines.includes(line)).map((entry) => entry.label)).toEqual([
+      "Certified copy of the judgment of the trial court annexed",
+      "Certified copy of the appellate court annexed",
+    ])
+  })
+
+  it("splits a certified-copies line at 'and of' and keeps the prefix on each part", () => {
+    const base = getDocumentType("affidavit")!
+    const courts = itemsForDocumentType({
+      ...base,
+      id: "copies_of_two_courts",
+      name: "Copies of two courts",
+      checklist: ["Certified copies of the judgment of the trial court and of the appellate court annexed"],
+      annexureRule: "Legal size",
+    })
+    expect(
+      courts
+        .filter((entry) => entry.sourceLines.includes("Certified copies of the judgment of the trial court and of the appellate court annexed"))
+        .map((entry) => entry.label)
+    ).toEqual([
+      "Certified copies of the judgment of the trial court annexed",
+      "Certified copies of the appellate court annexed",
+    ])
+    const bail = itemsForDocumentType({
+      ...base,
+      id: "copies_of_bail_and_fir",
+      name: "Copies of bail and FIR",
+      checklist: ["Certified copies of the order for bail and of the FIR annexed"],
+      annexureRule: "Legal size",
+    })
+    expect(
+      bail.filter((entry) => entry.sourceLines.includes("Certified copies of the order for bail and of the FIR annexed")).map((entry) => entry.label)
+    ).toEqual(["Certified copies of the order for bail annexed", "Certified copies of the FIR annexed"])
   })
 
   it("every split part of every seed row is a document name", () => {
@@ -624,7 +699,7 @@ describe("getReadiness and blockIfIncomplete", () => {
           const body = entry.label.replace(/\s+annexed\s*$/i, "").trim()
           expect(body, `${type.id} ${entry.label}`).not.toMatch(/^(of|for|to|in|on|with|under|from|and)\b/i)
           expect(body, `${type.id} ${entry.label}`).toMatch(documentWord)
-          if (/\bcertified copy\b/i.test(line)) expect(entry.label, type.id).toMatch(/\bcertified copy\b/i)
+          if (/\bcertified cop(?:y|ies)\b/i.test(line)) expect(entry.label, type.id).toMatch(/\bcertified cop(?:y|ies)\b/i)
         }
       }
     }
