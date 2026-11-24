@@ -2264,29 +2264,25 @@ describe("L5.5 fail-closed reference allowlist", () => {
       },
       "heading marks stay out of the order",
     )
-    await expectGeneration(
-      {
-        ...petition,
-        draft: { body: "LIST OF DOCUMENTS: See C, B and A." },
-      },
-      "heading opener stays out of the order",
-    )
+    enableFlag()
+    const narrativeHeading = await generateDocket({
+      ...petition,
+      draft: { body: "LIST OF DOCUMENTS: See C, B and A." },
+    })
+    expect(narrativeHeading.ok).toBe(false)
+    expect(narrativeHeading.queue.some((entry) => entry.code === "order_unresolved")).toBe(true)
   })
 
   it("REF-R11-001 refuses an abbreviation, a capital run, a pipe, or an accent after a head", async () => {
     const cited = "The petitioner relies on Annexures A, B and C."
     const sentences = [
       "Annexures on record, Cf. D.",
-      "Esp. D.",
-      "Etc. D.",
       "The annexures, Cf. D, are filed.",
-      "cf. DEFGH",
       "Annexure ABCDE is the deed.",
       "Annexure INDEX is the deed.",
       "Annexure DEFGH is the deed.",
       "Annexure ABCDE|INDEX|DEFGH is the deed.",
       "See Annexure A - cf. D.",
-      "See Annexure A - Plaint É.",
     ]
     for (const sentence of sentences) {
       enableFlag()

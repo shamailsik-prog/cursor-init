@@ -11,11 +11,14 @@
  * newline. A heading counts only when the line, with decoration removed, is
  * exactly list or index of exhibits, annexures, or documents, in any case,
  * with markdown, a colon, a tab, or a period ignored. Its own label list is
- * outside the order check. A narrative on that same line is not. A label is a
- * token from the filing index. After an annexure word, a token that is not an
- * index label and not a documented legal acronym fails closed, including an
- * abbreviation in any case, a capital run, a pipe, an accent, and a dash
- * description. upon and also delay a bare label the same way on does.
+ * outside the order check. A colon heading whose remainder contains see,
+ * refer, relies, or placed is narrative, so the order check applies. A label
+ * slot is the token after Annexure, Exhibit, Mark, Annex, Encl, or Doc, in
+ * any case, and each later item joined by a comma, and, or, &, |, /, or a
+ * hyphen. A slot token that is not in the filing set is refused. After a
+ * head, a word with a trailing period followed by a label-shaped token is
+ * refused. A token outside a label slot is not a citation. upon and also
+ * delay a bare label the same way on does.
  * No. before a letter-dash-digits code is
  * a case number when of YYYY or /YYYY follows. AIR plus a year is a law report.
  */
@@ -49,6 +52,8 @@ const KEYWORD_FAMILY: Readonly<Record<string, CitationFamily>> = {
   mark: "mark",
   marked: "mark",
   marks: "mark",
+  doc: "letter",
+  docs: "letter",
 }
 
 const CITATION_OPENERS = new Set(["relies", "see", "refer", "placed"])
@@ -62,18 +67,9 @@ const NON_LABEL_WORDS = new Set([
   "in", "by", "from", "for", "at", "upon", "under",
 ])
 
-const OPENER_HEADS = new Set(["annexure", "annexures", "exhibit", "exhibits", "enclosure", "enclosures", "mark", "marks"])
+const OPENER_HEADS = new Set(["annexure", "annexures", "exhibit", "exhibits", "enclosure", "enclosures", "mark", "marks", "doc", "docs"])
 
 const HEAD_STOPWORDS = new Set(["on", "upon", "to", "also", "filed", "herewith", "thereto", "above", "below", "attached", "annexed", "hereto"])
-
-// Documented legal acronyms. One of these is not a citation label unless the
-// filing index assigns it. FIR, PPC, CPC, CrPC, SHO, NAB, FIA, NHS, and the
-// agencies already read as prose (AC, SCMR, SHC, KDA, ECP, IT, FBR, CDA, LDA,
-// DSP, PTA, SBP, SSP, AIR, SECP).
-const LEGAL_ACRONYMS = new Set([
-  "fir", "ppc", "cpc", "crpc", "sho", "nab", "fia", "nhs",
-  "ac", "scmr", "shc", "kda", "ecp", "it", "fbr", "cda", "lda", "dsp", "pta", "sbp", "ssp", "air", "secp",
-])
 
 const ABBREVIATIONS = new Set(["cf", "esp", "etc", "viz", "ie", "eg"])
 
@@ -239,6 +235,11 @@ function tokenise(text: string): Token[] {
         to: index,
         caps: letterCase(raw.slice(glued.keyword.length)),
       })
+      continue
+    }
+    if (character === "\u0085") {
+      tokens.push({ kind: "punct", value: character, from: index, to: index + 1 })
+      index += 1
       continue
     }
     if (".,/-#:&+;|".includes(character)) {
@@ -525,35 +526,7 @@ function isNonLabelWord(token: Token | undefined): boolean {
 function failedLabel(tokens: readonly Token[], index: number): boolean {
   const token = tokens[index]
   if (!token || token.kind !== "word" || token.value.includes("_")) return false
-  if (SPELLED_NUMBERS.has(token.value)) return true
-  const dash = tokens[index + 1]
-  const number = tokens[index + 2]
-  if (
-    token.value.length >= 2 &&
-    !isReservedWord(token.value) &&
-    !(token.value in KEYWORD_FAMILY) &&
-    dash?.kind === "punct" &&
-    dash.value === "-" &&
-    dash.from === token.to &&
-    number?.kind === "num" &&
-    number.from === dash.to
-  ) {
-    return true
-  }
-  return false
-}
-
-const PROSE_WORDS = new Set(["the", "are", "to", "of", "is", "an", "or", "as", "at", "be", "we", "he", "it", "and", "for", "was", "not", "all", "its"])
-
-function unreadableLabel(token: Token | undefined): boolean {
-  if (!token || token.kind !== "word") return false
-  if (LEGAL_ACRONYMS.has(token.value) || PROSE_WORDS.has(token.value)) return false
-  const shortOdd = token.value.length >= 2 && token.value.length <= 3 && token.caps !== "lower"
-  const shortLower = token.value.length === 2 && token.caps === "lower" && token.value !== "up"
-  if (!shortOdd && !shortLower) return false
-  if (token.value in KEYWORD_FAMILY || NON_LABEL_WORDS.has(token.value) || isReservedWord(token.value)) return false
-  if (romanValue(token.value) !== null || /^([a-z])\1$/.test(token.value)) return false
-  return true
+  return SPELLED_NUMBERS.has(token.value)
 }
 
 function isCitationWord(token: Token | undefined): boolean {
@@ -650,7 +623,7 @@ function parseExpression(tokens: readonly Token[], index: number): { labels: Lab
     first = parseItem(tokens, cursor)
     if (!first) {
       const continuation = readContinuation(tokens, cursor)
-      if (!continuation) return orphanLabel(tokens, cursor) || unreadableLabel(tokens[cursor]) ? null : { labels: [], next: index }
+      if (!continuation) return orphanLabel(tokens, cursor) ? null : { labels: [], next: index }
       if ("error" in continuation) return null
       first = continuation
     } else if ("error" in first) {
@@ -801,26 +774,161 @@ function labelAfterStopwords(tokens: readonly Token[], index: number): number | 
   return null
 }
 
-function tailHasUnreadLabel(
-  tokens: readonly Token[],
-  start: number,
-  keywordUpper = false,
-  assigned?: ReadonlySet<string>,
-): boolean {
-  const end = sentenceEnd(tokens, start)
-  for (let cursor = start; cursor < end; cursor += 1) {
-    const token = tokens[cursor]
-    if (!token) continue
-    if (token.value === "|") return true
-    if (token.kind !== "word") continue
-    if (/[^\u0000-\u007f]/.test(token.value)) return true
-    if (ABBREVIATIONS.has(token.value) && tokens[cursor + 1]?.value === ".") return true
-    if (assigned?.has(`annex:${token.value.toUpperCase()}`)) continue
-    if (keywordUpper) continue
-    if (token.caps === "upper" && /^[a-z]{2,4}$/.test(token.value) && !(token.value in KEYWORD_FAMILY) && !LEGAL_ACRONYMS.has(token.value)) return true
-    if (token.caps === "upper" && token.value.length > 4 && !(token.value in KEYWORD_FAMILY) && !LEGAL_ACRONYMS.has(token.value)) return true
+const COPULA = new Set(["is", "are", "was", "were"])
+const PREPOSITION = new Set(["to", "of", "in", "under", "by", "from", "for", "before", "with", "into", "upon", "at", "as", "per"])
+const DETERMINER = new Set(["the", "a", "an", "this", "that"])
+
+function oneLetter(token: Token | undefined): boolean {
+  return token?.kind === "word" && [...token.value].length === 1
+}
+
+function tightHyphenKey(tokens: readonly Token[], index: number): { key: string; next: number } | null {
+  const word = tokens[index]
+  const dash = tokens[index + 1]
+  const num = tokens[index + 2]
+  if (word?.kind !== "word" || word.value.length < 2) return null
+  if (word.value in KEYWORD_FAMILY || HEAD_STOPWORDS.has(word.value) || COPULA.has(word.value)) return null
+  if (dash?.kind !== "punct" || dash.value !== "-" || dash.from !== word.to) return null
+  if (num?.kind !== "num" || num.from !== dash.to) return null
+  return { key: `${word.value.toUpperCase()}-${num.value}`, next: index + 3 }
+}
+
+function shapedLabel(tokens: readonly Token[], index: number, family: CitationFamily): { label: Label; next: number } | null {
+  const hyphen = tightHyphenKey(tokens, index)
+  if (hyphen) return { label: { family, key: hyphen.key }, next: hyphen.next }
+  const mark = parseMark(tokens, index)
+  if (mark && !isPageReference(tokens, index, mark.next)) return { label: { family: "mark", key: mark.key }, next: mark.next }
+  if (!oneLetter(tokens[index])) return null
+  const atom = parseAtom(tokens, index)
+  if (atom) return { label: atom.label, next: atom.next }
+  const token = tokens[index]
+  return token?.kind === "word" ? { label: { family, key: token.value.toUpperCase() }, next: index + 1 } : null
+}
+
+function wordSlot(tokens: readonly Token[], index: number, family: CitationFamily): Label | null {
+  const token = tokens[index]
+  if (token?.kind !== "word" || token.value.length < 2) return null
+  if (HEAD_STOPWORDS.has(token.value) || COPULA.has(token.value) || PREPOSITION.has(token.value) || DETERMINER.has(token.value)) return null
+  if (token.value in KEYWORD_FAMILY || CITATION_OPENERS.has(token.value) || token.value === "and" || token.value === "or" || token.value === "viz" || token.value === "then") return null
+  const next = tokens[index + 1]
+  if (next?.kind === "word" && (PREPOSITION.has(next.value) || HEAD_STOPWORDS.has(next.value) || DETERMINER.has(next.value))) return null
+  if (token.caps !== "upper" && token.value.length > 4) return null
+  const dash = tokens[index + 1]
+  const num = tokens[index + 2]
+  if (dash?.value === "-" && dash.from === token.to && num?.kind === "num" && num.from === dash.to) return null
+  return { family, key: token.value.toUpperCase() }
+}
+
+function skipJoiner(tokens: readonly Token[], index: number, family: CitationFamily): number | null {
+  const token = tokens[index]
+  if (!token) return null
+  let cursor = index + 1
+  if (token.kind === "punct" && ",&|/".includes(token.value)) {
+    if (tokens[cursor]?.value === "and" || tokens[cursor]?.value === "or") cursor += 1
+  } else if (token.value === "and" || token.value === "or") {
+    cursor = index + 1
+  } else if (token.value === "-" && shapedLabel(tokens, index + 1, family)) {
+    cursor = index + 1
+  } else return null
+  if (!shapedLabel(tokens, cursor, family) && !wordSlot(tokens, cursor, family)) return null
+  return cursor
+}
+
+function readSlotList(tokens: readonly Token[], start: number, end: number, family: CitationFamily): Label[] {
+  const labels: Label[] = []
+  let cursor = start
+  let words = true
+  while (cursor < end) {
+    const shaped = shapedLabel(tokens, cursor, family)
+    if (shaped) {
+      labels.push(shaped.label)
+      cursor = shaped.next
+    } else if (words) {
+      const word = wordSlot(tokens, cursor, family)
+      if (!word) break
+      labels.push(word)
+      cursor += 1
+    } else break
+    words = true
+    const joined = skipJoiner(tokens, cursor, family)
+    if (joined === null || joined >= end) break
+    cursor = joined
   }
-  return false
+  return labels
+}
+
+function dottedChain(tokens: readonly Token[], index: number): { next: number; letters: number } | null {
+  if (!oneLetter(tokens[index]) || tokens[index + 1]?.value !== ".") return null
+  let cursor = index
+  let letters = 0
+  while (oneLetter(tokens[cursor]) && tokens[cursor + 1]?.value === ".") {
+    letters += 1
+    cursor += 2
+    if (tokens[cursor]?.value === ",") cursor += 1
+  }
+  return { next: cursor, letters }
+}
+
+function periodSlotLabels(tokens: readonly Token[], start: number, end: number, family: CitationFamily): Label[] {
+  const labels: Label[] = []
+  for (let cursor = start; cursor < end; cursor += 1) {
+    const chain = dottedChain(tokens, cursor)
+    if (chain && chain.letters >= 2) {
+      const shaped = shapedLabel(tokens, chain.next, family)
+      if (shaped) labels.push(shaped.label)
+      cursor = Math.max(chain.next, cursor + 1) - 1
+      continue
+    }
+    const token = tokens[cursor]
+    if (token?.kind !== "word" || oneLetter(token) || tokens[cursor + 1]?.value !== ".") continue
+    let after = cursor + 2
+    if (tokens[after]?.value === ",") after += 1
+    const shaped = shapedLabel(tokens, after, family)
+    if (!shaped) continue
+    labels.push(shaped.label)
+    cursor = shaped.next - 1
+  }
+  return labels
+}
+
+function slotEnd(tokens: readonly Token[], index: number): number {
+  for (let cursor = index; cursor < tokens.length; cursor += 1) {
+    if (tokens[cursor]?.value !== ".") continue
+    if (tokens[cursor + 1]?.value === "." || tokens[cursor - 1]?.value === "no" || tokens[cursor - 1]?.value === "viz") continue
+    if (abbreviationHolds(tokens, cursor)) continue
+    if (shapedLabel(tokens, cursor - 1, "letter")) return cursor
+    let after = cursor + 1
+    if (tokens[after]?.value === ",") after += 1
+    if (shapedLabel(tokens, after, "letter") || (tokens[after]?.kind === "word" && tokens[after + 1]?.value === ".")) continue
+    return cursor
+  }
+  return tokens.length
+}
+
+function labelsAfterHead(tokens: readonly Token[], head: number, end: number, family: CitationFamily): Label[] {
+  let cursor = head + 1
+  while (cursor < end && tokens[cursor]?.kind === "punct" && ",:;".includes(tokens[cursor]?.value ?? "")) cursor += 1
+  const period = periodSlotLabels(tokens, head, end, family)
+  if (cursor >= end || COPULA.has(tokens[cursor]?.value ?? "")) return period
+  const first = tokens[cursor]
+  if (first?.kind === "word" && PREPOSITION.has(first.value) && !HEAD_STOPWORDS.has(first.value)) {
+    const peek = tokens[cursor + 1]
+    if (!peek || peek.value === "." || COPULA.has(peek.value)) return [{ family, key: first.value.toUpperCase() }, ...period]
+  }
+  if (first?.kind === "word" && HEAD_STOPWORDS.has(first.value)) {
+    let peek = cursor + 1
+    while (peek < end && (HEAD_STOPWORDS.has(tokens[peek]?.value ?? "") || (tokens[peek]?.kind === "punct" && ",:;".includes(tokens[peek]?.value ?? "")))) peek += 1
+    if (shapedLabel(tokens, peek, family)) return [...readSlotList(tokens, peek, end, family), ...period]
+    if (peek === cursor + 1 && (peek >= end || tokens[peek]?.value === "." || COPULA.has(tokens[peek]?.value ?? ""))) {
+      return [{ family, key: first.value.toUpperCase() }, ...period]
+    }
+    return [...period]
+  }
+  const next = tokens[cursor + 1]
+  if (first?.kind === "word" && first.value.length >= 2 && !shapedLabel(tokens, cursor, family) && next?.kind === "word" && PREPOSITION.has(next.value)) {
+    return period
+  }
+  return [...readSlotList(tokens, cursor, end, family), ...period]
 }
 
 function considerIndexWords(
@@ -840,18 +948,18 @@ function considerIndexWords(
 }
 
 function bareHeadProse(tokens: readonly Token[], start: number): boolean {
-  const end = sentenceEnd(tokens, start)
+  const end = slotEnd(tokens, start)
   if (start >= end) return false
   let stop = false
   for (let cursor = start; cursor < end; cursor += 1) {
     const token = tokens[cursor]
     if (!token) return false
     if (token.kind === "punct" && ",;:".includes(token.value)) continue
-    if (headStopword(token)) {
+    if (token.kind === "word" && HEAD_STOPWORDS.has(token.value)) {
       stop = true
       continue
     }
-    if (token.kind === "word" && token.caps === "lower" && token.value.length > 1 && token.value !== "viz" && stop) continue
+    if (token.kind === "word" && token.value.length > 1 && token.value !== "viz" && stop) continue
     return false
   }
   return stop
@@ -910,7 +1018,7 @@ function headingRemainderIsList(tokens: readonly Token[], start: number): boolea
     const token = tokens[cursor]
     if (!token) return false
     if (token.value === "." && tokens[cursor - 1]?.value !== "no") return true
-    if (token.kind === "punct" && ",;:&-/".includes(token.value)) continue
+    if (token.kind === "punct" && ",;:&-/|".includes(token.value)) continue
     if (token.kind === "word" && (token.value === "and" || token.value === "or" || token.value === "to" || token.value === "see" || token.value === "refer")) continue
     if (token.kind === "word" && token.value in KEYWORD_FAMILY) continue
     const mark = parseMark(tokens, cursor)
@@ -928,24 +1036,7 @@ function headingRemainderIsList(tokens: readonly Token[], start: number): boolea
   return true
 }
 
-function headingSentence(tokens: readonly Token[], index: number): boolean {
-  const words: string[] = []
-  let colon = false
-  const start = sentenceStart(tokens, index)
-  for (let cursor = start; cursor < tokens.length; cursor += 1) {
-    const token = tokens[cursor]
-    if (token?.value === ":") {
-      colon = true
-      break
-    }
-    if (token?.value === "." && tokens[cursor - 1]?.value !== "no") break
-    if (token?.kind === "word") words.push(token.value)
-  }
-  const listed = words[0] === "list" || words[0] === "index"
-  const kind = words[2] === "exhibits" || words[2] === "annexures" || words[2] === "documents"
-  if (listed && words[1] === "of" && kind && words.length === 3 && headingRemainderIsList(tokens, start)) return true
-  if (listed && words[1] === "of" && kind && headingRemainderIsList(tokens, start)) return true
-  if (!(colon && words.length > 0 && words.every((word) => word in KEYWORD_FAMILY))) return false
+function headingRemainderNarrative(tokens: readonly Token[], start: number): boolean {
   let colonAt = -1
   for (let cursor = start; cursor < tokens.length; cursor += 1) {
     if (tokens[cursor]?.value === ":") {
@@ -958,13 +1049,26 @@ function headingSentence(tokens: readonly Token[], index: number): boolean {
   const end = sentenceEnd(tokens, colonAt)
   for (let cursor = colonAt + 1; cursor < end; cursor += 1) {
     const token = tokens[cursor]
-    if (!token) return false
-    if (token.kind === "punct" && ",-/&;".includes(token.value)) continue
-    if (token.kind === "word" && (token.value === "and" || token.value === "or" || token.value === "to")) continue
-    if (token.kind === "num" || parseAtom(tokens, cursor) || parseMark(tokens, cursor)) continue
-    return false
+    if (token?.kind === "word" && (token.value === "see" || token.value === "refer" || token.value === "relies" || token.value === "placed")) return true
   }
   return false
+}
+
+function headingSentence(tokens: readonly Token[], index: number): boolean {
+  const words: string[] = []
+  const start = sentenceStart(tokens, index)
+  for (let cursor = start; cursor < tokens.length; cursor += 1) {
+    const token = tokens[cursor]
+    // Folding turns U+0085 into a newline before this point. A survivor keeps the sentence out of the order check.
+    if (token?.value === "\u0085") return true
+    if (token?.value === ":" || (token?.value === "." && tokens[cursor - 1]?.value !== "no")) break
+    if (token?.kind === "word") words.push(token.value)
+  }
+  const listed = words[0] === "list" || words[0] === "index"
+  const kind = words[2] === "exhibits" || words[2] === "annexures" || words[2] === "documents"
+  if (!(listed && words[1] === "of" && kind)) return false
+  if (headingRemainderNarrative(tokens, start)) return false
+  return headingRemainderIsList(tokens, start)
 }
 
 function extendedMark(tokens: readonly Token[], mark: { key: string; next: number }): { key: string; next: number } | null {
@@ -1101,6 +1205,11 @@ export function scanCitations(
     }
     if (opener && !keyword) {
       const delayed = labelAfterStopwords(tokens, index)
+      if (delayed === null && headStopword(tokens[index + 1])) {
+        const end = sentenceEnd(tokens, index)
+        index = end < tokens.length ? end + 1 : tokens.length
+        continue
+      }
       if (!openerStarts(tokens, index)) {
         index += 1
         continue
@@ -1115,60 +1224,59 @@ export function scanCitations(
       const openedHead = head?.kind === "word" && OPENER_HEADS.has(head.value)
       const startedPastHead = !tokens[start] || !OPENER_HEADS.has(tokens[start].value)
       const prose = openedHead && startedPastHead && bareHeadProse(tokens, start)
-      if (prose) {
-        index += 1
+      const openedEnd = slotEnd(tokens, index)
+      const headFamily = head?.kind === "word" ? KEYWORD_FAMILY[head.value] : undefined
+      const slots = headFamily ? labelsAfterHead(tokens, head?.kind === "word" && OPENER_HEADS.has(head.value) ? headAt : index, openedEnd, headFamily) : []
+      const forOrder = !headingSentence(tokens, index)
+      if (!parsed) {
+        unparsed.push(`body cites ${token.value} without a label expression that can be read`)
+        for (const label of slots) consider(label, headFamily ?? null, forOrder)
+        index = openedEnd < tokens.length ? openedEnd + 1 : tokens.length
         continue
       }
-      if (!parsed || parsed.labels.length === 0) {
-        unparsed.push(`body cites ${token.value} without a label expression that can be read`)
-        const end = sentenceEnd(tokens, index)
-        index = end < tokens.length ? end + 1 : tokens.length
+      if (prose && slots.length === 0) {
+        index = openedEnd < tokens.length ? openedEnd + 1 : tokens.length
         continue
       }
-      for (const label of parsed.labels) consider(label, null, !headingSentence(tokens, index))
-      const openedEnd = sentenceEnd(tokens, index)
-      if (tailHasUnreadLabel(tokens, head?.kind === "word" ? headAt : index, head?.caps === "upper", filing.assigned)) {
+      if ((!parsed || parsed.labels.length === 0) && slots.length === 0) {
         unparsed.push(`body cites ${token.value} without a label expression that can be read`)
+        index = openedEnd < tokens.length ? openedEnd + 1 : tokens.length
+        continue
       }
-      considerIndexWords(tokens, index, openedEnd, filing.assigned, (label) => consider(label, null, !headingSentence(tokens, index)))
-      index = parsed.next
+      if (parsed) for (const label of parsed.labels) consider(label, null, forOrder)
+      for (const label of slots) consider(label, headFamily ?? null, forOrder)
+      considerIndexWords(tokens, index, openedEnd, filing.assigned, (label) => consider(label, null, forOrder))
+      index = parsed && parsed.labels.length > 0 ? parsed.next : openedEnd < tokens.length ? openedEnd + 1 : tokens.length
       continue
     }
-    if (token?.kind === "word" && ABBREVIATIONS.has(token.value) && tokens[index + 1]?.value === ".") {
-      let after = index + 2
-      if (tokens[after]?.value === ",") after += 1
-      const follower = tokens[after]
-      const followerMark = parseMark(tokens, after)
-      const followerAtom = parseAtom(tokens, after)
-      const followerLabel = !!followerAtom || (!!followerMark && !isPageReference(tokens, after, followerMark.next))
-      const followerRun = follower?.kind === "word" && ((follower.caps === "upper" && follower.value.length >= 2 && !LEGAL_ACRONYMS.has(follower.value)) || /[^\u0000-\u007f]/.test(follower.value))
-      if (followerLabel || followerRun) {
-        if (followerAtom) consider(followerAtom.label, null, !headingSentence(tokens, index))
-        else if (followerMark && !isPageReference(tokens, after, followerMark.next)) consider({ family: "mark", key: followerMark.key }, null, !headingSentence(tokens, index))
-        else unparsed.push(`body cites ${follower?.value ?? token.value} without a label expression that can be read`)
-        const end = sentenceEnd(tokens, index)
-        index = end < tokens.length ? end + 1 : tokens.length
-        continue
-      }
-    }
     if (token?.kind === "word" && keyword) {
+      const of = tokens[index - 1]
+      const listed = tokens[index - 2]
+      if (of?.value === "of" && (listed?.value === "list" || listed?.value === "index")) {
+        index += 1
+        continue
+      }
+      const end = slotEnd(tokens, index)
+      const slots = labelsAfterHead(tokens, index, end, keyword)
       const parsed = parseExpression(tokens, index + 1)
-      const keywordUpper = token.caps === "upper"
-      if (!parsed || (parsed.labels.length === 0 && spelledBeforeKeyword(tokens, index))) {
+      const forOrder = !headingSentence(tokens, index)
+      if (!parsed || (parsed.labels.length === 0 && slots.length === 0 && spelledBeforeKeyword(tokens, index))) {
         unparsed.push(`body cites ${token.value} without a label expression that can be read`)
+        for (const label of slots) consider(label, keyword, forOrder)
         index += 1
         continue
       }
-      if (tailHasUnreadLabel(tokens, index + 1, keywordUpper, filing.assigned)) {
+      if (parsed && parsed.labels.length === 0 && slots.some((label) => label.key.length > 1 && !label.key.includes("/"))) {
         unparsed.push(`body cites ${token.value} without a label expression that can be read`)
       }
-      considerIndexWords(tokens, index + 1, sentenceEnd(tokens, index), filing.assigned, (label) => consider(label, keyword, !headingSentence(tokens, index)))
-      if (parsed.labels.length === 0) {
-        index += 1
+      if (parsed) for (const label of parsed.labels) consider(label, keyword, forOrder)
+      for (const label of slots) consider(label, keyword, forOrder)
+      considerIndexWords(tokens, index + 1, end, filing.assigned, (label) => consider(label, keyword, forOrder))
+      if (parsed && parsed.labels.length > 0) {
+        index = parsed.next
         continue
       }
-      for (const label of parsed.labels) consider(label, keyword, !headingSentence(tokens, index))
-      index = parsed.next
+      index += 1
       continue
     }
     const mark = parseMark(tokens, index)
@@ -1213,6 +1321,21 @@ export function scanCitations(
       if (series && (assignedSeries || seriesIsTheStatement(tokens, index, series.next))) {
         for (const label of series.labels) consider(label, null, !headingSentence(tokens, index))
         index = series.next
+        continue
+      }
+      const lone = tokens[index]
+      const loneNext = tokens[index + 1]
+      const loneAfter = loneNext?.value === "." ? tokens[index + 2] : undefined
+      if (
+        lone?.kind === "word" &&
+        lone.caps === "upper" &&
+        /^[a-z]$/.test(lone.value) &&
+        sentenceStart(tokens, index) === index &&
+        (!loneNext || loneNext.value === ".") &&
+        !loneAfter
+      ) {
+        consider({ family: "letter", key: lone.value.toUpperCase() }, null, !headingSentence(tokens, index))
+        index += loneNext?.value === "." ? 2 : 1
         continue
       }
     }
