@@ -10,14 +10,18 @@ import {
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing"
 import {
+  collection,
   deleteDoc,
   deleteField,
   doc,
   getDoc,
+  getDocs,
+  query,
   runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
   writeBatch,
 } from "firebase/firestore"
 
@@ -58,6 +62,7 @@ beforeAll(async () => {
     })
     await setDoc(doc(db, "master_versions", "v1"), {
       firmId: "firmA",
+      classification: "internal",
       body: "mirror only",
     })
   })
@@ -818,6 +823,109 @@ describe("Review round 1 — update/read paths, proposals, members", () => {
 
     it("staff can still read a proposal", async () => {
       await assertSucceeds(getDoc(doc(await authed("cp-assoc", ASSOC), "change_proposals", "cp-read")))
+    })
+  })
+
+  describe("FU-290 change_proposals and master_versions", () => {
+    const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged" }
+    const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+    const INTERN = { firmId: "firmA", role: "intern", clearanceLevel: "internal" }
+    const FIRM_B = { firmId: "firmB", role: "partner", clearanceLevel: "privileged-restricted" }
+    const pending = {
+      firmId: "firmA",
+      sourceModule: "p6",
+      payload: { wording: "cite" },
+      proposedBy: "fu-partner",
+      status: "pending",
+    }
+
+    beforeAll(async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        const db = ctx.firestore()
+        await setDoc(doc(db, "change_proposals", "fu-del"), { ...pending, classification: "internal" })
+        await setDoc(doc(db, "change_proposals", "fu-reason"), { ...pending, classification: "internal" })
+        await setDoc(doc(db, "change_proposals", "fu-at"), { ...pending, classification: "internal" })
+        await setDoc(doc(db, "change_proposals", "fu-int"), { ...pending, classification: "internal" })
+        await setDoc(doc(db, "change_proposals", "fu-priv"), { ...pending, classification: "privileged" })
+        await setDoc(doc(db, "master_versions", "fu-mv-int"), { firmId: "firmA", classification: "internal", body: "internal mirror" })
+        await setDoc(doc(db, "master_versions", "fu-mv-priv"), { firmId: "firmA", classification: "privileged", body: "privileged mirror" })
+        await setDoc(doc(db, "master_versions", "fu-mv-nocls"), { firmId: "firmA", body: "unlabelled" })
+      })
+    })
+
+    it("a partner cannot delete a change_proposal", async () => {
+      await assertFails(deleteDoc(doc(await authed("fu-partner", PARTNER), "change_proposals", "fu-del")))
+    })
+
+    it("a partner cannot create a pending change_proposal", async () => {
+      await assertFails(
+        setDoc(doc(await authed("fu-partner", PARTNER), "change_proposals", "fu-create"), {
+          ...pending,
+          proposedBy: "fu-partner",
+          classification: "internal",
+          status: "pending",
+        }),
+      )
+    })
+
+    it("a partner cannot update reason", async () => {
+      await assertFails(updateDoc(doc(await authed("fu-partner", PARTNER), "change_proposals", "fu-reason"), { reason: "because" }))
+    })
+
+    it("a partner cannot update decidedAt", async () => {
+      await assertFails(updateDoc(doc(await authed("fu-partner", PARTNER), "change_proposals", "fu-at"), { decidedAt: 1 }))
+    })
+
+    it("a firm B partner cannot get a firm A change_proposal", async () => {
+      await assertFails(getDoc(doc(await authed("fu-firmb", FIRM_B), "change_proposals", "fu-int")))
+    })
+
+    it("an internal-clearance associate is denied a privileged proposal and allowed an internal one", async () => {
+      const db = await authed("fu-assoc", ASSOC)
+      await assertFails(getDoc(doc(db, "change_proposals", "fu-priv")))
+      await assertSucceeds(getDoc(doc(db, "change_proposals", "fu-int")))
+      await assertFails(getDoc(doc(db, "master_versions", "fu-mv-priv")))
+      await assertSucceeds(getDoc(doc(db, "master_versions", "fu-mv-int")))
+      const intern = await authed("fu-intern", INTERN)
+      await assertFails(getDoc(doc(intern, "change_proposals", "fu-priv")))
+      await assertFails(getDoc(doc(intern, "master_versions", "fu-mv-priv")))
+    })
+
+    it("a partner cleared for the row can read a privileged proposal and master version", async () => {
+      const db = await authed("fu-partner", PARTNER)
+      await assertSucceeds(getDoc(doc(db, "change_proposals", "fu-priv")))
+      await assertSucceeds(getDoc(doc(db, "master_versions", "fu-mv-priv")))
+    })
+
+    it("cleared staff can list proposals and master versions at their clearance", async () => {
+      const db = await authed("fu-assoc", ASSOC)
+      await assertSucceeds(
+        getDocs(query(collection(db, "change_proposals"), where("firmId", "==", "firmA"), where("classification", "==", "internal"))),
+      )
+      await assertSucceeds(
+        getDocs(query(collection(db, "master_versions"), where("firmId", "==", "firmA"), where("classification", "==", "internal"))),
+      )
+      const partner = await authed("fu-partner", PARTNER)
+      await assertSucceeds(
+        getDocs(query(collection(partner, "change_proposals"), where("firmId", "==", "firmA"), where("classification", "==", "privileged"))),
+      )
+      await assertSucceeds(
+        getDocs(query(collection(partner, "master_versions"), where("firmId", "==", "firmA"), where("classification", "==", "privileged"))),
+      )
+    })
+
+    it("an internal-clearance associate cannot list privileged proposals", async () => {
+      const db = await authed("fu-assoc", ASSOC)
+      await assertFails(
+        getDocs(query(collection(db, "change_proposals"), where("firmId", "==", "firmA"), where("classification", "==", "privileged"))),
+      )
+      await assertFails(
+        getDocs(query(collection(db, "master_versions"), where("firmId", "==", "firmA"), where("classification", "==", "privileged"))),
+      )
+    })
+
+    it("a master version without classification is denied", async () => {
+      await assertFails(getDoc(doc(await authed("fu-partner", PARTNER), "master_versions", "fu-mv-nocls")))
     })
   })
 

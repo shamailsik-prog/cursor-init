@@ -393,13 +393,16 @@ service cloud.firestore {
     // FA-RULES-CP-001: no client write. A create could stamp approvedBy, approvedAt,
     // decision or applied on a row whose status was still pending, and a partner token
     // could set status, decidedBy or applied, including on its own proposal and with
-    // any decidedBy. No client path writes this collection. Reads stay with firm staff.
+    // any decidedBy. No client path writes this collection.
+    // PRE-290-002: a staff read also needs clearance for the row's classification.
+    // A missing classification fails closed (rank() of an absent field denies). A list
+    // has to constrain classification, as it does for entities.
     match /change_proposals/{id} {
-      allow read: if sameFirm() && isStaff();
+      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
       allow create, update, delete: if false;
     }
     match /master_versions/{id} {
-      allow read: if sameFirm() && isStaff();
+      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
       allow write: if false; // P6 / Postgres is the system of record; the mirror is read-only
     }
     // Audit F42 (spec R23): staff read the routing queue without membership, so a tombstoned matter's rows are refused.
