@@ -1,6 +1,6 @@
 # Module 5 — Client Intake
 
-Firm-scoped intake records in `intakes` and `intake_messages`. Both collections are pending inventory from W1-INV. This module does not edit `infra/retention`, routes, or the flag registry.
+Firm-scoped intake records in `intakes` and `intake_messages`. Both are registered in `infra/retention/inventory.json` with `pending` removed. Every row carries `firmId`. `matterId` is null until promotion, so a matter deletion does not reach an unpromoted row. This module does not add routes or a flag-registry entry. There are no staging objects.
 
 ## Flag
 

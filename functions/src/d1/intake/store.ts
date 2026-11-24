@@ -10,7 +10,8 @@ import { isClientType } from "./classify"
 
 /**
  * Firm-scoped reads and writes for `intakes` and `intake_messages`.
- * Both collections are inventoried by W1-INV; this module does not edit retention.
+ * Both are registered in the retention inventory with no pending flag.
+ * Every row carries firmId. matterId stays null until promotion.
  * Every call re-checks the flag before touching the store.
  */
 
@@ -171,6 +172,7 @@ export async function insertIntake(row: IntakeWrite, messageText: string): Promi
     tx.create(message, {
       firmId: row.firmId,
       intakeId: ref.id,
+      matterId: row.matterId,
       direction: "inbound",
       text: messageText,
       createdAt: FieldValue.serverTimestamp(),
@@ -189,6 +191,21 @@ export async function patchIntake(firmId: string, intakeId: string, clearance: C
   const stored = await readIntake(firmId, intakeId, clearance)
   if (!stored) throw new HttpError(404, "not_found")
   return stored
+}
+
+/** Copy the promoted matter id onto every message of this firm. A replay writes the same value. */
+export async function stampMessageMatter(firmId: string, intakeId: string, matterId: string): Promise<void> {
+  assertEnabled()
+  const snap = await messages().where("intakeId", "==", intakeId).get()
+  const batch = adminDb().batch()
+  let writes = 0
+  for (const doc of snap.docs) {
+    const data = doc.data()
+    if (data.firmId !== firmId || data.matterId === matterId) continue
+    batch.update(doc.ref, { matterId })
+    writes += 1
+  }
+  if (writes > 0) await batch.commit()
 }
 
 export async function listMessages(firmId: string, intakeId: string): Promise<IntakeMessage[]> {

@@ -11,7 +11,7 @@ import { maxLabel } from "../conflict/engine"
 import { runConflictCheckOp } from "../conflict/ops"
 import type { Waiver } from "../conflict/disclosure"
 import { openMatterOp } from "../matter/ops"
-import { patchIntake, readIntake } from "./store"
+import { patchIntake, stampMessageMatter } from "./store"
 import type { IntakeRecord, PromoteResult, WaiverRef } from "./types"
 
 /**
@@ -132,6 +132,7 @@ async function finish(intake: IntakeRecord, caller: Caller, clientId: string, ma
     waiver: ref,
     followUp: false,
   })
+  await stampMessageMatter(intake.firmId, intake.intakeId, matterId)
   return resultOf(saved, clientId, matterId, checkId, ref)
 }
 
@@ -145,6 +146,7 @@ function labelFor(intake: IntakeRecord, check: DocumentData, caller: Caller): Cl
 export async function promoteIntake(caller: Caller, intake: IntakeRecord): Promise<PromoteResult> {
   if (intake.status === "closed") throw new HttpError(409, "intake_closed")
   if (intake.status === "promoted" && intake.clientId && intake.matterId && intake.conflictCheckId) {
+    await stampMessageMatter(intake.firmId, intake.intakeId, intake.matterId)
     return resultOf(intake, intake.clientId, intake.matterId, intake.conflictCheckId, intake.waiver)
   }
   if (rankOf(intake.classification) > rankOf(caller.clearanceLevel)) throw new HttpError(403, "exceeds_own_clearance")

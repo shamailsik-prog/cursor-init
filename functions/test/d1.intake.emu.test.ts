@@ -153,6 +153,9 @@ describe.skipIf(!EMULATORS)("client intake (emulator)", () => {
     const { caller } = await asCaller(firmId, "partner")
     const intake = await createIntake(caller, { text: "Please file a civil suit", prospect: prospect("Unconfirmed Prospect") })
     const beforeDoc = (await adminDb().collection("intakes").doc(intake.intakeId).get()).data()
+    expect(beforeDoc).toMatchObject({ firmId, matterId: null })
+    const unpromoted = await adminDb().collection("intake_messages").where("intakeId", "==", intake.intakeId).get()
+    expect(unpromoted.docs.map((doc) => doc.data())).toEqual([expect.objectContaining({ firmId, intakeId: intake.intakeId, matterId: null })])
     const before = await counts(firmId)
     await expect(promoteToClient(caller, intake.intakeId, {})).rejects.toMatchObject({ status: 400, code: "confirmation_required" })
     await expect(promoteToClient(caller, intake.intakeId, { confirmedBy: "not-the-caller" })).rejects.toMatchObject({ code: "confirmation_required" })
@@ -263,6 +266,9 @@ describe.skipIf(!EMULATORS)("client intake (emulator)", () => {
     expect(second).toMatchObject({ clientId: first.clientId, matterId: first.matterId, conflictCheckId: first.conflictCheckId })
     expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(1)
     expect((await adminDb().collection("matters").where("firmId", "==", firmId).where("clientId", "==", first.clientId).get()).size).toBe(1)
+    expect((await adminDb().collection("intakes").doc(intake.intakeId).get()).data()).toMatchObject({ firmId, matterId: first.matterId })
+    const stamped = await adminDb().collection("intake_messages").where("intakeId", "==", intake.intakeId).get()
+    expect(stamped.docs.map((doc) => doc.data())).toEqual([expect.objectContaining({ firmId, matterId: first.matterId })])
   }, 60_000)
 
   it("a closed intake cannot be promoted", async () => {
