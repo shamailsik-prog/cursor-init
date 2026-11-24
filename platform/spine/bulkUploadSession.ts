@@ -11,6 +11,11 @@ export type BulkUploadFileState = "pending" | "uploading" | "deduped" | "finalis
 export type BulkUploadFileRow = {
   /** Same firm as the session. A row without it is not a valid session file. */
   firmId: string
+  /**
+   * Stable identity of this file inside the session. Assigned when the session
+   * starts. Absent only on a row written before file ids; those rows still parse.
+   */
+  fileId?: string
   name: string
   size: number
   sha256: string

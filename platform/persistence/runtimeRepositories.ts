@@ -4,7 +4,7 @@ import {
   type SpineRepositories,
 } from "@/platform/persistence/spineRepositories"
 import { getProductionFirestore } from "@/platform/persistence/adminFirestore"
-import { deleteDoc, doc, getDoc, setDoc } from "@/platform/persistence/firestoreDbModular"
+import { deleteDoc, doc, getDoc, runTransaction, setDoc } from "@/platform/persistence/firestoreDbModular"
 import { PersistenceConfigurationError } from "@/platform/persistence/errors"
 
 export { PersistenceConfigurationError } from "@/platform/persistence/errors"
@@ -77,6 +77,26 @@ export async function openWhatsAppOutboundKeyFirestore(): Promise<unknown> {
 export async function writeRuntimeDocument(collectionName: string, id: string, data: Record<string, unknown>): Promise<void> {
   const db = await getRuntimeFirestore()
   await setDoc(doc(db as never, collectionName, id), data)
+}
+
+/**
+ * Reads one document and writes the returned fields in the same transaction.
+ * The caller returns the field patch. A missing or unreadable document is passed
+ * as null, and a throw from the caller aborts the transaction before the write.
+ */
+export async function updateRuntimeDocument(
+  collectionName: string,
+  id: string,
+  mutate: (data: Record<string, unknown> | null) => Record<string, unknown>
+): Promise<void> {
+  const db = await getRuntimeFirestore()
+  const ref = doc(db as never, collectionName, id)
+  await runTransaction(db as never, async (tx) => {
+    const snap = await tx.get(ref)
+    const raw = snap.exists() ? snap.data() : null
+    const data = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null
+    tx.update(ref, mutate(data))
+  })
 }
 
 export async function deleteRuntimeDocument(collectionName: string, id: string): Promise<void> {

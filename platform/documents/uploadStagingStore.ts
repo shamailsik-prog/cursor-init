@@ -74,6 +74,26 @@ export function stagingSharesLockedVaultBucket(): boolean {
   return resolveDocumentObjectBackendKind() === "s3"
 }
 
+/**
+ * What a matter deletion may do to staging while the live backend is known.
+ * On S3 the chunks share the locked vault bucket, so neither the bytes nor the
+ * `upload_sessions` rows are deleted, and the acknowledgement is `retained`.
+ */
+export function liveStagingMatterDeletion(): {
+  sharesLock: boolean
+  deleteBytes: boolean
+  deleteSessionRows: boolean
+  ack: ReturnType<typeof stagingDeletionAck>
+} {
+  const sharesLock = stagingSharesLockedVaultBucket()
+  return {
+    sharesLock,
+    deleteBytes: !sharesLock,
+    deleteSessionRows: !sharesLock,
+    ack: stagingDeletionAck(sharesLock),
+  }
+}
+
 export function stagingDeletionAck(sharesLockedVault: boolean): {
   outcome: "retained" | "purged"
   detail: { reason: string; locked: boolean; prefix: string; matterScoped: true }
@@ -390,16 +410,21 @@ export async function sweepExpiredStagingObjects(
   now: number,
   ttlMs: number,
   keyPrefix: string = UPLOAD_STAGING_OBJECT_PREFIX
-): Promise<number> {
+): Promise<{ removed: number; failures: string[] }> {
   if (!Number.isSafeInteger(ttlMs) || ttlMs < 1) throw new Error("staging expiry failed validation")
   const listed = await listStagingObjects(keyPrefix)
   let removed = 0
+  const failures: string[] = []
   for (const item of listed) {
     if (now - item.writtenAtMs < ttlMs) continue
-    await removeStagingPayload(item.storagePath)
-    removed += 1
+    try {
+      await removeStagingPayload(item.storagePath)
+      removed += 1
+    } catch (err) {
+      failures.push(err instanceof Error ? err.message : "staging delete failed")
+    }
   }
-  return removed
+  return { removed, failures }
 }
 
 export function resetUploadStagingForTests(): void {

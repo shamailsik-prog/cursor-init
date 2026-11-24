@@ -6,9 +6,9 @@ import {
   UPLOAD_SESSIONS_COLLECTION,
   deleteStagingObjectsByPrefix,
   listStagingObjects,
+  liveStagingMatterDeletion,
   stagingDeletionAck,
   stagingMatterPrefix,
-  stagingSharesLockedVaultBucket,
 } from "@/platform/documents/uploadStagingStore"
 import { adminDb } from "../admin"
 import { reachCourtOpsDeletion } from "./courtOpsDeletionReach"
@@ -526,6 +526,7 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
   // Counted from the steps earlier attempts recorded: a retry after a crash hands over sooner, never passing P2's limit
   // (the permanent `fenced_step_limit` would leave the request unfinished).
   let chunks = await recordedSteps(jobId)
+  const stagingPlan = liveStagingMatterDeletion()
   try {
     for (let i = 0; i < stores.length; i += 1) {
       const { key, store } = stores[i]
@@ -534,7 +535,7 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
           await assertNoHold(tx, firmId, req.matterId)
         })
         const prefix = stagingMatterPrefix(firmId, req.matterId)
-        const sharesLock = stagingSharesLockedVaultBucket()
+        const sharesLock = stagingPlan.sharesLock
         const progressRef = ackRefOf(ctx.payload.requestId, key)
         const prior = await progressRef.get()
         const listedAlready = prior.get("stagingListed") === true && typeof prior.get("count") === "number"
@@ -556,7 +557,7 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
             { merge: true }
           )
         }
-        if (!sharesLock) {
+        if (stagingPlan.deleteBytes) {
           // A new fenced step, not staging-hold. A retry after that hold step has
           // committed still re-checks the legal hold before any byte is deleted.
           await step(ctx as JobContext<unknown>, `staging-delete-${i}`, async (tx) => {
@@ -613,6 +614,8 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
           )
         })
       }
+      // The job_record purge would otherwise delete upload_sessions while the bytes stay.
+      if (store.id === "firestore:upload_sessions" && !stagingPlan.deleteSessionRows) continue
       if (req.plan[key] !== "purge" && req.plan[key] !== "anonymise") continue
       // FA-F42-R1-002: before any document row goes, the legacy outputs that name the matter only through them.
       if (key === DOCUMENTS_KEY && req.plan[key] === "purge") {
@@ -1110,11 +1113,23 @@ async function acknowledge(
     const acks: AckInput[] = []
     const progressRefs = stores.map((s) => ackRefOf(requestId, s.key))
     const progress = await tx.getAll(...progressRefs)
+    const stagingPlan = liveStagingMatterDeletion()
     for (const [i, { key, store }] of stores.entries()) {
       const treatment = req.plan[key]
       const p = progressOf(progress[i].data())
+      if (store.id === "firestore:upload_sessions" && !stagingPlan.deleteSessionRows) {
+        acks.push({
+          key,
+          storeId: store.id,
+          outcome: stagingPlan.ack.outcome,
+          count: p.count,
+          idsSha256: null,
+          detail: stagingPlan.ack.detail,
+        })
+        continue
+      }
       if (treatment === "purge" || treatment === "anonymise") {
-        if (store.id === "objects:upload-staging" && (stagingSharesLockedVaultBucket() || progress[i].get("stagingLocked") === true)) {
+        if (store.id === "objects:upload-staging" && (stagingPlan.sharesLock || progress[i].get("stagingLocked") === true)) {
           const ack = stagingDeletionAck(true)
           acks.push({
             key,
@@ -1153,7 +1168,7 @@ async function acknowledge(
           detail: { chunks: p.chunks.length },
         })
       } else if (store.id === "objects:upload-staging" && treatment === "lock") {
-        const locked = stagingSharesLockedVaultBucket() || progress[i].get("stagingLocked") === true
+        const locked = stagingPlan.sharesLock || progress[i].get("stagingLocked") === true
         if (!locked) {
           const leftObjects = await listStagingObjects(stagingMatterPrefix(firmId, req.matterId))
           if (leftObjects.length > 0) throw new JobError("purge_incomplete")

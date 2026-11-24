@@ -13,16 +13,24 @@ import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../runtimeOptions"
  */
 export async function runBulkUploadStagingSweep(now: number = Date.now()): Promise<{ objects: number; sessions: number; skipped: boolean }> {
   if (!isBulkUploadEnabled()) return { objects: 0, sessions: 0, skipped: true }
-  const objects = await sweepExpiredStagingObjects(now, BULK_UPLOAD_STAGING_TTL_MS)
+  const swept = await sweepExpiredStagingObjects(now, BULK_UPLOAD_STAGING_TTL_MS)
+  const failures = [...swept.failures]
   const snap = await adminDb().collection(UPLOAD_SESSIONS_COLLECTION).where("expiresAtMs", "<=", now).get()
   let sessions = 0
   for (const group of chunkFirestoreWrites(snap.docs)) {
-    const batch = adminDb().batch()
-    for (const doc of group) batch.delete(doc.ref)
-    await batch.commit()
-    sessions += group.length
+    try {
+      const batch = adminDb().batch()
+      for (const doc of group) batch.delete(doc.ref)
+      await batch.commit()
+      sessions += group.length
+    } catch (err) {
+      failures.push(err instanceof Error ? err.message : "session delete failed")
+    }
   }
-  return { objects, sessions, skipped: false }
+  if (failures.length > 0) {
+    throw new Error(`staging sweep failed for ${failures.length} failure(s): ${failures.join("; ")}`)
+  }
+  return { objects: swept.removed, sessions, skipped: false }
 }
 
 export const bulkUploadStagingSweep = onSchedule(
