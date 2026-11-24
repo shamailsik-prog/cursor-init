@@ -96,5 +96,6 @@ describe("loose vault source", () => {
     expect(rules).toContain("uploadedBy == request.auth.uid")
     expect(rules).toContain("createdAt == request.time")
     expect(rules).toContain("noClientLooseAck()")
+    expect(update).toContain("documentFieldsTyped()")
   })
 })

@@ -390,6 +390,53 @@ describe.skipIf(!EMULATORS)("loose vault (emulator)", () => {
     expect((await docRef(still).get()).exists).toBe(true)
   })
 
+  it("a spoiled loose row stays overdue for the uploader and stays on the partner escalation list", async () => {
+    const firmId = uniq("firm")
+    const clerk = user(firmId, "clerk", "confidential")
+    const partner = user(firmId, "partner", "confidential")
+    const now30 = new Date(AGE_30D)
+    const spoil: Record<string, unknown>[] = [
+      { sourceChannel: "evil" },
+      { byteSize: -1 },
+      { mimeType: 1 },
+      { objectVersion: 1.5 },
+      { objectBytesStatus: "gone" },
+    ]
+    const ids: string[] = []
+    for (const patch of spoil) {
+      const id = await seedDoc(firmId, clerk.uid, { createdAt: Timestamp.fromMillis(0) })
+      ids.push(id)
+      expect(await isLooseUploadBlocked(firmId, clerk.uid, now30)).toBe(true)
+      await adminDb().collection("documents").doc(id).update(patch)
+    }
+    expect(await isLooseUploadBlocked(firmId, clerk.uid, now30)).toBe(true)
+    expect(await isLooseUploadBlocked(firmId, partner.uid, now30)).toBe(false)
+    const listed = await looseVaultEscalations(partner, firmId, now30)
+    for (const id of ids) {
+      expect(listed.items.find((row) => row.docId === id)).toMatchObject({
+        holderId: clerk.uid,
+        acknowledged: false,
+        malformed: true,
+      })
+    }
+    expect(listed.items.every((row) => ids.includes(row.docId) && row.malformed)).toBe(true)
+  })
+
+  it("a confidential clerk's escalations omit a privileged overdue row", async () => {
+    const firmId = uniq("firm")
+    const clerk = user(firmId, "clerk", "confidential")
+    const partner = user(firmId, "partner", "privileged")
+    const secret = await seedDoc(firmId, "partner-holder", { classification: "privileged", createdAt: Timestamp.fromMillis(0) })
+    const own = await seedDoc(firmId, clerk.uid, { createdAt: Timestamp.fromMillis(0) })
+    const now30 = new Date(AGE_30D)
+    const clerkItems = await looseVaultEscalations(clerk, firmId, now30)
+    expect(clerkItems.items.map((row) => row.docId)).toEqual([own])
+    expect(clerkItems.items.map((row) => row.docId)).not.toContain(secret)
+    const partnerItems = await looseVaultEscalations(partner, firmId, now30)
+    expect(partnerItems.items.map((row) => row.docId).sort()).toEqual([own, secret].sort())
+    expect(partnerItems.items.find((row) => row.docId === secret)).toMatchObject({ malformed: false, acknowledged: false })
+  })
+
   it("a confidential clerk does not see or tag a privileged loose file", async () => {
     const firmId = uniq("firm")
     const clerk = user(firmId, "clerk", "confidential")

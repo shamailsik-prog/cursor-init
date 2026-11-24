@@ -4,7 +4,7 @@ import { HttpError } from "../../http/errors"
 import type { Caller } from "../../p5/auth"
 import { isSafeDocId } from "../../p5/common"
 import { isKnownClassification } from "../../p5/classification"
-import { assertLooseVaultActor, assertLooseVaultEnabled, auditLoose, canReadBoundRow, canonicalLoose, looseFirmDocs, looseNotFound, looseReader, looseUploaderDocs } from "./flag"
+import { assertLooseVaultActor, assertLooseVaultEnabled, auditLoose, canReadBoundRow, canonicalLoose, clearanceCovers, looseFirmDocs, looseNotFound, looseReader, looseUploaderDocs } from "./flag"
 
 /** Thirty 24-hour days. Not a calendar month. Due at this age, and not one millisecond before. */
 export const LOOSE_VAULT_HOLD_MS = 30 * 24 * 60 * 60 * 1000
@@ -15,6 +15,8 @@ export type LooseEscalation = {
   /** Null when the row has no readable `createdAt`. The row is still escalated. */
   ageMs: number | null
   acknowledged: boolean
+  /** True when the stored row is not a canonical document. It still counts as overdue. */
+  malformed: boolean
 }
 
 export function instantMillis(value: unknown): number | null {
@@ -55,6 +57,15 @@ function validNow(now: Date): void {
   if (!(now instanceof Date) || Number.isNaN(now.getTime())) throw new HttpError(400, "invalid_query")
 }
 
+/** The loose query already constrained firm and matterId. A row that fails that shape is not this firm's loose file. */
+function isQueriedLoose(data: DocumentData | undefined, firmId: string): data is DocumentData {
+  return !!data && data.firmId === firmId && data.matterId === null
+}
+
+function rawHolder(data: DocumentData): string {
+  return typeof data.uploadedBy === "string" ? data.uploadedBy : ""
+}
+
 /**
  * Loose rows in the firm older than 30 days, with holder and age. Acknowledged rows stay in the
  * list (the hold is still visible) and are marked. This function writes nothing.
@@ -67,8 +78,21 @@ export async function looseVaultEscalations(actor: Caller, firmId: string, now: 
   const items: LooseEscalation[] = []
   for (const doc of await looseFirmDocs(firmId)) {
     const data = doc.data()
+    if (!isQueriedLoose(data, firmId)) continue
     const record = canonicalLoose(doc.id, data)
-    if (!record || record.matterId !== null || record.firmId !== firmId) continue
+    if (!record) {
+      // A clerk can spoil sourceChannel or a size field and make the row unreadable. That must not hide it.
+      if (!clearanceCovers(actor, data.classification)) continue
+      items.push({
+        docId: doc.id,
+        holderId: rawHolder(data),
+        ageMs: looseAgeMs(data.createdAt, now),
+        acknowledged: partnerAcknowledged(data),
+        malformed: true,
+      })
+      continue
+    }
+    if (record.matterId !== null || record.firmId !== firmId) continue
     if (!readable(record)) continue
     if (!looseHoldOverdue(data.createdAt, now)) continue
     items.push({
@@ -76,6 +100,7 @@ export async function looseVaultEscalations(actor: Caller, firmId: string, now: 
       holderId: record.uploadedBy,
       ageMs: looseAgeMs(data.createdAt, now),
       acknowledged: partnerAcknowledged(data),
+      malformed: false,
     })
   }
   items.sort((a, b) => (a.docId < b.docId ? -1 : a.docId > b.docId ? 1 : 0))
@@ -94,8 +119,13 @@ export async function isLooseUploadBlocked(firmId: string, uploaderId: string, n
   validNow(now)
   for (const doc of await looseUploaderDocs(firmId, uploaderId)) {
     const data = doc.data()
+    if (!isQueriedLoose(data, firmId)) continue
     const record = canonicalLoose(doc.id, data)
-    if (!record || record.firmId !== firmId || record.matterId !== null) continue
+    if (!record) {
+      if (!partnerAcknowledged(data)) return true
+      continue
+    }
+    if (record.firmId !== firmId || record.matterId !== null) continue
     if (record.uploadedBy !== uploaderId) continue
     if (partnerAcknowledged(data)) continue
     if (looseHoldOverdue(data.createdAt, now)) return true
