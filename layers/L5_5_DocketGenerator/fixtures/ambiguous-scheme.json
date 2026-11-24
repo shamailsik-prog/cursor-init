@@ -1,0 +1,29 @@
+{
+  "documentTypeId": "plaint",
+  "annexureRule": "Documents relied on as Annexures A, B, C … (or P/1, P/2 … per court practice); indexed; legal size",
+  "draft": {
+    "body": "The plaintiff relies on the documents annexed."
+  },
+  "annexures": [
+    {
+      "metadata": {
+        "artifactId": "plaint-1",
+        "label": "Title deed",
+        "required": true,
+        "status": "ready",
+        "sourceRef": "doc-title"
+      },
+      "body": "Copy of the title deed."
+    },
+    {
+      "metadata": {
+        "artifactId": "plaint-2",
+        "label": "Plan",
+        "required": true,
+        "status": "ready",
+        "sourceRef": "doc-plan"
+      },
+      "body": "Copy of the plan."
+    }
+  ]
+}
