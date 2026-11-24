@@ -78,7 +78,7 @@ function countingSession() {
     commits: () => commits,
     session: {
       async allowDeclassify() {},
-      async commitVersion(input: CommitVersionInput) {
+      async persistVersion(input: CommitVersionInput) {
         const previous = gate
         let release!: () => void
         gate = new Promise<void>((resolve) => {
@@ -138,7 +138,10 @@ describe("P6 consolidation — one master writer", () => {
     expect(proposeSource).not.toMatch(/\.commitVersion\s*\(/)
     expect(storeSource).not.toMatch(/\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:[\w."]+\s*\.\s*)?["']?master_(?:knowledge|versions)\b/i)
     expect(storeSource).not.toMatch(/\.commitVersion\s*\(/)
-    expect(storeSource).toMatch(/executeMasterTableWrite\s*\(/)
+    expect(storeSource).not.toMatch(/executeMasterTableWrite\s*\(/)
+    expect(storeSource).toMatch(/guardedWrite\(/)
+    const writerSource = readFileSync("platform/p6/masterWrite.ts", "utf8")
+    expect(writerSource).not.toMatch(/export async function executeMasterTableWrite/)
   })
 
   it("an unapproved write refuses and does not commit", async () => {
@@ -269,6 +272,91 @@ describe("P6 consolidation — one master writer", () => {
       expect(first).toEqual(["platform/p6/already.ts"])
       expect(second).toEqual(first)
       expect(readFileSync(preexisting, "utf8")).toBe(body)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("a public store or session commit of a pending substantive proposal writes nothing", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    const pending = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.public",
+        payload: { wording: "still pending" },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    const input = {
+      firmId: pending.firmId,
+      proposalId: pending.id,
+      action: "apply" as const,
+      diff: { key: pending.entryKey, partition: "mutable" as const, before: { entries: {} }, after: { entries: {} } },
+      snapshot: { entries: {} },
+      authorId: "partner_b",
+      authorKind: "partner" as const,
+      restoredFromVersionId: null,
+      classification: "confidential",
+      proposal: pending,
+      expectedBaseVersionId: null,
+    }
+    const auditBefore = masterWriteAuditLog().length
+    await expect(memory.commitVersion(input)).rejects.toThrow(/substantive proposal requires partner approval/)
+    await memory.runExclusive(async (tx) => {
+      await expect(tx.commitVersion(input)).rejects.toThrow(/substantive proposal requires partner approval/)
+    })
+    expect(await memory.listVersions("firmA")).toEqual([])
+    expect((await memory.getProposal(pending.id))?.status).toBe("pending")
+    expect(masterWriteAuditLog().length).toBe(auditBefore)
+  })
+
+  it("a failed COMMIT drops the ledger and the audit so the same proposal can apply", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service", failCommit: "commit" })
+    const pending = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "15",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.retry",
+        payload: { wording: "retry me" },
+        proposedBy: "learner-1",
+      },
+      memory,
+    )
+    await approveProposal(pending.id, PARTNER, memory)
+    const auditBefore = masterWriteAuditLog().length
+    await expect(applyChange(pending.id, memory)).rejects.toThrow(/did not commit/)
+    expect(await memory.listVersions("firmA")).toEqual([])
+    expect((await memory.getProposal(pending.id))?.status).toBe("approved")
+    expect(masterWriteAuditLog().slice(auditBefore)).toEqual([])
+    const applied = await applyChange(pending.id, memory)
+    expect(applied.masterWritten).toBe(true)
+    expect(await memory.listVersions("firmA")).toHaveLength(1)
+    expect(masterWriteAuditLog().slice(auditBefore).map((row) => row.proposalId)).toEqual([pending.id])
+  })
+
+  it("the source scan reads the same extensions as the repository guard, including a planted non-TS writer", () => {
+    const root = mkdtempSync(join(tmpdir(), "p6-ext-"))
+    const dir = join(root, "platform", "p6")
+    mkdirSync(dir, { recursive: true })
+    const insert = "INSERT INTO master_versions (id) VALUES ('x')\n"
+    writeFileSync(join(dir, "sneakInsert.js"), `export const q = \`${insert}\``)
+    writeFileSync(join(dir, "sneakInsert.py"), `q = """${insert}"""\n`)
+    writeFileSync(join(dir, "sneakInsert.sql"), insert)
+    writeFileSync(join(dir, "note.md"), insert)
+    try {
+      expect(scanP6MasterWriters(root).sort()).toEqual([
+        "platform/p6/sneakInsert.js",
+        "platform/p6/sneakInsert.py",
+        "platform/p6/sneakInsert.sql",
+      ])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

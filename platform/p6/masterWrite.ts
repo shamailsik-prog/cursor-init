@@ -9,8 +9,9 @@
  * requires a partner who is not the proposer. Each committed write is audited
  * in process. There is no new table and no new collection.
  */
+import { randomUUID } from "node:crypto"
 import { closeSync, constants, openSync, readdirSync, readFileSync } from "node:fs"
-import { join, relative, sep } from "node:path"
+import { extname, join, relative, sep } from "node:path"
 import type { PoolClient } from "pg"
 import {
   canonicalPayload,
@@ -21,8 +22,9 @@ import {
 } from "@/platform/p6/masterStore"
 
 export const CANONICAL_MASTER_WRITER = "platform/p6/masterWrite.ts"
-const STORE_DELEGATE = "platform/p6/masterStore.ts"
 const MASTER_TABLES = new Set(["master_knowledge", "master_versions"])
+/** Same source suffixes as ci_gates/check_master_writes.py. */
+const SOURCE_SUFFIXES = new Set([".ts", ".tsx", ".js", ".py", ".sql"])
 
 const QUALIFIED = '(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)(?:\\s*\\.\\s*(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*))*'
 const TABLE_WRITE = new RegExp(
@@ -39,9 +41,30 @@ export type MasterWriteAuditEntry = {
   outcome: "committed"
 }
 
+export type StagedMasterWrite = {
+  proposalId: string | null
+  entry: MasterWriteAuditEntry
+}
+
+/**
+ * Raw persistence for writeMaster. Not the store API: callers receive a session
+ * whose commitVersion goes through writeMaster, and this object stays inside it.
+ * When `stageAfterCommit` is set, the ledger and the audit wait for the
+ * transaction owner to publish them after COMMIT.
+ */
 export type MasterWriteSession = {
   allowDeclassify(on: boolean): Promise<void>
-  commitVersion(input: CommitVersionInput): Promise<CommitVersionResult>
+  assertCommitShape?(input: CommitVersionInput): Promise<void>
+  persistVersion?(input: CommitVersionInput): Promise<CommitVersionResult>
+  pgClient?: PoolClient
+  stageAfterCommit?(staged: StagedMasterWrite): void
+}
+
+export function publishStagedMasterWrites(staged: readonly StagedMasterWrite[]): void {
+  for (const item of staged) {
+    if (item.proposalId) appliedProposalIds.add(item.proposalId)
+    audit.push(item.entry)
+  }
 }
 
 const audit: MasterWriteAuditEntry[] = []
@@ -129,25 +152,40 @@ export async function writeMaster(
   gate: { declassify: boolean },
 ): Promise<CommitVersionResult> {
   return oneApply(input.action === "apply" ? input.proposalId : null, async () => {
+    if (session.assertCommitShape) await session.assertCommitShape(input)
     assertMayWrite(input)
     await session.allowDeclassify(gate.declassify)
-    const outcome = await session.commitVersion(input)
+    const outcome = await persistSession(session, input)
     if (!outcome.committed) return outcome
-    if (input.action === "apply" && input.proposalId) appliedProposalIds.add(input.proposalId)
-    audit.push({
-      action: input.action,
-      firmId: input.firmId,
-      proposalId: input.proposalId,
-      actorId: input.authorId,
-      versionId: outcome.versionId,
-      outcome: "committed",
-    })
+    const staged: StagedMasterWrite = {
+      proposalId: input.action === "apply" ? input.proposalId : null,
+      entry: {
+        action: input.action,
+        firmId: input.firmId,
+        proposalId: input.proposalId,
+        actorId: input.authorId,
+        versionId: outcome.versionId,
+        outcome: "committed",
+      },
+    }
+    if (session.stageAfterCommit) session.stageAfterCommit(staged)
+    else publishStagedMasterWrites([staged])
     return outcome
   })
 }
 
-/** Postgres statements for master_versions and master_knowledge. The store delegates here. */
-export async function executeMasterTableWrite(client: PoolClient, input: CommitVersionInput, versionId: string): Promise<void> {
+async function persistSession(session: MasterWriteSession, input: CommitVersionInput): Promise<CommitVersionResult> {
+  if (session.pgClient) {
+    const versionId = randomUUID()
+    await executeMasterTableWrite(session.pgClient, input, versionId)
+    return { committed: true, versionId }
+  }
+  if (!session.persistVersion) throw new Error("master session is closed")
+  return session.persistVersion(input)
+}
+
+/** Postgres statements for master_versions and master_knowledge. Not exported. */
+async function executeMasterTableWrite(client: PoolClient, input: CommitVersionInput, versionId: string): Promise<void> {
   await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`p6:${input.firmId}`])
   const prior = await client.query<{ version_no: number; id: string }>(
     `SELECT version_no, id FROM master_versions
@@ -208,7 +246,7 @@ function isSecondWriter(path: string, source: string): boolean {
   if (path === CANONICAL_MASTER_WRITER) return false
   if (writesMasterTable(source)) return true
   if (/\.commitVersion\s*\(/.test(source)) return true
-  if (path !== STORE_DELEGATE && /\bexecuteMasterTableWrite\s*\(/.test(source)) return true
+  if (/\bexecuteMasterTableWrite\s*\(/.test(source)) return true
   if (/collection\(\s*['"]master(?:_knowledge|_versions)?['"]/i.test(source)) return true
   if (/match\s+\/master_versions\//i.test(source)) return true
   return false
@@ -245,7 +283,7 @@ function walkTs(dir: string, root: string, out: { path: string; source: string }
       walkTs(absolute, root, out)
       continue
     }
-    if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) continue
+    if (!SOURCE_SUFFIXES.has(extname(entry.name).toLowerCase())) continue
     if (!entry.isFile() && !entry.isSymbolicLink()) continue
     const source = readSourceNoFollow(absolute)
     if (source === undefined) continue

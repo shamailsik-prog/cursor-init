@@ -12,6 +12,7 @@ import { effectiveClass, writeMaster } from "@/platform/p6/masterWrite"
 import {
   normalizeActorKey,
   payloadDigest,
+  sessionForWrite,
   type CommitVersionResult,
   type MasterDiff,
   type MasterSnapshot,
@@ -284,7 +285,7 @@ export async function applyChange(proposalId: string, store: MasterStore): Promi
         proposal: next,
         expectedBaseVersionId: base,
       },
-      tx,
+      sessionForWrite(tx),
       { declassify: row.declassify },
     )
     if (!committed.committed) throw new Error("master write did not commit")
@@ -325,7 +326,7 @@ export async function rollbackMaster(
         proposal: null,
         expectedBaseVersionId: base,
       },
-      tx,
+      sessionForWrite(tx),
       { declassify: input.actor.declassify === true },
     )
     if (!committed.committed) throw new Error("master write did not commit")

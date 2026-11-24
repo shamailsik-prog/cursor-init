@@ -14,13 +14,13 @@ F41 boundary: `docs/audit/2026-10-13-forensic-audit.md` L839–L853. Quarantine 
 
 ## Decisions
 
-- `platform/p6/masterWrite.ts` `writeMaster` (L126) is the only master write. `executeMasterTableWrite` (L150) holds the `master_versions` and `master_knowledge` statements. `scanP6MasterWriters` (L257) fails any other file under `platform/p6` that writes those tables, calls `.commitVersion(`, calls `executeMasterTableWrite` (except the store delegate), or names a master collection.
+- `platform/p6/masterWrite.ts` `writeMaster` (L149) is the only master write. `executeMasterTableWrite` (L188) holds the `master_versions` and `master_knowledge` statements and is not exported. `scanP6MasterWriters` (L295) fails any other file under `platform/p6` that writes those tables, calls `.commitVersion(`, calls `executeMasterTableWrite`, or names a master collection. It reads `.ts`, `.tsx`, `.js`, `.py` and `.sql`, the same suffixes as `ci_gates/check_master_writes.py`.
 - `change_proposals` inserts and updates stay in `platform/p6/masterStore.ts`. A proposal is not a master version. The repo-wide guard still refuses those statements outside P6.
-- The in-memory `commitVersion` (masterStore.ts L506) and the Postgres session `commitVersion` (L767, L878) are the session the canonical writer calls (masterWrite.ts L134). They are not a second decision.
-- `applyChange` (proposeChange.ts L223, delegate L273) and `rollbackMaster` (L298, delegate L314) are the old entry points. `writeVersion` (masterStore.ts L921) delegates at L923.
+- Public `commitVersion` on the store (masterStore.ts L572 and L836) and on the session (L940) calls `writeMaster`. The raw memory persist is `persistVersion` (L580). The raw Postgres client is `pgRaw` (L974), which is not on the store API. The ledger and the audit are staged on that transaction and published only after COMMIT.
+- `applyChange` (proposeChange.ts L224, delegate L274) and `rollbackMaster` (L299, delegate L315) are the old entry points. They take the raw session from `sessionForWrite` (masterStore.ts L383).
 - The write stays on when `SIKANDER_FLAG_P6_CONSOLIDATION` is unset. A flag-off second writer would fail the source scan. The flag gates the new learning, review and client entry points only (`platform/p6/consolidationFlag.ts` L8). Unset means off.
 - Actor binding uses `normalizeActorKey` from the store, the same fold as approval. A substantive apply requires a partner decision, and the approver's folded key must differ from the proposer's.
-- The audit log and the once-only apply ledger are in-process. They are not a new table and not a new collection. Durable once-only remains the store compare-and-swap and the one-proposal version constraint.
+- The audit log and the once-only apply ledger are in-process. They are not a new table and not a new collection. They are published only after the transaction commits, and discarded if it rolls back. Durable once-only remains the store compare-and-swap and the one-proposal version constraint.
 - `platform/p6/learners.ts` stays the G-3 posture gate (`learnersMayRun` L15, `assertLearnersStopped` L20). It is not a learning mode and it does not write. `platform/p6/learning/**` is reserved for L4.6 and is not created.
 - Callers outside `platform/p6` are not edited. Shims for the eleven spec names live in this tree. Wiring them to the live routes is W2-WIRE.
 
@@ -80,11 +80,11 @@ Adjacent, not one of the three channels: `services/d1-1/clients.ts` `createClien
 | --- | --- | --- | --- |
 | `proposeChange` | proposeChange.ts L143 | `tests/p6.g3.test.ts`, `tests/p6.master.pg.test.ts`, `tests/spine.hardening.test.ts` L349 | Stays a proposal. It does not write the master. |
 | `approveProposal` | proposeChange.ts L163 | same P6 tests | Records the partner decision the writer requires. |
-| `applyChange` | proposeChange.ts L223 | `tests/p6.g3.test.ts`, `tests/p6.master.pg.test.ts` | `writeMaster` L273 |
-| `rollbackMaster` | proposeChange.ts L298 | same | `writeMaster` L314 |
-| `writeVersion` | masterStore.ts L921 | Postgres `commitVersion` L767 and L878 | `executeMasterTableWrite` L923 |
-| `writeMaster` | masterWrite.ts L126 | `applyChange`, `rollbackMaster` | Canonical |
-| `executeMasterTableWrite` | masterWrite.ts L150 | `writeVersion` | Canonical SQL |
+| `applyChange` | proposeChange.ts L224 | `tests/p6.g3.test.ts`, `tests/p6.master.pg.test.ts` | `writeMaster` L274 |
+| `rollbackMaster` | proposeChange.ts L299 | same | `writeMaster` L315 |
+| `commitVersion` | masterStore.ts L572, L836, L940 | Public store and session | `writeMaster` via `guardedWrite` |
+| `writeMaster` | masterWrite.ts L149 | `applyChange`, `rollbackMaster`, public `commitVersion` | Canonical |
+| `executeMasterTableWrite` | masterWrite.ts L188 | `writeMaster` only | Canonical SQL, not exported |
 
 ## W2-WIRE
 
