@@ -9,6 +9,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { InMemoryMasterStore, type MasterSession, type MasterStore } from "@/platform/p6/masterStore"
+import { applyLearning } from "@/platform/p6/applyLearning"
 import { applyChange, approveProposal, proposeChange } from "@/platform/p6/proposeChange"
 import { masterWriteAuditLog, scanP6MasterWriters } from "@/platform/p6/masterWrite"
 import * as learning from "@/platform/p6/learning"
@@ -17,7 +18,6 @@ import {
   InMemoryLearningLedger,
   LEARNING_LIMITS,
   P6_LEARNING_FLAG,
-  applyLearning,
   decideLearning,
   isP6LearningEnabled,
   LearningStaleError,
@@ -198,8 +198,10 @@ describe("L4.6 learning governance", () => {
     expect(isP6LearningEnabled({ [FLAG]: "1" })).toBe(false)
     expect(isP6LearningEnabled({ [FLAG]: "yes" })).toBe(false)
     expect(isP6LearningEnabled({ [FLAG]: "false" })).toBe(false)
-    expect(isP6LearningEnabled({ [FLAG]: " true " })).toBe(true)
-    expect(isP6LearningEnabled({ [FLAG]: "TRUE" })).toBe(true)
+    expect(isP6LearningEnabled({ [FLAG]: "true" })).toBe(true)
+    expect(isP6LearningEnabled({ [FLAG]: " true " })).toBe(false)
+    expect(isP6LearningEnabled({ [FLAG]: "TRUE" })).toBe(false)
+    expect(isP6LearningEnabled({ [FLAG]: "true " })).toBe(false)
     expect(P6_LEARNING_FLAG).toBe("P6_LEARNING")
     expect(LEARNING_LIMITS.maxProposalsPerWindow).toBeGreaterThan(0)
   })
@@ -345,7 +347,7 @@ describe("L4.6 learning governance", () => {
     expect(await ledger.findByFingerprint("none")).toBeNull()
   })
 
-  it("refuses the immutable citation partition", async () => {
+  it("R22 refuses the immutable citation partition", async () => {
     const { deps, inserts } = await harness()
     await expect(proposeLearning(proposal({ entryKey: "citation_protocol" }), deps)).rejects.toThrow(
       /immutable master partition is not writable/,
@@ -359,7 +361,7 @@ describe("L4.6 learning governance", () => {
     expect(inserts()).toBe(0)
   })
 
-  it("keeps a different classification as its own proposal", async () => {
+  it("R15 keeps a different classification as its own proposal", async () => {
     const { deps } = await harness()
     const publicRow = await proposeLearning(
       proposal({ entryKey: "clause.class", classification: "public", before: undefined, after: { clause: "fresh" } }),
@@ -416,7 +418,7 @@ describe("L4.6 learning governance", () => {
     expect(await ledger.get(stored.id)).toMatchObject({ status: "pending" })
   })
 
-  it("dedupes an identical proposal, including key order, and does not spend the rate limit on the duplicate", async () => {
+  it("M20/M33 dedupes an identical proposal, including key order, and does not spend the rate limit on the duplicate", async () => {
     const { deps } = await harness({ limits: { maxProposalsPerWindow: 1, windowMs: 60_000 } })
     const first = await proposeLearning(proposal({ before: { b: 1, a: 2 }, after: { a: 2, b: 1 } }), deps)
     const again = await proposeLearning(
@@ -429,6 +431,8 @@ describe("L4.6 learning governance", () => {
       deps,
     )
     expect(again.id).toBe(first.id)
+    const otherFirm = await proposeLearning(proposal({ firmId: "firmB", entryKey: "clause.notice" }), deps)
+    expect(otherFirm.id).not.toBe(first.id)
     await expect(
       proposeLearning(proposal({ entryKey: "clause.other", after: { clause: "other" } }), deps),
     ).rejects.toThrow(/learning proposal rate limited/)
@@ -635,7 +639,7 @@ describe("L4.6 learning governance", () => {
 
   it("refuses a direct master write and exports no writer", () => {
     expect(() => refuseDirectMasterWrite()).toThrow(/learning cannot write the master/)
-    for (const name of ["applyChange", "writeMaster", "rollbackMaster", "commitVersion", "sealMasterSession"]) {
+    for (const name of ["applyChange", "applyLearning", "writeMaster", "rollbackMaster", "commitVersion", "sealMasterSession"]) {
       expect(learning).not.toHaveProperty(name)
     }
   })
@@ -648,7 +652,6 @@ describe("L4.6 learning governance", () => {
     for (const path of files) {
       const source = readFileSync(path, "utf8")
       for (const pattern of WRITER_PATTERNS) {
-        if (path.endsWith("platform/p6/learning/governance.ts") && pattern.source.includes("applyChange")) continue
         expect(source, path).not.toMatch(pattern)
       }
     }
@@ -886,7 +889,7 @@ describe("L4.6 learning governance", () => {
     expect((await memory.currentSnapshot("firmA")).entries["clause.space"]?.body).toEqual({ clause: "the plaintiff" })
   })
 
-  it("does not re-decide an approved row and does not open a second sealed proposal", async () => {
+  it("M18/R16 does not re-decide an approved row and does not open a second sealed proposal", async () => {
     const memory = new InMemoryMasterStore({ role: "p6_service" })
     const seeded = await proposeChange(
       {
@@ -933,6 +936,8 @@ describe("L4.6 learning governance", () => {
     expect(inserts).toBe(afterFirst)
     expect((await ledger.get(pending.id))?.status).toBe("approved")
     expect((await ledger.get(pending.id))?.sealedProposalId).toBe(approved.sealedProposalId)
+    expect((await memory.getProposal(approved.sealedProposalId!))?.status).toBe("approved")
+    expect(await memory.listVersions("firmA")).toHaveLength(1)
   })
 
   it("refuses a decision while the flag or G-3 is off", async () => {
@@ -1086,7 +1091,155 @@ describe("L4.6 learning governance", () => {
 
   it("records that the route must take the actor from the verified session", () => {
     const source = readFileSync("platform/p6/learning/governance.ts", "utf8")
-    expect(source).toMatch(/TODO\(W2-WIRE\): take proposedBy and the deciding actor from the verified session/)
+    expect(source).toMatch(/TODO\(W2-WIRE\): WIRE-282-009/)
+    expect(source).toMatch(/take proposedBy and the deciding actor from the verified session/)
+  })
+
+  it("M30 refuses evidence and field text over the cap before a row is stored", async () => {
+    const { deps, ledger, inserts } = await harness({ limits: { maxEvidenceChars: 8, maxFieldChars: 6 } })
+    await expect(
+      proposeLearning(proposal({ evidence: "123456789", entryKey: "ev", proposedBy: "l1" }), deps),
+    ).rejects.toThrow(/learning proposal exceeds size cap/)
+    const atCap = await proposeLearning(proposal({ evidence: "12345678", entryKey: "cap", proposedBy: "l1" }), deps)
+    expect(atCap.evidence).toBe("12345678")
+    await expect(
+      proposeLearning(proposal({ evidence: "short", entryKey: "toolong", proposedBy: "l1" }), deps),
+    ).rejects.toThrow(/learning proposal exceeds size cap/)
+    expect(await ledger.get(atCap.id)).toMatchObject({ status: "pending" })
+    expect(inserts()).toBe(0)
+  })
+
+  it("R03/R04 a missing before matches only a missing live entry", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    await seedEntry(memory, "clause.notice", { clause: "the plaintiff" })
+    const ledger = new InMemoryLearningLedger()
+    const deps: LearningDeps = {
+      ledger,
+      posture: OPEN,
+      store: memory,
+      env: { [FLAG]: "true" },
+      now: () => new Date("2026-11-24T00:00:00.000Z"),
+    }
+    const missingOnEmpty = await proposeLearning(
+      proposal({ entryKey: "clause.fresh", before: undefined, after: { clause: "fresh" } }),
+      deps,
+    )
+    expect(missingOnEmpty.baseline).toBe("matched")
+    const missingOnLive = await proposeLearning(
+      proposal({ entryKey: "clause.notice", before: undefined, after: { clause: "fresh" } }),
+      deps,
+    )
+    expect(missingOnLive.baseline).toBe("unmatched")
+    const presentOnEmpty = await proposeLearning(
+      proposal({ entryKey: "clause.absent", before: { clause: "gone" }, after: { clause: "fresh" } }),
+      deps,
+    )
+    expect(presentOnEmpty.baseline).toBe("unmatched")
+    await expect(decideLearning(missingOnLive.id, partner(), deps)).rejects.toBeInstanceOf(LearningStaleError)
+    await expect(decideLearning(presentOnEmpty.id, partner({ actorId: "partner_c" }), deps)).rejects.toBeInstanceOf(
+      LearningStaleError,
+    )
+  })
+
+  it("GOV-282-R2-002 a reject after a partial approval voids the sealed row", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    await seedEntry(memory, "clause.notice", { clause: "the plaintiff" })
+    let failApproval = true
+    const store = new Proxy(memory, {
+      get(target, prop, receiver) {
+        const value: unknown = Reflect.get(target, prop, receiver)
+        if (prop === "runExclusive" && typeof value === "function") {
+          return (fn: (tx: MasterSession) => Promise<unknown>) =>
+            (value as (fn: (tx: MasterSession) => Promise<unknown>) => Promise<unknown>).call(target, async (tx) => {
+              const wrapped = new Proxy(tx, {
+                get(session, key, sessionReceiver) {
+                  const method: unknown = Reflect.get(session, key, sessionReceiver)
+                  if (key === "recordApproval" && typeof method === "function") {
+                    return (...args: unknown[]) => {
+                      if (failApproval) {
+                        failApproval = false
+                        throw new Error("approval failed midway")
+                      }
+                      return (method as (...a: unknown[]) => unknown).apply(session, args)
+                    }
+                  }
+                  return typeof method === "function" ? (method as (...a: unknown[]) => unknown).bind(session) : method
+                },
+              })
+              return fn(wrapped)
+            })
+        }
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value
+      },
+    }) as MasterStore
+    const ledger = new InMemoryLearningLedger()
+    const deps: LearningDeps = {
+      ledger,
+      posture: OPEN,
+      store,
+      env: { [FLAG]: "true" },
+      now: () => new Date("2026-11-24T00:00:00.000Z"),
+    }
+    const pending = await proposeLearning(proposal(), deps)
+    await expect(decideLearning(pending.id, partner(), deps)).rejects.toThrow(/approval failed midway/)
+    const sealedId = (await ledger.get(pending.id))?.sealedProposalId
+    expect(sealedId).toEqual(expect.any(String))
+    expect((await memory.getProposal(sealedId!))?.status).toBe("pending")
+    const rejected = await decideLearning(pending.id, partner({ actorId: "partner_c", decision: "rejected" }), deps)
+    expect(rejected.status).toBe("rejected")
+    expect(rejected.sealedProposalId).toBeNull()
+    await expect(
+      approveProposal(sealedId!, { actorId: "partner_d", kind: "partner", role: "partner" }, memory),
+    ).rejects.toThrow(/sealed proposal is void/)
+    await expect(applyChange(sealedId!, memory)).rejects.toThrow(/sealed proposal is void/)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.notice"]?.body).toEqual({ clause: "the plaintiff" })
+  })
+
+  it("DESIGN-282-R2-005 treats an envelope as learning only when the source module is L4.6", async () => {
+    const memory = new InMemoryMasterStore({ role: "p6_service" })
+    await seedEntry(memory, "clause.notice", { clause: "X" })
+    const disguised = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "partner-desk",
+        classification: "confidential",
+        payload: {
+          l46: "baseline",
+          l46BeforeMissing: false,
+          l46Before: { clause: "X" },
+          l46After: { clause: "Y" },
+        },
+        proposedBy: "other-author",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.notice",
+      },
+      memory,
+    )
+    await approveProposal(disguised.id, { actorId: "partner_z", kind: "partner", role: "partner" }, memory)
+    await applyChange(disguised.id, memory)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.notice"]?.body).toEqual({
+      l46: "baseline",
+      l46BeforeMissing: false,
+      l46Before: { clause: "X" },
+      l46After: { clause: "Y" },
+    })
+    const ledger = new InMemoryLearningLedger()
+    const deps: LearningDeps = {
+      ledger,
+      posture: OPEN,
+      store: memory,
+      env: { [FLAG]: "true" },
+      now: () => new Date("2026-11-24T00:00:00.000Z"),
+    }
+    const pending = await proposeLearning(
+      proposal({ before: { l46: "baseline", l46BeforeMissing: false, l46Before: { clause: "X" }, l46After: { clause: "Y" } }, after: { clause: "kept" } }),
+      deps,
+    )
+    const approved = await decideLearning(pending.id, partner(), deps)
+    const applied = await applyLearning(approved.id, deps)
+    expect(applied.masterWritten).toBe(true)
+    expect((await memory.currentSnapshot("firmA")).entries["clause.notice"]?.body).toEqual({ clause: "kept" })
   })
 
   it("accepts every authorised source and no others", async () => {

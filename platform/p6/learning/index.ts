@@ -1,5 +1,5 @@
 export { isP6LearningEnabled, P6_LEARNING_FLAG } from "@/platform/p6/learning/flag"
-export { LEARNING_LIMITS, applyLearning, decideLearning, proposeLearning, refuseDirectMasterWrite } from "@/platform/p6/learning/governance"
+export { LEARNING_LIMITS, decideLearning, proposeLearning, refuseDirectMasterWrite } from "@/platform/p6/learning/governance"
 export type { LearningDeps, LearningLimits } from "@/platform/p6/learning/governance"
 export { InMemoryLearningLedger } from "@/platform/p6/learning/ledger"
 export type { LearningLedger } from "@/platform/p6/learning/ledger"

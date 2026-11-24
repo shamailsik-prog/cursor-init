@@ -10,8 +10,8 @@ import { isClassification } from "@/platform/p1/types"
 import { assertLearnersStopped, type LearnerPosture } from "@/platform/p6/learners"
 import { canonicalPayload, normalizeActorKey, payloadDigest, type MasterStore } from "@/platform/p6/masterStore"
 import { effectiveClass } from "@/platform/p6/masterWrite"
-import { approveProposal, applyChange, proposeChange } from "@/platform/p6/proposeChange"
-import { baselineMatchesLive, learningBaselinePayload } from "@/platform/p6/learning/baseline"
+import { approveProposal, proposeChange, voidSealedProposal } from "@/platform/p6/proposeChange"
+import { baselineMatchesLive, LEARNING_SOURCE_MODULE, learningBaselinePayload } from "@/platform/p6/learning/baseline"
 import { isP6LearningEnabled } from "@/platform/p6/learning/flag"
 import type { LearningLedger } from "@/platform/p6/learning/ledger"
 import { parseLearningSource } from "@/platform/p6/learning/sources"
@@ -65,9 +65,14 @@ function clock(deps: LearningDeps): Date {
   return deps.now ? deps.now() : new Date()
 }
 
-function assertOpen(deps: LearningDeps): void {
+export function assertLearningOpen(deps: LearningDeps): void {
   if (!isP6LearningEnabled(deps.env ?? process.env)) throw new Error("learning governance is off")
   assertLearnersStopped(deps.posture)
+}
+
+/** The learning ledger's own lock. The master apply lives outside this folder. */
+export function runLearningExclusive<T>(ledger: object, fn: () => Promise<T>): Promise<T> {
+  return exclusive(ledger, fn)
 }
 
 function text(value: unknown): string | null {
@@ -109,7 +114,7 @@ async function observeBaseline(
   }
 }
 
-async function assertCurrentBaseline(row: LearningProposalRecord, store: MasterStore): Promise<void> {
+export async function assertLearningBaseline(row: LearningProposalRecord, store: MasterStore): Promise<void> {
   if (row.baseline === "unmatched") throw new LearningStaleError()
   let live: unknown
   try {
@@ -208,10 +213,10 @@ function assertPartner(actor: LearningActor, row: LearningProposalRecord): void 
 
 export async function proposeLearning(input: ProposeLearningInput, deps: LearningDeps): Promise<LearningProposalRecord> {
   return exclusive(deps.ledger, async () => {
-    assertOpen(deps)
+    assertLearningOpen(deps)
     if (!isClassification(input.classification)) throw new Error("artefact write omitted classification")
     const firmId = text(input.firmId)
-    // TODO(W2-WIRE): take proposedBy and the deciding actor from the verified session. A caller-supplied id is not identity.
+    // TODO(W2-WIRE): WIRE-282-009. No route calls this module. take proposedBy and the deciding actor from the verified session. A caller-supplied id is not identity.
     const proposedBy = text(input.proposedBy)
     const entryKey = text(input.entryKey)
     if (!firmId || !proposedBy || !entryKey || normalizeActorKey(proposedBy) === "") {
@@ -282,13 +287,17 @@ export async function proposeLearning(input: ProposeLearningInput, deps: Learnin
 
 export async function decideLearning(id: string, actor: LearningActor, deps: LearningDeps): Promise<LearningProposalRecord> {
   return exclusive(deps.ledger, async () => {
-    assertOpen(deps)
+    assertLearningOpen(deps)
     const decision = actor.decision === "approved" ? "approved" : actor.decision === "rejected" ? "rejected" : refuseDirectMasterWrite()
     const row = await deps.ledger.get(id)
     if (!row) throw new Error("proposal not found")
     if (row.status !== "pending") throw new Error("proposal is not pending")
     assertPartner(actor, row)
     if (decision === "rejected") {
+      if (row.sealedProposalId) {
+        if (!deps.store) throw new Error("learning rejection requires the master store")
+        await voidSealedProposal(row.sealedProposalId, deps.store)
+      }
       const saved = await deps.ledger.compareAndSetStatus(id, "pending", {
         status: "rejected",
         decidedBy: actor.actorId,
@@ -300,13 +309,13 @@ export async function decideLearning(id: string, actor: LearningActor, deps: Lea
       return saved
     }
     if (!deps.store) throw new Error("learning approval requires the master store")
-    await assertCurrentBaseline(row, deps.store)
+    await assertLearningBaseline(row, deps.store)
     let sealedProposalId = row.sealedProposalId
     if (!sealedProposalId) {
       const sealed = await proposeChange(
         {
           firmId: row.firmId,
-          sourceModule: "L4.6",
+          sourceModule: LEARNING_SOURCE_MODULE,
           classification: row.classification,
           payload: learningBaselinePayload(row.diff.before, row.diff.after),
           proposedBy: row.proposedBy,
@@ -337,19 +346,5 @@ export async function decideLearning(id: string, actor: LearningActor, deps: Lea
     if (!saved) throw new Error("proposal is not pending")
     if (saved.masterWrite !== false) refuseDirectMasterWrite()
     return saved
-  })
-}
-
-export async function applyLearning(id: string, deps: LearningDeps): Promise<{ masterWritten: true; proposalId: string }> {
-  return exclusive(deps.ledger, async () => {
-    assertOpen(deps)
-    if (!deps.store) throw new Error("learning approval requires the master store")
-    const row = await deps.ledger.get(id)
-    if (!row) throw new Error("proposal not found")
-    await assertCurrentBaseline(row, deps.store)
-    if (row.status !== "approved" || !row.sealedProposalId) throw new Error("proposal is not approved")
-    const applied = await applyChange(row.sealedProposalId, deps.store)
-    if (applied.masterWritten !== true) refuseDirectMasterWrite()
-    return { masterWritten: true, proposalId: applied.proposalId }
   })
 }

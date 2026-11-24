@@ -8,7 +8,7 @@
 
 import { randomUUID } from "node:crypto"
 import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
-import { masterBody, sealedBaselineMatches } from "@/platform/p6/learning/baseline"
+import { LEARNING_SOURCE_MODULE, masterBody, sealedBaselineMatches } from "@/platform/p6/learning/baseline"
 import { LearningStaleError } from "@/platform/p6/learning/stale"
 import { effectiveClass, nextSnapshot } from "@/platform/p6/masterWrite"
 import {
@@ -60,6 +60,29 @@ export type RolledBackMaster = {
 }
 
 const IMMUTABLE_KEYS = new Set(["citation_protocol", "verification_protocol"])
+
+/**
+ * Sealed rows this process has voided. The store's CAS and the SQL trigger both refuse
+ * pending → rejected, and that store is not changed here. Approve and apply consult this set
+ * inside the firm lock, so a voided row cannot become a master version.
+ */
+const voidedSealedIds = new Set<string>()
+
+export function isSealedProposalVoid(proposalId: string): boolean {
+  return voidedSealedIds.has(proposalId)
+}
+
+/** Closes a still-open L4.6 seal so a later partner cannot approve or apply it. */
+export async function voidSealedProposal(proposalId: string, store: MasterStore): Promise<void> {
+  if (store.role !== "p6_service") throw new Error("non-P6 writer refused")
+  await store.runExclusive(async (tx) => {
+    const row = await tx.getProposal(proposalId)
+    if (!row) throw new Error("proposal not found")
+    if (row.status === "applied") throw new Error("proposal is already applied")
+    if (row.sourceModule !== LEARNING_SOURCE_MODULE) throw new Error("proposal is not a learning seal")
+    voidedSealedIds.add(proposalId)
+  })
+}
 
 function actorKey(value: string): string {
   return normalizeActorKey(value)
@@ -118,7 +141,7 @@ async function persistProposal(proposal: ChangeProposal, store: MasterStore): Pr
   const before = await store.currentSnapshot(proposal.firmId)
   const requested = proposal.changeClass ?? null
   const liveBody = before.entries[entryKey]?.body
-  const changeClass = effectiveClass(requested, liveBody, masterBody(proposal.payload))
+  const changeClass = effectiveClass(requested, liveBody, masterBody(proposal.payload, proposal.sourceModule))
   const row: PersistedProposal = {
     id: randomUUID(),
     firmId: proposal.firmId,
@@ -171,6 +194,7 @@ export async function approveProposal(
 ): Promise<PersistedProposal> {
   if (store.role !== "p6_service") throw new Error("non-P6 writer refused")
   return store.runExclusive(async (tx) => {
+    if (isSealedProposalVoid(proposalId)) throw new Error("sealed proposal is void")
     refuseNonPartner(actor)
     const row = await tx.getProposal(proposalId)
     if (!row) throw new Error("proposal not found")
@@ -221,8 +245,9 @@ export async function applyChange(proposalId: string, store: MasterStore): Promi
     const base = await tx.lockFirm(row.firmId)
     const before = await tx.currentSnapshot(row.firmId)
     const existing = before.entries[row.entryKey]
-    if (!sealedBaselineMatches(existing?.body, row.payload)) throw new LearningStaleError()
-    const writtenBody = masterBody(row.payload)
+    if (isSealedProposalVoid(row.id)) throw new Error("sealed proposal is void")
+    if (!sealedBaselineMatches(existing?.body, row.payload, row.sourceModule)) throw new LearningStaleError()
+    const writtenBody = masterBody(row.payload, row.sourceModule)
     const changeClass = effectiveClass(row.requestedClass, existing?.body, writtenBody)
     assertNoDowngrade(existing?.classification, row.classification, row.declassify)
     let authorId: string
