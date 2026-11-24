@@ -794,4 +794,77 @@ describe("L9.1 high-speed bulk upload", () => {
       setFirestorePersistenceForTests(null)
     }
   })
+
+  it("overlapping Firestore chunk writes and finalises keep both files", async () => {
+    const rows = new Map<string, Record<string, unknown>>()
+    const db = {
+      collection(name: string) {
+        return {
+          doc(id: string) {
+            return {
+              async set(data: Record<string, unknown>) {
+                rows.set(`${name}/${id}`, structuredClone(data))
+              },
+              async delete() {
+                rows.delete(`${name}/${id}`)
+              },
+              async get() {
+                const data = rows.get(`${name}/${id}`)
+                return { exists: data !== undefined, data: () => data }
+              },
+            }
+          },
+        }
+      },
+    }
+    const { setFirestorePersistenceForTests } = await import("@/platform/persistence/runtimeRepositories")
+    setFirestorePersistenceForTests(db)
+    vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "firestore")
+    const realRead = staging.readStagingChunks.bind(staging)
+    let inFlight = 0
+    let maxInFlight = 0
+    const spy = vi.spyOn(staging, "readStagingChunks").mockImplementation(async (input) => {
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      try {
+        return await realRead(input)
+      } finally {
+        inFlight -= 1
+      }
+    })
+    try {
+      const store = newStore()
+      const left = Buffer.from("left-chunk")
+      const right = Buffer.from("right-chunk")
+      const started = await startBulkUpload(
+        store,
+        "firmA",
+        "m1",
+        [fileOf(left, store, "firmA", "left.pdf"), fileOf(right, store, "firmA", "right.pdf")],
+        caller
+      )
+      await Promise.all([
+        uploadChunk(store, started.sessionId, 0, 1, left, caller),
+        uploadChunk(store, started.sessionId, 1, 1, right, caller),
+      ])
+      const saved = rows.get(`upload_sessions/${started.sessionId}`)
+      const files = saved?.files as Array<{ receivedChunks: number[] }>
+      expect(files[0]?.receivedChunks).toEqual([1])
+      expect(files[1]?.receivedChunks).toEqual([1])
+      expect(maxInFlight).toBe(1)
+      maxInFlight = 0
+      const [first, second] = await Promise.all([
+        finaliseFile(store, started.sessionId, 0, caller),
+        finaliseFile(store, started.sessionId, 1, caller),
+      ])
+      const done = (rows.get(`upload_sessions/${started.sessionId}`)?.files ?? []) as Array<{ state: string; docId?: string }>
+      expect(done.map((file) => file.state)).toEqual(["finalised", "finalised"])
+      expect(done[0]?.docId).toBe(first.docId)
+      expect(done[1]?.docId).toBe(second.docId)
+      expect(maxInFlight).toBe(1)
+    } finally {
+      spy.mockRestore()
+      setFirestorePersistenceForTests(null)
+    }
+  })
 })

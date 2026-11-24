@@ -182,6 +182,41 @@ export function parseStoredUploadSession(id: string, data: Record<string, unknow
   }
 }
 
+const sessionMutationTails = new WeakMap<object, Map<string, Promise<void>>>()
+
+/**
+ * One in-process chain per session. A Firestore recall parses a new object, so two
+ * overlapping chunk writes would each remember their own copy and the last write
+ * would drop the other chunk. The chain makes the second read happen after the
+ * first remember.
+ */
+async function withSessionMutation<T>(store: object, sessionId: string, run: () => Promise<T>): Promise<T> {
+  let chains = sessionMutationTails.get(store)
+  if (!chains) {
+    chains = new Map()
+    sessionMutationTails.set(store, chains)
+  }
+  const previous = chains.get(sessionId) ?? Promise.resolve()
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const opened = previous.catch(() => undefined).then(() => gate)
+  chains.set(
+    sessionId,
+    opened.then(
+      () => undefined,
+      () => undefined
+    )
+  )
+  await previous.catch(() => undefined)
+  try {
+    return await run()
+  } finally {
+    release()
+  }
+}
+
 async function remember(store: SpineStore, session: BulkUploadSessionRow): Promise<void> {
   uploadSessionsOf(store).set(session.id, session)
   if (resolvePersistenceMode() !== "firestore") return
@@ -418,6 +453,19 @@ export async function uploadChunk(
   bytes: Buffer,
   caller: BulkUploadCaller
 ): Promise<{ state: BulkUploadFileState }> {
+  return withSessionMutation(store, sessionId, () =>
+    writeChunk(store, sessionId, fileIdx, chunkIdx, bytes, caller)
+  )
+}
+
+async function writeChunk(
+  store: SpineStore,
+  sessionId: string,
+  fileIdx: number,
+  chunkIdx: number,
+  bytes: Buffer,
+  caller: BulkUploadCaller
+): Promise<{ state: BulkUploadFileState }> {
   const session = await requireSession(store, sessionId, caller)
   const file = requireFile(session, fileIdx)
   if (file.state === "deduped" || file.state === "finalised" || file.state === "failed") {
@@ -471,6 +519,15 @@ export async function resumeUpload(
 }
 
 export async function finaliseFile(
+  store: SpineStore,
+  sessionId: string,
+  fileIdx: number,
+  caller: BulkUploadCaller
+): Promise<{ docId: string; reused: boolean }> {
+  return withSessionMutation(store, sessionId, () => finishFile(store, sessionId, fileIdx, caller))
+}
+
+async function finishFile(
   store: SpineStore,
   sessionId: string,
   fileIdx: number,

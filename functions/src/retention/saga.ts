@@ -557,13 +557,18 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
           )
         }
         if (!sharesLock) {
-          try {
-            await deleteStagingObjectsByPrefix(prefix)
-          } catch (err) {
-            if (err instanceof Error && err.message === "staging prefix is not empty") throw new JobError("purge_incomplete")
-            throw err
-          }
-          if ((await listStagingObjects(prefix)).length > 0) throw new JobError("purge_incomplete")
+          // A new fenced step, not staging-hold. A retry after that hold step has
+          // committed still re-checks the legal hold before any byte is deleted.
+          await step(ctx as JobContext<unknown>, `staging-delete-${i}`, async (tx) => {
+            await assertNoHold(tx, firmId, req.matterId)
+            try {
+              await deleteStagingObjectsByPrefix(prefix)
+            } catch (err) {
+              if (err instanceof Error && err.message === "staging prefix is not empty") throw new JobError("purge_incomplete")
+              throw err
+            }
+            if ((await listStagingObjects(prefix)).length > 0) throw new JobError("purge_incomplete")
+          })
           let page = 0
           for (;;) {
             const peek = await adminDb()

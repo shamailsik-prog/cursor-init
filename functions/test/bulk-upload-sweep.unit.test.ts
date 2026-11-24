@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   chunkFirestoreWrites,
@@ -49,5 +50,20 @@ describe("bulk upload staging sweep", () => {
     const batches = chunkFirestoreWrites(Array.from({ length: 501 }, (_, i) => i))
     expect(batches.map((batch) => batch.length)).toEqual([450, 51])
     expect(Math.max(...batches.map((batch) => batch.length))).toBeLessThanOrEqual(500)
+  })
+
+  it("deletes staging bytes only inside a fenced step that rechecks the legal hold", () => {
+    const src = readFileSync(new URL("../src/retention/saga.ts", import.meta.url), "utf8")
+    const holdAt = src.indexOf("staging-hold-")
+    const deleteAt = src.indexOf("staging-delete-")
+    const sessionsAt = src.indexOf("staging-sessions-")
+    expect(holdAt).toBeGreaterThan(-1)
+    expect(deleteAt).toBeGreaterThan(holdAt)
+    expect(sessionsAt).toBeGreaterThan(deleteAt)
+    const destructive = src.slice(deleteAt, sessionsAt)
+    expect(destructive.indexOf("assertNoHold")).toBeGreaterThan(-1)
+    expect(destructive.indexOf("assertNoHold")).toBeLessThan(destructive.indexOf("deleteStagingObjectsByPrefix"))
+    expect(src.slice(holdAt, deleteAt)).not.toContain("deleteStagingObjectsByPrefix")
+    expect(src.match(/deleteStagingObjectsByPrefix/g)).toHaveLength(2)
   })
 })
