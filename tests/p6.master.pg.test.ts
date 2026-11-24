@@ -10,7 +10,7 @@ import { afterAll, describe, expect, it } from "vitest"
 import pg from "pg"
 import { createPgMasterStore, InMemoryMasterStore, type CommitVersionInput } from "@/platform/p6/masterStore"
 import * as storeModule from "@/platform/p6/masterStore"
-import { applyChange, approveProposal, proposeChange, rollbackMaster } from "@/platform/p6/proposeChange"
+import { applyChange, approveProposal, proposeChange, rollbackMaster, type ApprovalActor } from "@/platform/p6/proposeChange"
 import { masterWriteAuditLog, nextSnapshot } from "@/platform/p6/masterWrite"
 
 const postgresUrl = process.env.SIKANDER_POSTGRES_URL?.trim()
@@ -2136,7 +2136,7 @@ suite("G3 master grants on local Postgres", () => {
       await db.client.query(ACTOR_KEY_DDL)
       await db.client.query(`GRANT p6_service TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`)
       const store = createPgMasterStore(pool)
-      const partner = { actorId: "partner_b", kind: "partner" as const, role: "partner" }
+      const partner: ApprovalActor = { actorId: "partner_b", kind: "partner", role: "partner" }
       const first = await proposeChange(
         {
           firmId: "firmA",
@@ -2223,7 +2223,7 @@ suite("G3 master grants on local Postgres", () => {
       await db.client.query(ACTOR_KEY_DDL)
       await db.client.query(`GRANT p6_service TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`)
       const store = createPgMasterStore(pool)
-      const partner = { actorId: "partner_b", kind: "partner" as const, role: "partner" }
+      const partner: ApprovalActor = { actorId: "partner_b", kind: "partner", role: "partner" }
       const pending = await proposeChange(
         {
           firmId: "firmA",
@@ -2399,7 +2399,7 @@ suite("G3 master grants on local Postgres", () => {
       await db.client.query(ACTOR_KEY_DDL)
       await db.client.query(`GRANT p6_service TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`)
       const store = createPgMasterStore(pool)
-      const partner = { actorId: "partner_b", kind: "partner" as const, role: "partner" }
+      const partner: ApprovalActor = { actorId: "partner_b", kind: "partner", role: "partner" }
       const pending = await proposeChange(
         {
           firmId: "firmA",
@@ -2430,7 +2430,7 @@ suite("G3 master grants on local Postgres", () => {
         proposal: null,
         expectedBaseVersionId: null,
       })
-      expect(committed.committed).toBe(true)
+      if (!committed.committed) throw new Error("master write did not commit")
       const status = await db.client.query<{ status: string }>(`SELECT status FROM change_proposals WHERE id = $1`, [pending.id])
       expect(status.rows[0]?.status).toBe("applied")
       await expect(applyChange(pending.id, store)).rejects.toThrow(/already applied/)
