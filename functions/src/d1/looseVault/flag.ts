@@ -1,7 +1,7 @@
 import { canReadDocument, canUseLooseVault } from "@/platform/p5/documentAccess"
 import { readDocumentRecord } from "@/platform/d1/documentRecord"
 import { rankOfStoredOrMax, SpineStore, type DocumentRecord, type User } from "@/platform/spine/store"
-import { type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
+import { FieldPath, type Query, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
 import { adminDb } from "../../admin"
 import { HttpError } from "../../http/errors"
 import { stageAudit } from "../../p5/audit"
@@ -121,13 +121,40 @@ function dataFirm(data: unknown): string | undefined {
   return typeof firmId === "string" ? firmId : undefined
 }
 
-/**
- * Firm documents on the single-field `firmId` index. `matterId == null` is filtered in memory
- * so this module does not need a composite index (firestore.indexes.json is not ours to edit).
- */
-export async function firmDocumentDocs(firmId: string): Promise<QueryDocumentSnapshot[]> {
-  const snap = await adminDb().collection("documents").where("firmId", "==", firmId).get()
-  return snap.docs
+/** Each Firestore read is bounded. The walk continues until the query is exhausted, so a hold past page one is still seen. */
+export const LOOSE_VAULT_PAGE = 100
+
+/** Loose rows of one firm. `matterId == null` is a query constraint, not a later filter. */
+export function looseFirmQuery(firmId: string): Query {
+  return adminDb().collection("documents").where("firmId", "==", firmId).where("matterId", "==", null)
+}
+
+/** Loose rows one uploader holds in that firm. The upload block does not read a colleague's files. */
+export function looseUploaderQuery(firmId: string, uploaderId: string): Query {
+  return looseFirmQuery(firmId).where("uploadedBy", "==", uploaderId)
+}
+
+async function collectPages(base: Query): Promise<QueryDocumentSnapshot[]> {
+  const out: QueryDocumentSnapshot[] = []
+  let cursor: QueryDocumentSnapshot | undefined
+  for (;;) {
+    let page = base.orderBy(FieldPath.documentId()).limit(LOOSE_VAULT_PAGE)
+    if (cursor) page = page.startAfter(cursor)
+    const snap = await page.get()
+    out.push(...snap.docs)
+    if (snap.size < LOOSE_VAULT_PAGE) return out
+    const last = snap.docs[snap.docs.length - 1]
+    if (!last) return out
+    cursor = last
+  }
+}
+
+export async function looseFirmDocs(firmId: string): Promise<QueryDocumentSnapshot[]> {
+  return collectPages(looseFirmQuery(firmId))
+}
+
+export async function looseUploaderDocs(firmId: string, uploaderId: string): Promise<QueryDocumentSnapshot[]> {
+  return collectPages(looseUploaderQuery(firmId, uploaderId))
 }
 
 export function auditLoose(

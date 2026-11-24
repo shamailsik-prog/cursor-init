@@ -438,10 +438,68 @@ describe("M2 — role, clearance and membership on core collections", () => {
       await assertFails(setDoc(doc(await authed("member1", MEMBER_ASSOC), "documents", "d-low"), matterDoc("internal")))
     })
     it("associate cannot create a loose-vault document; a cleared clerk can (client SDK: privileged floor, R2 N7)", async () => {
-      const loose = { firmId: "firmA", matterId: null, classification: "privileged" }
+      const loose = { firmId: "firmA", matterId: null, classification: "privileged", uploadedBy: "m2-clerk", createdAt: serverTimestamp() }
       await assertFails(setDoc(doc(await authed("m2-nonmember", NONMEMBER_ASSOC), "documents", "d-loose-a"), loose))
       await assertSucceeds(setDoc(doc(await authed("m2-clerk", { ...CLERK_CONF, clearanceLevel: "privileged" }), "documents", "d-loose-c"), loose))
       await assertFails(setDoc(doc(await authed("m2-clerk", CLERK_CONF), "documents", "d-loose-low"), { ...loose, classification: "confidential" }))
+    })
+  })
+
+  describe("loose vault client writes cannot forge the hold", () => {
+    const clerkClaims = { firmId: "firmA", role: "clerk", clearanceLevel: "privileged" }
+    const partnerClaims = { firmId: "firmA", role: "partner", clearanceLevel: "privileged" }
+    const loose = { firmId: "firmA", matterId: null, classification: "privileged", uploadedBy: "lv-clerk", createdAt: serverTimestamp() }
+
+    it("a cleared clerk's loose create is bound to that clerk and the server time, with no acknowledgement", async () => {
+      const db = await authed("lv-clerk", clerkClaims)
+      await assertSucceeds(setDoc(doc(db, "documents", "lv-ok"), loose))
+      await assertFails(setDoc(doc(db, "documents", "lv-ack"), { ...loose, loosePartnerAck: { partnerId: "lv-clerk", acknowledgedAt: serverTimestamp() } }))
+      await assertFails(setDoc(doc(db, "documents", "lv-other"), { ...loose, uploadedBy: "lv-partner" }))
+      await assertFails(setDoc(doc(db, "documents", "lv-clock"), { ...loose, createdAt: new Date(0) }))
+      await assertFails(setDoc(doc(db, "documents", "lv-no-who"), { firmId: "firmA", matterId: null, classification: "privileged", createdAt: serverTimestamp() }))
+      await assertFails(setDoc(doc(db, "documents", "lv-no-when"), { firmId: "firmA", matterId: null, classification: "privileged", uploadedBy: "lv-clerk" }))
+    })
+
+    it("a partner cannot write loosePartnerAck through the client SDK", async () => {
+      const db = await authed("lv-partner", partnerClaims)
+      await assertFails(
+        setDoc(doc(db, "documents", "lv-partner-ack"), {
+          firmId: "firmA",
+          matterId: null,
+          classification: "privileged",
+          uploadedBy: "lv-partner",
+          createdAt: serverTimestamp(),
+          loosePartnerAck: { partnerId: "lv-partner", acknowledgedAt: serverTimestamp() },
+        })
+      )
+    })
+
+    it("a matter-bound create cannot carry loosePartnerAck", async () => {
+      await assertFails(
+        setDoc(doc(await authed("m2-assoc-high", MEMBER_ASSOC_HIGH), "documents", "lv-bound-ack"), {
+          ...matterDoc("privileged"),
+          loosePartnerAck: { partnerId: "m2-assoc-high", acknowledgedAt: serverTimestamp() },
+        })
+      )
+    })
+
+    it("a cleared clerk cannot set loosePartnerAck or move createdAt or uploadedBy on an existing loose row", async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), "documents", "lv-held"), {
+          firmId: "firmA",
+          matterId: null,
+          classification: "privileged",
+          uploadedBy: "lv-clerk",
+          createdAt: new Date(0),
+        })
+      })
+      const db = await authed("lv-clerk", clerkClaims)
+      await assertSucceeds(updateDoc(doc(db, "documents", "lv-held"), { title: "bundle" }))
+      await assertFails(updateDoc(doc(db, "documents", "lv-held"), { loosePartnerAck: { partnerId: "lv-clerk", acknowledgedAt: serverTimestamp() } }))
+      await assertFails(updateDoc(doc(db, "documents", "lv-held"), { createdAt: serverTimestamp() }))
+      await assertFails(updateDoc(doc(db, "documents", "lv-held"), { uploadedBy: "someone-else" }))
+      const partner = await authed("lv-partner", partnerClaims)
+      await assertFails(updateDoc(doc(partner, "documents", "lv-held"), { loosePartnerAck: { partnerId: "lv-partner", acknowledgedAt: serverTimestamp() } }))
     })
   })
 

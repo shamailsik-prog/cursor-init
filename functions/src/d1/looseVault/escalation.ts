@@ -4,7 +4,7 @@ import { HttpError } from "../../http/errors"
 import type { Caller } from "../../p5/auth"
 import { isSafeDocId } from "../../p5/common"
 import { isKnownClassification } from "../../p5/classification"
-import { assertLooseVaultActor, assertLooseVaultEnabled, auditLoose, canReadBoundRow, canonicalLoose, firmDocumentDocs, looseNotFound, looseReader } from "./flag"
+import { assertLooseVaultActor, assertLooseVaultEnabled, auditLoose, canReadBoundRow, canonicalLoose, looseFirmDocs, looseNotFound, looseReader, looseUploaderDocs } from "./flag"
 
 /** Thirty 24-hour days. Not a calendar month. Due at this age, and not one millisecond before. */
 export const LOOSE_VAULT_HOLD_MS = 30 * 24 * 60 * 60 * 1000
@@ -65,7 +65,7 @@ export async function looseVaultEscalations(actor: Caller, firmId: string, now: 
   validNow(now)
   const readable = looseReader(actor)
   const items: LooseEscalation[] = []
-  for (const doc of await firmDocumentDocs(firmId)) {
+  for (const doc of await looseFirmDocs(firmId)) {
     const data = doc.data()
     const record = canonicalLoose(doc.id, data)
     if (!record || record.matterId !== null || record.firmId !== firmId) continue
@@ -92,7 +92,7 @@ export async function isLooseUploadBlocked(firmId: string, uploaderId: string, n
   assertLooseVaultEnabled()
   if (!isSafeDocId(firmId) || !isSafeDocId(uploaderId)) throw new HttpError(400, "invalid_query")
   validNow(now)
-  for (const doc of await firmDocumentDocs(firmId)) {
+  for (const doc of await looseUploaderDocs(firmId, uploaderId)) {
     const data = doc.data()
     const record = canonicalLoose(doc.id, data)
     if (!record || record.firmId !== firmId || record.matterId !== null) continue

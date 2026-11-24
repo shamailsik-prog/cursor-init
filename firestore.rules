@@ -98,6 +98,13 @@ service cloud.firestore {
         && request.resource.data.get('sourceChannel', 'web') in ['web', 'team_portal', 'whatsapp', 'bulk'];
     }
     function authorNew() { return sameFirmNew() && isAuthor() && clearedNew() && canAccessScope(request.resource.data.matterId); }
+    // W1-L45: loosePartnerAck is written only by acknowledgeLooseHold (Admin SDK). No client role may set it.
+    function noClientLooseAck() { return !request.resource.data.keys().hasAny(['loosePartnerAck']); }
+    // A loose client create names the signed-in user and the server clock. A matter-bound create is unchanged.
+    function looseCreateBound() {
+      return request.resource.data.matterId != null
+        || (request.resource.data.uploadedBy == request.auth.uid && request.resource.data.createdAt == request.time);
+    }
     // Audit F14 / O-76: a matter-bound row is read under its matter's CURRENT label, not only the label it was written
     // with, so a matter raised after the row was written binds the row too (as drafts and draft_versions). A loose-vault
     // row (matterId null) names no matter; a matter that cannot be read denies (get() of a missing document fails).
@@ -212,11 +219,12 @@ service cloud.firestore {
         && (resource.data.matterId != null ? memberReader(resource.data.matterId)
             : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2)   // loose vault (L4.5); intern denied
         && clearedForMatterNow(resource.data.matterId, resource.data.firmId);
-      allow create: if authorNew() && atOrAboveMatter(request.resource.data.matterId) && clientSourcedFloor();
+      allow create: if authorNew() && atOrAboveMatter(request.resource.data.matterId) && clientSourcedFloor()
+        && noClientLooseAck() && looseCreateBound();
       allow update: if sameFirm() && firmIdUnchanged() && monotonic()
         && isAuthor() && cleared(resource.data.classification) && clearedNew()
         && canAccessScope(resource.data.matterId)
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['storagePath', 'contentHash', 'isImmutable', 'matterId', 'firmId']);
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['storagePath', 'contentHash', 'isImmutable', 'matterId', 'firmId', 'loosePartnerAck', 'createdAt', 'uploadedBy']);
       allow delete: if false; // originals are immutable; loose vault never deletes (E-18)
     }
     match /document_versions/{id} {

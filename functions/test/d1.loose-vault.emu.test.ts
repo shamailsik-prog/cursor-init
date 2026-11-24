@@ -8,6 +8,7 @@ import { adminDb } from "../src/admin"
 import type { Caller } from "../src/p5/auth"
 import { HttpError } from "../src/http/errors"
 import { acknowledgeLooseHold, isLooseUploadBlocked, looseVaultEscalations } from "../src/d1/looseVault/escalation"
+import { LOOSE_VAULT_PAGE } from "../src/d1/looseVault/flag"
 import { convertToMatter } from "../src/d1/looseVault/convert"
 import { listHeldFiles, searchLooseFiles } from "../src/d1/looseVault/search"
 import { tagLooseFile } from "../src/d1/looseVault/tags"
@@ -377,6 +378,10 @@ describe.skipIf(!EMULATORS)("loose vault (emulator)", () => {
     expect(row?.matterId).toBeNull()
     expect(row?.classification).toBe("confidential")
     expect(row?.loosePartnerAck).toMatchObject({ partnerId: partner.uid })
+    const ackAudit = await adminDb().collection("audit_log").where("firmId", "==", firmId).get()
+    expect(ackAudit.docs.map((entry) => entry.data())).toEqual(
+      expect.arrayContaining([expect.objectContaining({ action: "loose_vault.acknowledge", actorId: partner.uid, target: `documents/${held}` })])
+    )
     const escalated = await looseVaultEscalations(partner, firmId, now30)
     expect(escalated.items.find((item) => item.docId === held)).toMatchObject({ holderId: clerk.uid, acknowledged: true, ageMs: AGE_30D })
 
@@ -393,6 +398,31 @@ describe.skipIf(!EMULATORS)("loose vault (emulator)", () => {
     expect(JSON.stringify(await listHeldFiles(clerk))).not.toContain("hidden-client")
     expect(JSON.stringify(await searchLooseFiles(clerk, "hidden"))).not.toContain(secret)
     expect((await docRef(secret).get()).data()?.looseTags.clientName).toBe("hidden-client")
+  })
+
+  it("reads loose rows past the first page and does not list a matter-bound row", async () => {
+    const firmId = uniq("firm")
+    const clerk = user(firmId, "clerk")
+    const now30 = new Date(AGE_30D)
+    const stem = uniq("pg")
+    const count = LOOSE_VAULT_PAGE + 1
+    const ids: string[] = []
+    for (let i = 0; i < count; i++) {
+      const id = `${stem}-${String(i).padStart(4, "0")}`
+      ids.push(id)
+      const last = i === count - 1
+      await adminDb().collection("documents").doc(id).set(
+        looseRow(firmId, clerk.uid, { createdAt: last ? Timestamp.fromMillis(0) : Timestamp.fromMillis(AGE_30D) })
+      )
+    }
+    const bound = `${stem}-bound`
+    await adminDb().collection("documents").doc(bound).set(looseRow(firmId, clerk.uid, { matterId: `${stem}-matter`, createdAt: Timestamp.fromMillis(0) }))
+    const lastId = ids[ids.length - 1]
+    expect(await isLooseUploadBlocked(firmId, clerk.uid, now30)).toBe(true)
+    const listed = await listHeldFiles(clerk)
+    expect(listed.items).toHaveLength(count)
+    expect(listed.items.map((row) => row.docId)).not.toContain(bound)
+    expect((await looseVaultEscalations(clerk, firmId, now30)).items.map((row) => row.docId)).toEqual([lastId])
   })
 
   it("search, list and the upload-block predicate do not write", async () => {

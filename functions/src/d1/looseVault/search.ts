@@ -1,7 +1,7 @@
 import type { Classification } from "@/platform/p1/types"
 import { HttpError } from "../../http/errors"
 import type { Caller } from "../../p5/auth"
-import { assertLooseVaultActor, canonicalLoose, firmDocumentDocs, looseReader } from "./flag"
+import { assertLooseVaultActor, canonicalLoose, looseFirmDocs, looseReader } from "./flag"
 import { looseTagMatches, readLooseTags, type LooseTags } from "./tags"
 
 /** One loose file the actor may see. Holder is `uploadedBy` on the document row. */
@@ -15,7 +15,7 @@ export type HeldFile = {
 async function heldFiles(actor: Caller, match: (tags: LooseTags) => boolean): Promise<{ items: HeldFile[] }> {
   const readable = looseReader(actor)
   const items: HeldFile[] = []
-  for (const doc of await firmDocumentDocs(actor.firmId)) {
+  for (const doc of await looseFirmDocs(actor.firmId)) {
     const data = doc.data()
     const record = canonicalLoose(doc.id, data)
     if (!record || record.matterId !== null || record.firmId !== actor.firmId) continue
