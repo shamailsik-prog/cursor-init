@@ -17,17 +17,22 @@ import {
   EvidenceError,
   atLeastClassification,
   custodyEventHash,
+  genesisEventHash,
   inspectCustodyChain,
   parseCustodyEvent,
+  parseGenesisEvent,
   type AddCustodyInput,
   type ChainVerification,
   type CustodyEvent,
   type CustodyKind,
+  type CustodyTrail,
   type EvidenceActor,
   type EvidenceClock,
   type EvidenceItem,
+  type GenesisEvent,
   type LinkEvidenceInput,
   type LogEvidenceInput,
+  type MalformedCustody,
 } from "./types"
 
 /**
@@ -35,9 +40,10 @@ import {
  *
  * Custody rows are written with `tx.create` and never updated or deleted.
  * The evidence row holds the current custodian, the optional document link,
- * and `eventCount`. Those fields move only inside the same transaction that
- * appends the event that records the change. The next seq is the verified
- * chain length plus one, not a counter that can be trusted after a direct write.
+ * `eventCount`, and `lastHash`. Those fields move only inside the same
+ * transaction that appends the event. `headerHash` is the genesis digest and
+ * does not change. The next seq is the verified length plus one. A broken
+ * chain, including a missing tail, is not extended and a seq is not reused.
  * Two transactions contend on the evidence document and on the event query, so
  * concurrent appends take distinct dense seqs.
  *
@@ -58,7 +64,9 @@ const EVIDENCE_KEYS = [
   "documentId",
   "eventCount",
   "firmId",
+  "headerHash",
   "item",
+  "lastHash",
   "matterId",
   "receiptDate",
   "source",
@@ -168,6 +176,8 @@ function parseEvidence(id: string, data: unknown): EvidenceItem | null {
   if (!(documentId === null || (typeof documentId === "string" && isSafeDocId(documentId)))) return null
   if (!isKnownClassification(data.classification)) return null
   if (!Number.isInteger(eventCount) || (eventCount as number) < 0) return null
+  if (typeof data.headerHash !== "string" || !/^[0-9a-f]{64}$/.test(data.headerHash)) return null
+  if (typeof data.lastHash !== "string" || !/^[0-9a-f]{64}$/.test(data.lastHash)) return null
   return {
     id,
     firmId: data.firmId,
@@ -181,6 +191,8 @@ function parseEvidence(id: string, data: unknown): EvidenceItem | null {
     createdBy: data.createdBy,
     createdAt: data.createdAt,
     eventCount: eventCount as number,
+    headerHash: data.headerHash,
+    lastHash: data.lastHash,
   }
 }
 
@@ -218,39 +230,65 @@ async function readItem(caller: EvidenceActor, evidenceId: string, mode: Mode, t
 }
 
 function seqHint(id: string, data: unknown): number {
-  if (isPlain(data) && typeof data.seq === "number" && Number.isInteger(data.seq) && data.seq >= 1) return data.seq
+  if (isPlain(data) && typeof data.seq === "number" && Number.isInteger(data.seq) && data.seq >= 0) return data.seq
   const match = /_(\d+)$/.exec(id)
-  return match ? Number(match[1]) : 1
+  return match ? Number(match[1]) : 0
+}
+
+function earliestBreak(verdict: ChainVerification, malformed: readonly MalformedCustody[]): ChainVerification {
+  const first = [...malformed].sort((a, b) => a.seq - b.seq)[0]
+  if (!first) return verdict
+  if (verdict.ok || first.seq < verdict.brokenSeq || (first.seq === verdict.brokenSeq && verdict.reason !== "malformed")) {
+    return { ok: false, brokenSeq: first.seq, reason: "malformed" }
+  }
+  return verdict
 }
 
 async function readChain(
-  subject: { id: string; firmId: string; matterId: string },
+  item: EvidenceItem,
   tx?: Transaction
-): Promise<{ events: CustodyEvent[]; verdict: ChainVerification }> {
-  const snap = tx ? await tx.get(chainQuery(subject.id)) : await chainQuery(subject.id).get()
+): Promise<{ events: CustodyEvent[]; genesis: GenesisEvent | null; malformed: MalformedCustody[]; verdict: ChainVerification }> {
+  const snap = tx ? await tx.get(chainQuery(item.id)) : await chainQuery(item.id).get()
   const events: CustodyEvent[] = []
-  let malformed: ChainVerification | null = null
+  const malformed: MalformedCustody[] = []
+  let genesis: GenesisEvent | null = null
+  let duplicateGenesis = false
   for (const doc of snap.docs) {
-    const event = parseCustodyEvent(doc.id, doc.data())
+    const data = doc.data()
+    if (isPlain(data) && data.kind === "genesis") {
+      const parsed = parseGenesisEvent(doc.id, data)
+      if (!parsed) {
+        malformed.push({ id: doc.id, seq: 0 })
+        continue
+      }
+      if (genesis) {
+        duplicateGenesis = true
+        continue
+      }
+      genesis = parsed
+      continue
+    }
+    const event = parseCustodyEvent(doc.id, data)
     if (event) {
       events.push(event)
       continue
     }
-    const brokenSeq = seqHint(doc.id, doc.data())
-    if (!malformed || brokenSeq < malformed.brokenSeq) malformed = { ok: false, brokenSeq, reason: "malformed" }
+    malformed.push({ id: doc.id, seq: seqHint(doc.id, data) })
   }
-  const verdict = inspectCustodyChain(subject, events)
-  if (malformed && (verdict.ok || malformed.brokenSeq < verdict.brokenSeq)) return { events, verdict: malformed }
-  return { events, verdict }
+  const verdict = earliestBreak(
+    duplicateGenesis ? { ok: false, brokenSeq: 0, reason: "duplicate" } : inspectCustodyChain(item, genesis, events),
+    malformed
+  )
+  return { events, genesis, malformed, verdict }
 }
 
 async function appendEvent(tx: Transaction, caller: EvidenceActor, evidenceId: string, draft: Draft): Promise<CustodyEvent> {
   const { item } = await readItem(caller, evidenceId, "write", tx)
   const { verdict, events } = await readChain(item, tx)
-  if (!verdict.ok) throw new EvidenceError("chain_broken")
-  const seq = verdict.eventCount + 1
-  const prevHash = seq === 1 ? GENESIS_PREV_HASH : events.find((event) => event.seq === verdict.eventCount)?.hash
-  if (prevHash === undefined) throw new EvidenceError("chain_broken")
+  if (!verdict.ok || verdict.eventCount !== item.eventCount) throw new EvidenceError("chain_broken")
+  const seq = item.eventCount + 1
+  if (events.some((event) => event.seq === seq)) throw new EvidenceError("chain_broken")
+  const prevHash = item.lastHash
   const classification = draft.classification ?? item.classification
   if (classificationRank(caller.clearanceLevel) < classificationRank(classification)) throw new EvidenceError("clearance")
   const custodian = draft.custodian ?? item.custodian
@@ -271,7 +309,7 @@ async function appendEvent(tx: Transaction, caller: EvidenceActor, evidenceId: s
   const hash = custodyEventHash(body)
   const id = `${item.id}_${seq}`
   tx.create(custodyRef(id), { ...body, hash })
-  const patch: Record<string, unknown> = { eventCount: seq, custodian }
+  const patch: Record<string, unknown> = { eventCount: seq, custodian, lastHash: hash }
   if (draft.classification !== undefined) patch.classification = classification
   if (draft.documentId !== undefined) patch.documentId = draft.documentId
   tx.update(evidenceRef(item.id), patch)
@@ -334,6 +372,24 @@ export async function logEvidence(caller: EvidenceActor, input: LogEvidenceInput
       const gate = await gateOf(caller, parsed.matterId, "write", tx)
       const classification = atLeastClassification(parsed.classification, gate.classification)
       if (classificationRank(caller.clearanceLevel) < classificationRank(classification)) throw new EvidenceError("clearance")
+      const genesis = {
+        evidenceId: id,
+        firmId: caller.firmId,
+        matterId: parsed.matterId,
+        seq: 0 as const,
+        kind: "genesis" as const,
+        actorId: caller.uid,
+        at: createdAt,
+        note: "",
+        custodian: parsed.custodian,
+        documentId: null,
+        classification,
+        item: parsed.item,
+        source: parsed.source,
+        receiptDate: parsed.receiptDate,
+        prevHash: GENESIS_PREV_HASH,
+      }
+      const headerHash = genesisEventHash(genesis)
       const item: EvidenceItem = {
         id,
         firmId: caller.firmId,
@@ -347,9 +403,12 @@ export async function logEvidence(caller: EvidenceActor, input: LogEvidenceInput
         createdBy: caller.uid,
         createdAt,
         eventCount: 0,
+        headerHash,
+        lastHash: headerHash,
       }
       const { id: _id, ...stored } = item
       tx.create(evidenceRef(id), stored)
+      tx.create(custodyRef(`${id}_0`), { ...genesis, hash: headerHash })
       return item
     }, { maxAttempts: 25 })
   )
@@ -411,7 +470,7 @@ export async function linkEvidenceToDocument(caller: EvidenceActor, input: LinkE
         documentId,
         classification,
       })
-      return { ...item, documentId, classification, custodian: event.custodian, eventCount: event.seq }
+      return { ...item, documentId, classification, custodian: event.custodian, eventCount: event.seq, lastHash: event.hash }
     }, { maxAttempts: 25 })
   )
 }
@@ -430,20 +489,27 @@ export async function addCustodyEvent(caller: EvidenceActor, input: AddCustodyIn
   )
 }
 
-export async function getCustodyTrail(caller: EvidenceActor, evidenceId: string): Promise<CustodyEvent[]> {
+/** Header and trail from one read-only transaction, so the two cannot tear. */
+async function loadCustody(caller: EvidenceActor, evidenceId: string, mode: Mode): Promise<CustodyTrail> {
+  const id = parseId(evidenceId)
+  return adminDb().runTransaction(async (tx) => {
+    const { item } = await readItem(caller, id, mode, tx)
+    const chain = await readChain(item, tx)
+    const events = [...chain.events].sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id))
+    return { item, events, genesis: chain.genesis, malformed: chain.malformed, verdict: chain.verdict }
+  })
+}
+
+export async function getCustodyTrail(caller: EvidenceActor, evidenceId: string): Promise<CustodyTrail> {
   requireD1Evidence()
   assertRole(caller, "read")
   assertActor(caller)
-  const { item } = await readItem(caller, parseId(evidenceId), "read")
-  const { events } = await readChain(item)
-  return events.sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id))
+  return loadCustody(caller, evidenceId, "read")
 }
 
 export async function verifyCustodyChain(caller: EvidenceActor, evidenceId: string): Promise<ChainVerification> {
   requireD1Evidence()
   assertRole(caller, "read")
   assertActor(caller)
-  const { item } = await readItem(caller, parseId(evidenceId), "read")
-  const { verdict } = await readChain(item)
-  return verdict
+  return (await loadCustody(caller, evidenceId, "read")).verdict
 }

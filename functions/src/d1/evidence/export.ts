@@ -1,21 +1,24 @@
 import { canonicalJson } from "../../http/idempotency"
 import { getCustodyTrail } from "./custody"
 import { requireD1Evidence } from "./flag"
-import { getEvidenceItem } from "./register"
-import type { CustodyEvent, EvidenceActor, EvidenceItem } from "./types"
+import { EvidenceError, type ChainVerification, type CustodyEvent, type EvidenceActor, type EvidenceItem, type GenesisEvent } from "./types"
 
 /**
  * Custody report. JSON is `canonicalJson`, so the same stored trail is the
  * same bytes. Plain text is one field a line, events in seq order, every hash
- * included. There is no PDF renderer and no `exportedAt`, so a second call
- * cannot change the bytes.
+ * included. The header and the trail come from one read. A chain that is not
+ * intact is refused. There is no PDF renderer and no `exportedAt`.
  */
 
 function show(value: string | null): string {
   return value === null ? "null" : value
 }
 
-export function renderEvidenceLog(item: EvidenceItem, events: readonly CustodyEvent[]): { json: string; text: string } {
+export function renderEvidenceLog(
+  item: EvidenceItem,
+  events: readonly CustodyEvent[],
+  genesis: GenesisEvent | null
+): { json: string; text: string } {
   const ordered = [...events].sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id))
   const json = canonicalJson({
     evidence: {
@@ -31,7 +34,23 @@ export function renderEvidenceLog(item: EvidenceItem, events: readonly CustodyEv
       createdBy: item.createdBy,
       createdAt: item.createdAt,
       eventCount: item.eventCount,
+      headerHash: item.headerHash,
+      lastHash: item.lastHash,
     },
+    genesis: genesis
+      ? {
+          id: genesis.id,
+          seq: genesis.seq,
+          item: genesis.item,
+          source: genesis.source,
+          receiptDate: genesis.receiptDate,
+          classification: genesis.classification,
+          firmId: genesis.firmId,
+          matterId: genesis.matterId,
+          prevHash: genesis.prevHash,
+          hash: genesis.hash,
+        }
+      : null,
     events: ordered.map((event) => ({
       id: event.id,
       evidenceId: event.evidenceId,
@@ -63,8 +82,23 @@ export function renderEvidenceLog(item: EvidenceItem, events: readonly CustodyEv
     `createdBy: ${item.createdBy}`,
     `createdAt: ${item.createdAt}`,
     `eventCount: ${String(item.eventCount)}`,
+    `headerHash: ${item.headerHash}`,
+    `lastHash: ${item.lastHash}`,
     `events: ${String(ordered.length)}`,
   ]
+  if (genesis) {
+    lines.push("---")
+    lines.push("seq: 0")
+    lines.push("kind: genesis")
+    lines.push(`item: ${genesis.item}`)
+    lines.push(`source: ${genesis.source}`)
+    lines.push(`receiptDate: ${genesis.receiptDate}`)
+    lines.push(`classification: ${genesis.classification}`)
+    lines.push(`firmId: ${genesis.firmId}`)
+    lines.push(`matterId: ${genesis.matterId}`)
+    lines.push(`prevHash: ${genesis.prevHash}`)
+    lines.push(`hash: ${genesis.hash}`)
+  }
   for (const event of ordered) {
     lines.push("---")
     lines.push(`seq: ${String(event.seq)}`)
@@ -81,9 +115,12 @@ export function renderEvidenceLog(item: EvidenceItem, events: readonly CustodyEv
   return { json, text: `${lines.join("\n")}\n` }
 }
 
-export async function exportEvidenceLog(caller: EvidenceActor, evidenceId: string): Promise<{ json: string; text: string }> {
+export async function exportEvidenceLog(
+  caller: EvidenceActor,
+  evidenceId: string
+): Promise<{ json: string; text: string; verdict: ChainVerification }> {
   requireD1Evidence()
-  const item = await getEvidenceItem(caller, evidenceId)
-  const events = await getCustodyTrail(caller, evidenceId)
-  return renderEvidenceLog(item, events)
+  const snap = await getCustodyTrail(caller, evidenceId)
+  if (!snap.verdict.ok || !snap.genesis) throw new EvidenceError("chain_broken", snap.verdict)
+  return { ...renderEvidenceLog(snap.item, snap.events, snap.genesis), verdict: snap.verdict }
 }

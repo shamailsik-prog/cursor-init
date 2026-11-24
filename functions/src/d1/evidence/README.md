@@ -12,19 +12,21 @@ Architecture lines 1189–1209. Per-matter evidence register and an append-only 
 
 ## Custody hash
 
-For each event, in a transaction:
+Logging an item writes the evidence row and a genesis custody event (`seq` 0) in one transaction. The genesis body hashes `item`, `source`, `receiptDate`, `classification`, `firmId`, and `matterId`. Its digest is stored as `headerHash` and, until the first custody event, as `lastHash`. Seq 1 uses that digest as `prevHash`.
+
+For each later event, in a transaction:
 
 1. Read the evidence row and every `custody_events` row for that item.
-2. Refuse if `inspectCustodyChain` is not intact (`chain_broken`).
-3. `seq` is the verified length plus one. Seq 1 uses `prevHash` `""`.
-4. `hash = sha256(canonicalJson(event without hash) + prevHash)` as lowercase hex. `canonicalJson` sorts keys. `prevHash` is inside the JSON and concatenated after it.
-5. `tx.create` the event at `${evidenceId}_${seq}`. The event is never updated or deleted by this module.
+2. Refuse if `inspectCustodyChain` is not intact (`chain_broken`), including a missing tail, a count mismatch, or a `lastHash` that is not the tip.
+3. `seq` is the verified `eventCount` plus one. The new id is created only; an existing seq is not reused.
+4. `hash = sha256(canonicalJson(event without hash) + prevHash)` as lowercase hex. `canonicalJson` sorts keys. `prevHash` is inside the JSON and concatenated after it. `prevHash` is the header's `lastHash`.
+5. `tx.create` the event at `${evidenceId}_${seq}` and, in that same transaction, set `eventCount`, `custodian`, and `lastHash`. `headerHash` does not change.
 
 Concurrent appends contend on the evidence document and on that query, so two calls take seq 1 and seq 2.
 
-`verifyCustodyChain` recomputes the chain and returns the first broken seq (`gap`, `duplicate`, `prev`, `hash`, `identity`, or `malformed`). The evidence header (`item`, `source`, `receiptDate`) is not inside that hash. The module has no writer for those fields. A direct store edit of the header is not what `verifyCustodyChain` reports.
+`verifyCustodyChain` and `getCustodyTrail` read the header and the trail in one transaction. The verdict is the first broken seq (`gap`, `count`, `duplicate`, `prev`, `hash`, `identity`, `header`, or `malformed`). A malformed document is listed on the trail and is not dropped. A direct edit of a bound header field, or of `lastHash`, fails verify.
 
-Condition notes, annotations, transfers, and the document link are new events. The evidence row may update only `custodian`, `eventCount`, `documentId`, and a raised `classification`.
+Condition notes, annotations, transfers, and the document link are new events. The evidence row may update only `custodian`, `eventCount`, `lastHash`, `documentId`, and a raised `classification`.
 
 ## Who may call
 
@@ -36,7 +38,7 @@ Writes: partner, associate, or clerk, same firm, member of the matter, clearance
 
 ## Export
 
-`exportEvidenceLog` returns canonical JSON and plain text for the stored trail, in seq order, including every `hash` and `prevHash`. The same trail yields the same bytes. No PDF library.
+`exportEvidenceLog` reads the header and the trail in one transaction and returns canonical JSON, plain text, and the verdict. The report includes the genesis hash and every event hash. The same intact trail yields the same bytes. A chain that is not intact is refused with `chain_broken` and that verdict. No PDF library.
 
 ## Out of scope
 

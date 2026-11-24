@@ -90,16 +90,20 @@ describe.skipIf(!EMULATORS)("D1 evidence register and custody chain", () => {
     expect([left.seq, right.seq].sort()).toEqual([1, 2])
     expect(left.hash).not.toBe(right.hash)
     const trail = await getCustodyTrail(caller, item.id)
-    expect(trail.map((event) => event.seq)).toEqual([1, 2])
-    expect(new Set(trail.map((event) => event.hash)).size).toBe(2)
-    expect(trail[1]?.prevHash).toBe(trail[0]?.hash)
-    expect(trail[0]?.prevHash).toBe("")
-    expect(trail.every((event) => event.firmId === caller.firmId)).toBe(true)
+    expect(trail.events.map((event) => event.seq)).toEqual([1, 2])
+    expect(new Set(trail.events.map((event) => event.hash)).size).toBe(2)
+    expect(trail.events[1]?.prevHash).toBe(trail.events[0]?.hash)
+    expect(trail.events[0]?.prevHash).toBe(trail.genesis?.hash)
+    expect(trail.genesis?.prevHash).toBe("")
+    expect(trail.verdict).toEqual({ ok: true, eventCount: 2 })
+    expect(trail.events.every((event) => event.firmId === caller.firmId)).toBe(true)
+    expect(trail.genesis?.firmId).toBe(caller.firmId)
     expect((await getEvidenceItem(caller, item.id)).firmId).toBe(caller.firmId)
     expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: true, eventCount: 2 })
     const db = adminDb()
     expect((await db.collection(EVIDENCE_ITEMS).doc(item.id).get()).exists).toBe(true)
-    for (const event of trail) {
+    for (const event of [...trail.events, trail.genesis]) {
+      if (!event) throw new Error("missing genesis")
       const snap = await db.collection(CUSTODY_EVENTS).doc(event.id).get()
       expect(snap.createTime?.isEqual(snap.updateTime!)).toBe(true)
     }
@@ -123,8 +127,8 @@ describe.skipIf(!EMULATORS)("D1 evidence register and custody chain", () => {
     )
     expect(wrote.map((event) => event.seq).sort()).toEqual([1, 2, 3, 4, 5])
     const trail = await getCustodyTrail(caller, item.id)
-    expect(trail.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5])
-    for (let i = 1; i < trail.length; i++) expect(trail[i]?.prevHash).toBe(trail[i - 1]?.hash)
+    expect(trail.events.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5])
+    for (let i = 1; i < trail.events.length; i++) expect(trail.events[i]?.prevHash).toBe(trail.events[i - 1]?.hash)
     expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: true, eventCount: 5 })
   })
 
@@ -300,9 +304,11 @@ describe.skipIf(!EMULATORS)("D1 evidence register and custody chain", () => {
     expect(Buffer.from(first.json, "utf8").equals(Buffer.from(second.json, "utf8"))).toBe(true)
     expect(Buffer.from(first.text, "utf8").equals(Buffer.from(second.text, "utf8"))).toBe(true)
     const trail = await getCustodyTrail(caller, item.id)
-    const parsed = JSON.parse(first.json) as { events: { seq: number; hash: string }[] }
-    expect(parsed.events.map((event) => event.seq)).toEqual(trail.map((event) => event.seq))
-    for (const event of trail) {
+    const parsed = JSON.parse(first.json) as { events: { seq: number; hash: string }[]; genesis: { hash: string } }
+    expect(parsed.events.map((event) => event.seq)).toEqual(trail.events.map((event) => event.seq))
+    expect(first.json).toContain(trail.genesis?.hash)
+    expect(first.text).toContain(trail.genesis?.hash)
+    for (const event of trail.events) {
       expect(first.json).toContain(event.hash)
       expect(first.text).toContain(event.hash)
     }
@@ -349,7 +355,7 @@ describe.skipIf(!EMULATORS)("D1 evidence register and custody chain", () => {
       classification: "internal",
     })
     await addCustodyEvent(partner, { evidenceId: item.id, kind: "receipt", note: "filed" })
-    expect((await getCustodyTrail(intern, item.id)).map((event) => event.seq)).toEqual([1])
+    expect((await getCustodyTrail(intern, item.id)).events.map((event) => event.seq)).toEqual([1])
     await expect(
       logEvidence(intern, {
         matterId,
@@ -363,6 +369,122 @@ describe.skipIf(!EMULATORS)("D1 evidence register and custody chain", () => {
     await expect(addCustodyEvent(intern, { evidenceId: item.id, kind: "annotation", note: "no" })).rejects.toMatchObject({
       code: "not_author",
     })
+  })
+
+  it("a deleted tail fails verify at that seq and the next append does not reuse it", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    const item = await logEvidence(caller, {
+      matterId,
+      item: "cassette",
+      source: "search",
+      receiptDate: "2026-07-01",
+      custodian: "clerk A",
+      classification: "internal",
+    })
+    await addCustodyEvent(caller, { evidenceId: item.id, kind: "receipt", note: "bagged" })
+    await addCustodyEvent(caller, { evidenceId: item.id, kind: "handling", note: "logged" })
+    const db = adminDb()
+    const before = (await db.collection(EVIDENCE_ITEMS).doc(item.id).get()).data()
+    if (!before) throw new Error("missing evidence row")
+    await db.collection(EVIDENCE_ITEMS).doc(item.id).update({ lastHash: item.headerHash })
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: false, brokenSeq: 2, reason: "hash" })
+    await db.collection(EVIDENCE_ITEMS).doc(item.id).update({ lastHash: before.lastHash })
+    await db.collection(CUSTODY_EVENTS).doc(`${item.id}_2`).delete()
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: false, brokenSeq: 2, reason: "gap" })
+    await expect(addCustodyEvent(caller, { evidenceId: item.id, kind: "annotation", note: "would reuse seq 2" })).rejects.toMatchObject({
+      code: "chain_broken",
+    })
+    expect((await db.collection(EVIDENCE_ITEMS).doc(item.id).get()).data()?.eventCount).toBe(2)
+    expect((await db.collection(CUSTODY_EVENTS).doc(`${item.id}_2`).get()).exists).toBe(false)
+    expect((await db.collection(CUSTODY_EVENTS).doc(`${item.id}_3`).get()).exists).toBe(false)
+  })
+
+  it("a malformed event stays in the verdict and the export is refused", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    const item = await logEvidence(caller, {
+      matterId,
+      item: "disk",
+      source: "client",
+      receiptDate: "2026-07-02",
+      custodian: "clerk A",
+      classification: "internal",
+    })
+    await addCustodyEvent(caller, { evidenceId: item.id, kind: "receipt", note: "received" })
+    await addCustodyEvent(caller, { evidenceId: item.id, kind: "condition", note: "intact" })
+    await adminDb().collection(CUSTODY_EVENTS).doc(`${item.id}_2`).update({ kind: "forged" })
+    const trail = await getCustodyTrail(caller, item.id)
+    expect(trail.events.map((event) => event.seq)).toEqual([1])
+    expect(trail.malformed).toEqual([{ id: `${item.id}_2`, seq: 2 }])
+    expect(trail.verdict).toEqual({ ok: false, brokenSeq: 2, reason: "malformed" })
+    await expect(exportEvidenceLog(caller, item.id)).rejects.toMatchObject({
+      code: "chain_broken",
+      verdict: { ok: false, brokenSeq: 2, reason: "malformed" },
+    })
+  })
+
+  it("an export taken while an append commits is one snapshot", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    const item = await logEvidence(caller, {
+      matterId,
+      item: "bundle",
+      source: "chambers",
+      receiptDate: "2026-07-03",
+      custodian: "clerk A",
+      classification: "internal",
+    })
+    await addCustodyEvent(caller, { evidenceId: item.id, kind: "receipt", note: "opened" })
+    for (let n = 0; n < 12; n++) {
+      const [log] = await Promise.all([
+        exportEvidenceLog(caller, item.id),
+        addCustodyEvent(caller, { evidenceId: item.id, kind: "handling", note: `move ${n}` }),
+      ])
+      const parsed = JSON.parse(log.json) as {
+        evidence: { eventCount: number; lastHash: string; custodian: string; classification: string; item: string; headerHash: string }
+        genesis: { hash: string; item: string }
+        events: { seq: number; hash: string; custodian: string; classification: string }[]
+      }
+      const tip = parsed.events[parsed.events.length - 1]
+      expect(parsed.evidence.eventCount).toBe(parsed.events.length)
+      expect(parsed.events.map((event) => event.seq)).toEqual(parsed.events.map((_, index) => index + 1))
+      expect(parsed.evidence.lastHash).toBe(tip?.hash)
+      expect(parsed.evidence.custodian).toBe(tip?.custodian)
+      expect(parsed.evidence.classification).toBe(tip?.classification)
+      expect(parsed.evidence.item).toBe(parsed.genesis.item)
+      expect(parsed.evidence.headerHash).toBe(parsed.genesis.hash)
+      expect(log.verdict).toEqual({ ok: true, eventCount: parsed.evidence.eventCount })
+    }
+  })
+
+  it("a direct edit of a bound header field fails verify", async () => {
+    process.env[FLAG] = "true"
+    const caller = actor()
+    const matterId = uniq("matter")
+    await seedMatter(caller, matterId)
+    const item = await logEvidence(caller, {
+      matterId,
+      item: "watch",
+      source: "complainant",
+      receiptDate: "2026-07-04",
+      custodian: "clerk A",
+      classification: "internal",
+    })
+    await addCustodyEvent(caller, { evidenceId: item.id, kind: "receipt", note: "sealed" })
+    const db = adminDb()
+    await db.collection(EVIDENCE_ITEMS).doc(item.id).update({ item: "substituted exhibit" })
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: false, brokenSeq: 0, reason: "header" })
+    await db.collection(EVIDENCE_ITEMS).doc(item.id).update({ item: "watch", classification: "public" })
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: false, brokenSeq: 0, reason: "header" })
+    await db.collection(EVIDENCE_ITEMS).doc(item.id).update({ classification: "internal" })
+    expect(await verifyCustodyChain(caller, item.id)).toEqual({ ok: true, eventCount: 1 })
   })
 })
 

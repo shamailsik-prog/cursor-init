@@ -10,9 +10,11 @@ import {
   GENESIS_PREV_HASH,
   custodyBody,
   custodyEventHash,
+  genesisEventHash,
   inspectCustodyChain,
   type CustodyEvent,
   type EvidenceItem,
+  type GenesisEvent,
 } from "../src/d1/evidence/types"
 
 /**
@@ -34,7 +36,9 @@ const EXPECTED = [
   "CUSTODY_KINDS",
   "custodyBody",
   "custodyEventHash",
+  "genesisEventHash",
   "parseCustodyEvent",
+  "parseGenesisEvent",
   "inspectCustodyChain",
   "atLeastClassification",
   "logEvidence",
@@ -85,8 +89,33 @@ function item(over: Partial<EvidenceItem> = {}): EvidenceItem {
     createdBy: "user-1",
     createdAt: "2026-01-15T00:00:00.000Z",
     eventCount: 1,
+    headerHash: "ab".repeat(32),
+    lastHash: "cd".repeat(32),
     ...over,
   }
+}
+
+function genesis(row: EvidenceItem, over: Partial<GenesisEvent> = {}): GenesisEvent {
+  const body: Omit<GenesisEvent, "id" | "hash"> = {
+    evidenceId: row.id,
+    firmId: row.firmId,
+    matterId: row.matterId,
+    seq: 0,
+    kind: "genesis",
+    actorId: row.createdBy,
+    at: row.createdAt,
+    note: "",
+    custodian: row.custodian,
+    documentId: null,
+    classification: row.classification,
+    item: row.item,
+    source: row.source,
+    receiptDate: row.receiptDate,
+    prevHash: GENESIS_PREV_HASH,
+    ...over,
+  }
+  const { id: _id, hash: _hash, ...rest } = { ...body, id: `${row.id}_0`, hash: "" }
+  return { ...rest, id: `${row.id}_0`, hash: over.hash ?? genesisEventHash(rest) }
 }
 
 describe("D1 evidence export surface and hash", () => {
@@ -108,7 +137,9 @@ describe("D1 evidence export surface and hash", () => {
   })
 
   it("a changed note breaks inspect at that seq and a gap is the missing seq", () => {
-    const first = event()
+    const row = item({ eventCount: 2 })
+    const origin = genesis(row)
+    const first = event({ prevHash: origin.hash })
     const secondBody = {
       evidenceId: first.evidenceId,
       firmId: first.firmId,
@@ -124,16 +155,70 @@ describe("D1 evidence export surface and hash", () => {
       prevHash: first.hash,
     }
     const second = event({ ...secondBody, id: "ev1_2", hash: custodyEventHash(secondBody) })
-    const subject = { id: "ev1", firmId: "firmA", matterId: "matterA" }
-    expect(inspectCustodyChain(subject, [first, second])).toEqual({ ok: true, eventCount: 2 })
+    const header = { ...row, headerHash: origin.hash, lastHash: second.hash, eventCount: 2 }
+    expect(inspectCustodyChain(header, origin, [first, second])).toEqual({ ok: true, eventCount: 2 })
     const tampered = { ...second, note: "seal broken" }
-    expect(inspectCustodyChain(subject, [first, tampered])).toEqual({ ok: false, brokenSeq: 2, reason: "hash" })
-    expect(inspectCustodyChain(subject, [first])).toEqual({ ok: true, eventCount: 1 })
+    expect(inspectCustodyChain(header, origin, [first, tampered])).toEqual({ ok: false, brokenSeq: 2, reason: "hash" })
+    expect(inspectCustodyChain({ ...header, eventCount: 1, lastHash: first.hash }, origin, [first])).toEqual({
+      ok: true,
+      eventCount: 1,
+    })
     const third = event({ ...secondBody, seq: 3, id: "ev1_3", prevHash: second.hash })
     const { id: _i, hash: _h, ...thirdBody } = third
     third.hash = custodyEventHash(thirdBody)
-    expect(inspectCustodyChain(subject, [first, third]).ok).toBe(false)
-    expect(inspectCustodyChain(subject, [first, third])).toMatchObject({ brokenSeq: 2, reason: "gap" })
+    expect(inspectCustodyChain({ ...header, eventCount: 3, lastHash: third.hash }, origin, [first, third])).toMatchObject({
+      brokenSeq: 2,
+      reason: "gap",
+    })
+  })
+
+  it("a missing tail or a count past the header fails inspect at that seq", () => {
+    const row = item({ eventCount: 2 })
+    const origin = genesis(row)
+    const first = event({ prevHash: origin.hash })
+    const second = event({
+      seq: 2,
+      id: "ev1_2",
+      note: "second",
+      prevHash: first.hash,
+      at: "2026-01-15T01:00:00.000Z",
+    })
+    const header = { ...row, headerHash: origin.hash, lastHash: second.hash, eventCount: 2 }
+    expect(inspectCustodyChain(header, origin, [first])).toEqual({ ok: false, brokenSeq: 2, reason: "gap" })
+    expect(inspectCustodyChain({ ...header, eventCount: 1, lastHash: first.hash }, origin, [first, second])).toEqual({
+      ok: false,
+      brokenSeq: 2,
+      reason: "count",
+    })
+    expect(inspectCustodyChain({ ...header, lastHash: first.hash }, origin, [first, second])).toEqual({
+      ok: false,
+      brokenSeq: 2,
+      reason: "hash",
+    })
+  })
+
+  it("editing a header field bound into genesis fails inspect", () => {
+    const row = item({ eventCount: 1 })
+    const origin = genesis(row)
+    const first = event({ prevHash: origin.hash })
+    const header = { ...row, headerHash: origin.hash, lastHash: first.hash, eventCount: 1 }
+    expect(inspectCustodyChain(header, origin, [first])).toEqual({ ok: true, eventCount: 1 })
+    expect(inspectCustodyChain({ ...header, item: "substituted exhibit" }, origin, [first])).toEqual({
+      ok: false,
+      brokenSeq: 0,
+      reason: "header",
+    })
+    expect(inspectCustodyChain({ ...header, classification: "public" }, origin, [first])).toEqual({
+      ok: false,
+      brokenSeq: 0,
+      reason: "header",
+    })
+    const rewritten = { ...origin, item: "substituted exhibit" }
+    expect(inspectCustodyChain({ ...header, item: rewritten.item, headerHash: origin.hash }, rewritten, [first])).toEqual({
+      ok: false,
+      brokenSeq: 0,
+      reason: "hash",
+    })
   })
 
   it("the renderer is deterministic and writes every hash in seq order", () => {
@@ -154,8 +239,8 @@ describe("D1 evidence export surface and hash", () => {
     }
     const second = event({ ...secondBody, id: "ev1_2", hash: custodyEventHash(secondBody) })
     const row = item({ eventCount: 2 })
-    const a = exported.renderEvidenceLog(row, [second, first])
-    const b = exported.renderEvidenceLog(row, [first, second])
+    const a = exported.renderEvidenceLog(row, [second, first], null)
+    const b = exported.renderEvidenceLog(row, [first, second], null)
     expect(Buffer.from(a.json, "utf8").equals(Buffer.from(b.json, "utf8"))).toBe(true)
     expect(Buffer.from(a.text, "utf8").equals(Buffer.from(b.text, "utf8"))).toBe(true)
     const parsed = JSON.parse(a.json) as { events: { seq: number; hash: string; prevHash: string }[] }
