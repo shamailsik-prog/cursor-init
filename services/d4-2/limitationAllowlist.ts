@@ -3,12 +3,20 @@
  * the canonical reckoning, the canonical month-end, a neutral label clause,
  * or one quantity clause (optional label words, one cardinal, one day/month/year).
  * Anything else fails closed. These two sentences are the whole proviso allowlist.
- * They are engine fixtures. Published section 12(1) includes "prescribed for any
- * suit, appeal or application," and does not match CANONICAL_RECKONING, so that
- * gazetted sentence yields reckoning_unverified. A schedule row with a description
- * column or a time column beside the period is outside this grammar and refuses.
- * [REQUIRES VERIFICATION] before a lawyer treats either sentence as the gazetted text.
+ * They are engine fixtures.
+ * [REQUIRES VERIFICATION] Published section 12(1) includes "prescribed for any suit, appeal or application,"
+ * and does not match CANONICAL_RECKONING, so that gazetted sentence yields reckoning_unverified.
+ * The canonical reckoning must be the lawyer-verified gazetted section 12(1) text.
+ * [REQUIRES VERIFICATION] against the official gazette before either fixture is treated as that text.
  * Do not replace either sentence from an unsourced recollection of the Act.
+ * Schedule-column contract: a First Schedule row that places a description column
+ * or a time column beside the period is outside this grammar and refuses.
+ * This engine has no contract that separates those columns.
+ * [REQUIRES VERIFICATION] before any schedule row is wired.
+ * An s.12 row applies the accrual-day exclusion only when every non-empty sentence
+ * is the canonical reckoning or a neutral heading. A neutral heading is the fixture
+ * label "Q11 FIXTURE", or a sentence whose words are all in NEUTRAL_WORDS.
+ * Any other sentence yields reckoning_unverified and a null deadline.
  */
 export const CANONICAL_RECKONING =
   "in computing the period of limitation the day from which such period is to be reckoned shall be excluded"

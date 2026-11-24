@@ -11,6 +11,7 @@ import { loadCourts } from "@/core/case-number-normaliser"
 import courtsSeed from "@/data/courts.json"
 import { addMember, createMatter } from "@/services/d1-2/matters"
 import { scheduleLimitationAlerts } from "@/services/d6-1/limitationAlerts"
+import { CANONICAL_MONTH_END, CANONICAL_RECKONING } from "@/services/d4-2/limitationAllowlist"
 import {
   REPO_COURT_CALENDAR,
   applyLimitation,
@@ -1397,6 +1398,120 @@ describe("Q11 checkLimitation", () => {
       reason: "reckoning_unverified",
       deadline: null,
     })
+  })
+
+  it("keeps the canonical reckoning and month-end sentences byte-for-byte", () => {
+    expect(CANONICAL_RECKONING).toBe(RECKONING.replace(/\.$/, "").toLowerCase())
+    expect(CANONICAL_MONTH_END).toBe(MONTH_END.replace(/\.$/, "").toLowerCase())
+  })
+
+  it("FA-Q11-S12-R5-001 applies section 12 only when every sentence is canonical or a neutral heading", () => {
+    const articleOnly = "LIMITATION FIXTURE. The period of limitation is three years."
+    const rows = [
+      `${RECKONING} Repealed.`,
+      `${RECKONING} Omitted.`,
+      `Sub-section (1) is omitted. ${RECKONING}`,
+      `${RECKONING} This rule shall not be applicable.`,
+      `${RECKONING} This rule is not applicable.`,
+      `${RECKONING} This rule is inapplicable.`,
+      `${RECKONING} This rule shan't apply.`,
+      `${RECKONING} This rule doesn't apply.`,
+      `${RECKONING} This rule shall not, however, apply.`,
+      `${RECKONING} This rule does not govern.`,
+      `${RECKONING} This rule is disapplied.`,
+      `${RECKONING} This rule shall cease to have effect.`,
+      `${RECKONING} Article 7 is outside this section.`,
+      `${RECKONING} Nothing in this section applies.`,
+      `${RECKONING} No exclusion for article 7.`,
+      `${RECKONING} The day shall be included.`,
+      `${RECKONING} Provided that the day shall be counted.`,
+    ]
+    const misses: string[] = []
+    for (const sectionText of rows) {
+      const versions = [
+        version("limitation-act-1908/article/7", articleOnly, "1908-01-01", null, 1),
+        version("limitation-act-1908/section/12", sectionText, "1908-01-01", null, 1),
+        version("limitation-act-1908/section/4", SECTION_4, "1908-01-01", null, 1),
+      ]
+      const result = assessed("2020-01-15", versions)
+      if (result.status !== "NOT_ASSESSED" || result.reason !== "reckoning_unverified" || result.deadline !== null) {
+        misses.push(`${JSON.stringify(sectionText)} => ${result.status} ${result.reason} ${result.deadline}`)
+      }
+    }
+    expect(misses).toEqual([])
+    const canonical = [
+      version("limitation-act-1908/article/7", articleOnly, "1908-01-01", null, 1),
+      version("limitation-act-1908/section/12", RECKONING, "1908-01-01", null, 1),
+      version("limitation-act-1908/section/4", SECTION_4, "1908-01-01", null, 1),
+    ]
+    expect(assessed("2020-01-15", canonical)).toMatchObject({
+      status: "ASSESSED",
+      deadline: "2023-01-15",
+      exclusionsApplied: [expect.objectContaining({ section: "12", effect: "exclude-accrual-day", statedIn: "section" })],
+    })
+  })
+
+  it("FA-Q11-DIGIT-R5-001 refuses a letter-number in the period", () => {
+    const rows = [
+      "\u216B (3 years)",
+      "\u217B (3 years)",
+      "\u2162 (3 years)",
+      "\u3007 (3 years)",
+      "Three years. \u216B.",
+      "Article \u216B: three years.",
+    ]
+    const misses: string[] = []
+    for (const period of rows) {
+      const result = assessed("2020-01-01", base(period))
+      if (result.status !== "NOT_ASSESSED" || result.reason !== "period_unreadable" || result.deadline !== null) {
+        misses.push(`${JSON.stringify(period)} => ${result.status} ${result.reason} ${result.deadline}`)
+      }
+    }
+    expect(misses).toEqual([])
+  })
+
+  it("TEST-256-R5-001 pins the fail-open survivors N05 N10 N13 N16 N18 and N24", () => {
+    for (const period of [".\u200B5 years.", ".\u20605 years.", `${RECKONING}\n.\u200B5 years`]) {
+      expect(assessed("2020-01-15", provision(period)), `N05 ${JSON.stringify(period)}`).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+    for (const period of ["\u0665 (3 years)", "\uFF15 (3 years)"]) {
+      expect(assessed("2020-01-01", base(period)), `N10 ${JSON.stringify(period)}`).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+    expect(assessed("2020-01-01", base("Over the property: twelve years")), "N13").toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_ambiguous",
+      deadline: null,
+    })
+    expect(assessed("2020-01-01", base("Possession over the property twelve years")), "N16").toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_ambiguous",
+      deadline: null,
+    })
+    const before = [
+      version("limitation-act-1908/article/7", "LIMITATION FIXTURE. The period of limitation is three years.", "1908-01-01", null, 1),
+      version("limitation-act-1908/section/12", `This rule shall not apply. ${RECKONING}`, "1908-01-01", null, 1),
+      version("limitation-act-1908/section/4", SECTION_4, "1908-01-01", null, 1),
+    ]
+    expect(assessed("2020-01-15", before), "N18").toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "reckoning_unverified",
+      deadline: null,
+    })
+    for (const period of ["\u2075 (3 years)", "\u00B2 (3 years)"]) {
+      expect(assessed("2020-01-01", base(period)), `N24 ${JSON.stringify(period)}`).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
   })
 })
 

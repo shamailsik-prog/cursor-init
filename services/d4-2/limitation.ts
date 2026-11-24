@@ -39,6 +39,7 @@ import {
   isCanonicalProviso,
   isCanonicalReckoning,
   NEUTRAL_WORDS,
+  normalizeSentence,
   provisoShaped,
   QUANTITY_LABELS,
   UNICODE_DASH,
@@ -465,9 +466,9 @@ type NumberToken = { start: number; end: number; value: number | null; raw: stri
  * clause. The quantity clause is optional label words, one English cardinal or
  * digit run, and one day, month, or year. Anything else is period_ambiguous, or
  * period_unreadable when the sentence was trying to be a proviso, a unicode
- * dash appears anywhere in the provision, a non-ASCII decimal digit appears,
- * or a full stop that the sentence split removes sits before a digit
- * (spaces ignored). A count above the engine ceiling is
+ * dash appears anywhere in the provision, a non-ASCII decimal digit or a
+ * letter-number appears, or a full stop that the sentence split removes sits
+ * before a digit (spaces ignored). A count above the engine ceiling is
  * period_exceeds_engine_cap. A single newline is a space. A blank line splits.
  */
 function normalizeSource(text: string): string {
@@ -485,7 +486,7 @@ function parsePeriod(
 ):
   | { ok: true; n: number; unit: DateUnit; cited: string }
   | { ok: false; reason: "period_unreadable" | "period_ambiguous" | "period_exceeds_engine_cap" } {
-  if (/\p{No}/u.test(text) || hasNonAsciiDigit(text)) return { ok: false, reason: "period_unreadable" }
+  if (/\p{No}|\p{Nl}/u.test(text) || hasNonAsciiDigit(text)) return { ok: false, reason: "period_unreadable" }
   if (FILLER_JOIN_RE.test(text)) return { ok: false, reason: "period_unreadable" }
   const normalized = normalizeSource(text)
   if (hasUnicodeDash(normalized) || dotBeforeDigit(normalized)) return { ok: false, reason: "period_unreadable" }
@@ -639,6 +640,26 @@ function textHasCanonicalReckoning(text: string): boolean {
   return parts.some((part) => isCanonicalReckoning(part))
 }
 
+/** The section 12 fixture label. It is not statute text. */
+const FIXTURE_HEADING = "q11 fixture"
+
+function isNeutralHeading(sentence: string): boolean {
+  if (normalizeSentence(sentence) === FIXTURE_HEADING) return true
+  const words = wordsOf(sentence)
+  return words.length > 0 && words.every((word) => NEUTRAL_WORDS.has(word))
+}
+
+/**
+ * Section 12 supplies the accrual-day exclusion only when at least one sentence
+ * is the canonical reckoning and every non-empty sentence is that reckoning or
+ * a neutral heading. Any other sentence leaves the reckoning unverified.
+ */
+function section12SuppliesReckoning(text: string): boolean {
+  const parts = normalizeSource(text).split(/[.\u0000]/).filter((part) => part.trim() !== "")
+  if (!parts.some((part) => isCanonicalReckoning(part))) return false
+  return parts.every((part) => isCanonicalReckoning(part) || isNeutralHeading(part))
+}
+
 function isSymbolCode(code: number): boolean {
   return /\p{S}/u.test(String.fromCodePoint(code))
 }
@@ -773,7 +794,7 @@ function reckoningSource(
   }
   const section = inForce(versions, "limitation-act-1908/section/12", jurisdiction, asAt)
   if (!section.ok) return { ok: false, reason: section.reason === "no_history" ? "reckoning_unverified" : section.reason }
-  if (!textHasCanonicalReckoning(section.row.text)) return { ok: false, reason: "reckoning_unverified" }
+  if (!section12SuppliesReckoning(section.row.text)) return { ok: false, reason: "reckoning_unverified" }
   return { ok: true, sectionId: section.row.sectionId, versionNo: section.row.versionNo, statedIn: "section" }
 }
 
