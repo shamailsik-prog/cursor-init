@@ -190,9 +190,40 @@ const PROPOSAL_CAS_TRANSITIONS: Record<PersistedProposal["status"], readonly Per
   rejected: [],
 }
 
-/** NFKC, strip default-ignorables, trim, then lower-case with ß folded to ss. */
+/**
+ * Non-ASCII is rejected before NFKC, except the folds both engines already share:
+ * default-ignorables, the trim set, ß/ẞ, U+A7F1, and fullwidth forms. U+0130 and
+ * U+1CCD6–U+1CCF9 are outside that set, so neither engine can casefold them into a
+ * different ASCII letter. No one-off folds. After the shared folds, a remaining
+ * non-ASCII is still empty, and the result must be ^[a-z0-9._@-]+$.
+ */
+const ACTOR_KEY = /^[a-z0-9._@-]+$/
+
+function rejectsActorKeyBeforeNfkc(value: string): boolean {
+  for (const ch of value) {
+    const cp = ch.codePointAt(0) ?? 0
+    if (cp <= 0x7f) continue
+    if (cp === 0xdf || cp === 0x1e9e || cp === 0xa7f1) continue
+    if (cp >= 0xff00 && cp <= 0xffef) continue
+    if (cp === 0xa0 || cp === 0x1680 || cp === 0x2028 || cp === 0x2029 || cp === 0x202f || cp === 0x205f || cp === 0x3000) continue
+    if (cp >= 0x2000 && cp <= 0x200a) continue
+    if (/\p{Default_Ignorable_Code_Point}/u.test(ch)) continue
+    return true
+  }
+  return false
+}
+
 export function normalizeActorKey(value: string): string {
-  return value.normalize("NFKC").replace(/\p{Default_Ignorable_Code_Point}/gu, "").trim().toLowerCase().replace(/\u00df/g, "ss")
+  if (rejectsActorKeyBeforeNfkc(value)) return ""
+  const prepared = value
+    .normalize("NFKC")
+    .replace(/\p{Default_Ignorable_Code_Point}/gu, "")
+    .trim()
+    .replace(/\u1E9E/g, "ss")
+    .replace(/\u00df/g, "ss")
+  if ([...prepared].some((ch) => (ch.codePointAt(0) ?? 0) > 0x7f)) return ""
+  const folded = prepared.toLowerCase()
+  return ACTOR_KEY.test(folded) ? folded : ""
 }
 
 function isDirectApproval(current: PersistedProposal | undefined, next: PersistedProposal): boolean {
@@ -217,6 +248,49 @@ function assertNoApprovalStamp(row: PersistedProposal): void {
 
 function assertProposedByUnchanged(current: PersistedProposal, row: PersistedProposal): void {
   if (row.proposedBy !== current.proposedBy) throw new Error("proposedBy is immutable")
+}
+
+/** Columns the proposal-transition trigger freezes on every update, including a pending row. */
+function assertFrozenColumns(current: PersistedProposal, next: PersistedProposal): void {
+  if (
+    next.changeClass !== current.changeClass ||
+    next.requestedClass !== current.requestedClass ||
+    next.firmId !== current.firmId ||
+    next.entryKey !== current.entryKey ||
+    next.classification !== current.classification ||
+    next.sourceModule !== current.sourceModule ||
+    next.partition !== current.partition ||
+    next.id !== current.id
+  ) {
+    throw new Error("approved proposal payload is frozen")
+  }
+}
+
+function assertCommitBound(input: CommitVersionInput): void {
+  if (!input.proposal) return
+  if (input.proposalId !== input.proposal.id || input.firmId !== input.proposal.firmId) {
+    throw new Error("commit is bound to the proposal")
+  }
+}
+
+function assertDecisionUnchanged(current: PersistedProposal, next: PersistedProposal): void {
+  if (
+    next.decidedBy !== current.decidedBy ||
+    next.decidedKind !== current.decidedKind ||
+    next.decidedRole !== current.decidedRole ||
+    next.declassify !== current.declassify
+  ) {
+    throw new Error("approval is not a direct status change")
+  }
+}
+
+function assertCommitProposal(current: PersistedProposal | undefined, next: PersistedProposal): void {
+  if (!current) throw new Error("proposal not found")
+  assertCommitLeavesApprovalAlone(current, next)
+  assertProposedByUnchanged(current, next)
+  assertPayloadFrozen(current, next)
+  assertFrozenColumns(current, next)
+  assertDecisionUnchanged(current, next)
 }
 
 function assertCasShape(current: PersistedProposal, next: PersistedProposal): void {
@@ -265,7 +339,8 @@ function assertPartnerApproval(current: PersistedProposal, next: PersistedPropos
   }
   const approver = normalizeActorKey(next.decidedBy ?? "")
   const proposer = normalizeActorKey(current.proposedBy)
-  if (approver === "" || proposer === "") throw new Error("substantive proposal requires partner approval")
+  if (proposer === "") throw new Error("proposer key missing")
+  if (approver === "") throw new Error("substantive proposal requires partner approval")
   if (approver === proposer) throw new Error("approver must differ from proposer")
   if (
     next.proposedBy !== current.proposedBy ||
@@ -353,6 +428,7 @@ export class InMemoryMasterStore implements MasterStore {
     assertCasShape(current, row)
     assertProposedByUnchanged(current, row)
     assertPayloadFrozen(current, row)
+    assertFrozenColumns(current, row)
     const next = structuredClone(row)
     next.payload = structuredClone(current.payload)
     next.payloadHash = current.payloadHash
@@ -407,6 +483,7 @@ export class InMemoryMasterStore implements MasterStore {
     if (current.status !== "pending") throw new Error("save refuses a status other than pending")
     assertProposedByUnchanged(current, row)
     assertPayloadFrozen(current, row)
+    assertFrozenColumns(current, row)
     const next = structuredClone(row)
     next.payload = structuredClone(current.payload)
     next.payloadHash = current.payloadHash
@@ -430,11 +507,9 @@ export class InMemoryMasterStore implements MasterStore {
     this.assertRole()
     const snap = cloneState(this.state)
     try {
-      const currentProposal = input.proposal ? this.state.proposals.get(input.proposal.id) : undefined
-      if (input.proposal) assertCommitLeavesApprovalAlone(currentProposal, input.proposal)
-      if (input.proposal && currentProposal) {
-        assertProposedByUnchanged(currentProposal, input.proposal)
-        assertPayloadFrozen(currentProposal, input.proposal)
+      if (input.proposal) {
+        assertCommitProposal(this.state.proposals.get(input.proposal.id), input.proposal)
+        assertCommitBound(input)
       }
       const firmVersions = this.state.versions.filter((row) => row.firmId === input.firmId)
       const parent = firmVersions[firmVersions.length - 1] ?? null
@@ -638,6 +713,7 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
         const stored = proposalFromRow(current)
         assertProposedByUnchanged(stored, row)
         assertPayloadFrozen(stored, row)
+        assertFrozenColumns(stored, row)
         const result = await client.query(
           `UPDATE change_proposals
               SET status = $2, decided_by = $3, decided_kind = $4, decided_role = $5
@@ -698,10 +774,8 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
               [input.proposal.id],
             )
             const current = found.rows[0] ? proposalFromRow(found.rows[0]) : undefined
-            if (current) {
-              assertProposedByUnchanged(current, input.proposal)
-              assertPayloadFrozen(current, input.proposal)
-            }
+            assertCommitProposal(current, input.proposal)
+            assertCommitBound(input)
           }
           await writeVersion(client, input, versionId)
         })
@@ -771,6 +845,7 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
         assertCasShape(current, row)
         assertProposedByUnchanged(current, row)
         assertPayloadFrozen(current, row)
+        assertFrozenColumns(current, row)
         const updated = await client.query(
           `UPDATE change_proposals
               SET status = $2, decided_by = $3, decided_kind = $4, decided_role = $5,
@@ -803,6 +878,15 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
       async commitVersion(input) {
         const versionId = randomUUID()
         try {
+          if (input.proposal) {
+            const found = await client.query<ProposalQueryRow>(
+              `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
+              [input.proposal.id],
+            )
+            const current = found.rows[0] ? proposalFromRow(found.rows[0]) : undefined
+            assertCommitProposal(current, input.proposal)
+            assertCommitBound(input)
+          }
           await writeVersion(client, input, versionId)
         } catch (error) {
           throw commitError(error)
@@ -823,7 +907,12 @@ async function readClassification(client: pg.PoolClient, firmId: string): Promis
 }
 
 function commitError(error: unknown): Error {
-  if (error instanceof Error && /did not commit|non-P6 writer refused|master version conflict|proposal already has a version|declassify|frozen|proposedBy is immutable/.test(error.message)) {
+  if (
+    error instanceof Error &&
+    /did not commit|non-P6 writer refused|master version conflict|proposal already has a version|declassify|frozen|proposedBy is immutable|proposal not found|approval is not a direct status change|proposal status transition is refused|commit is bound to the proposal|proposer key missing/.test(
+      error.message,
+    )
+  ) {
     return error
   }
   return new Error("master write did not commit", { cause: error })

@@ -1,8 +1,15 @@
 export {
   OBSERVABILITY_FIELDS,
   REDACTED,
+  mintDatedId,
+  mintFirestoreId,
+  mintHyphenatedId,
+  mintMatterSerial,
+  mintUlid,
+  mintUuid,
   normalizeFieldKey,
   redactForObservability,
+  type MintedId,
   type ObservabilityField,
 } from "@/platform/observability/redact"
 
