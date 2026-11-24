@@ -919,44 +919,6 @@ function commitError(error: unknown): Error {
 }
 
 async function writeVersion(client: pg.PoolClient, input: CommitVersionInput, versionId: string): Promise<void> {
-  await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`p6:${input.firmId}`])
-  const prior = await client.query<{ version_no: number; id: string }>(
-    `SELECT version_no, id FROM master_versions
-      WHERE firm_id = $1 ORDER BY version_no DESC LIMIT 1`,
-    [input.firmId],
-  )
-  const parent = prior.rows[0]
-  if ((parent?.id ?? null) !== input.expectedBaseVersionId) throw new Error("master version conflict")
-  const versionNo = (parent?.version_no ?? 0) + 1
-  await client.query(
-    `INSERT INTO master_versions
-       (id, firm_id, version_no, proposal_id, parent_version_id, action, diff, snapshot,
-        author_id, author_kind, restored_from_version_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11)`,
-    [
-      versionId,
-      input.firmId,
-      versionNo,
-      input.proposalId,
-      parent?.id ?? null,
-      input.action,
-      JSON.stringify(input.diff),
-      JSON.stringify(input.snapshot),
-      input.authorId,
-      input.authorKind,
-      input.restoredFromVersionId,
-    ],
-  )
-  const written = await client.query(
-    `INSERT INTO master_knowledge (firm_id, snapshot, classification, version_id)
-     VALUES ($1, $2::jsonb, $3, $4)
-     ON CONFLICT (firm_id) DO UPDATE
-       SET snapshot = EXCLUDED.snapshot,
-           classification = EXCLUDED.classification,
-           version_id = EXCLUDED.version_id
-       WHERE master_knowledge.version_id IS NOT DISTINCT FROM $5
-     RETURNING firm_id`,
-    [input.firmId, JSON.stringify(input.snapshot), input.classification, versionId, input.expectedBaseVersionId],
-  )
-  if ((written.rowCount ?? 0) !== 1) throw new Error("master version conflict")
+  const writer = await import("@/platform/p6/masterWrite")
+  await writer.executeMasterTableWrite(client, input, versionId)
 }
