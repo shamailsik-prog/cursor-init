@@ -424,8 +424,9 @@ class RuntimeCheck(unittest.TestCase):
 
 # Wave-1 stores the deletion saga will read. Two already exist on 7ae1a33f with this profile and key
 # (evidence_items, custody_events); the gate forbids a duplicate, and the file lock forbids editing them.
-# Five are still pending on F42 until their writers land. whatsapp_outbound_keys landed with W1-Q14R3
-# (ME I1): the pin keeps its deletion key and age field, and `pending` is gone.
+# Four stay pending on F42 until their writers land. Two have landed and their pending flags are gone
+# (ME I1): draft_autosave_points (W1-L51) and whatsapp_outbound_keys (W1-Q14R3). A pending flag on a
+# store the tree now names is a note, and the pin must not keep demanding it.
 # `validatePolicy(policy, inventory())` in functions/test/f42-retention.units.test.ts loads this same file.
 WAVE1_NEW = (
     {
@@ -447,14 +448,6 @@ WAVE1_NEW = (
         "pending": "F42",
     },
     {
-        "id": "firestore:draft_autosave_points",
-        "kind": "firestore",
-        "name": "draft_autosave_points",
-        "profile": "matter_content",
-        "key": {"kind": "field", "field": "matterId"},
-        "pending": "F42",
-    },
-    {
         "id": "firestore:upload_sessions",
         "kind": "firestore",
         "name": "upload_sessions",
@@ -471,15 +464,26 @@ WAVE1_NEW = (
         "pending": "F42",
     },
 )
-# Landed writer (W1-Q14R3, ME I1). Same profile and TTL clock as the pre-registration, without `pending`.
-WAVE1_LANDED = {
-    "id": "firestore:whatsapp_outbound_keys",
-    "kind": "firestore",
-    "name": "whatsapp_outbound_keys",
-    "profile": "operational_ttl",
-    "key": {"kind": "none"},
-    "ageField": {"field": "expiresAt", "type": "timestamp"},
-}
+# Landed writers. draft_autosave_points (W1-L51): matter-deletion key stays matterId; a null matterId
+# is not that query, and W2-DEL finds it by firmId plus createdBy (functions/src/d4/autosave.README.md).
+# whatsapp_outbound_keys (W1-Q14R3): same profile and TTL clock as the pre-registration, without pending.
+WAVE1_LANDED = (
+    {
+        "id": "firestore:draft_autosave_points",
+        "kind": "firestore",
+        "name": "draft_autosave_points",
+        "profile": "matter_content",
+        "key": {"kind": "field", "field": "matterId"},
+    },
+    {
+        "id": "firestore:whatsapp_outbound_keys",
+        "kind": "firestore",
+        "name": "whatsapp_outbound_keys",
+        "profile": "operational_ttl",
+        "key": {"kind": "none"},
+        "ageField": {"field": "expiresAt", "type": "timestamp"},
+    },
+)
 WAVE1_ALREADY = ("firestore:evidence_items", "firestore:custody_events")
 
 
@@ -490,19 +494,14 @@ class Wave1Stores(unittest.TestCase):
         inventory = gate.load_json(ROOT, gate.INVENTORY)
         by_id = {s["id"]: s for s in inventory["stores"]}
         self.assertEqual(len(by_id), len(inventory["stores"]), "duplicate store id")
-        for expected in WAVE1_NEW:
+        for expected in (*WAVE1_NEW, *WAVE1_LANDED):
             store = by_id.get(expected["id"])
             self.assertIsNotNone(store, expected["id"])
             for field, value in expected.items():
                 self.assertEqual(store.get(field), value, expected["id"])
             self.assertNotIn(store["name"], {s["name"] for s in inventory["stores"] if s["id"] != store["id"]})
-        landed = by_id.get(WAVE1_LANDED["id"])
-        self.assertIsNotNone(landed, WAVE1_LANDED["id"])
-        assert landed is not None
-        for field, value in WAVE1_LANDED.items():
-            self.assertEqual(landed.get(field), value, WAVE1_LANDED["id"])
-        self.assertNotIn("pending", landed)
-        self.assertNotIn(landed["name"], {s["name"] for s in inventory["stores"] if s["id"] != landed["id"]})
+        for expected in WAVE1_LANDED:
+            self.assertNotIn("pending", by_id[expected["id"]], expected["id"])
         for sid in WAVE1_ALREADY:
             store = by_id[sid]
             self.assertEqual(store["profile"], "matter_content", sid)

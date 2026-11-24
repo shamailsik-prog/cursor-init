@@ -427,7 +427,7 @@ function refuseStaleEdit(draft: DocumentData, baseVersion: number): void {
  * follow the draft's label. A label that is unreadable fails closed (403 `clearance`), as classifyForMatter does, and
  * so does a raised label above the caller's clearance (a backstop: requireStillPermitted has refused that already).
  */
-function raisedLabel(caller: Caller, draft: DocumentData, matter: DocumentData): Classification {
+export function raisedLabel(caller: Caller, draft: DocumentData, matter: DocumentData): Classification {
   if (!isKnownClassification(matter.classification)) throw new HttpError(403, "clearance")
   const result = strictest([draft.classification as Classification, matter.classification])
   if (rankOf(caller.clearanceLevel) < rankOf(result)) throw new HttpError(403, "clearance")
@@ -444,13 +444,19 @@ function raisedLabel(caller: Caller, draft: DocumentData, matter: DocumentData):
  * old result stays in `draft_gate_results`). The version and the draft take `raisedLabel`. A transaction that gives up
  * under contention wrote nothing and answers `draft_changed`.
  */
-async function storeVersion(
+export async function storeVersion(
   caller: Caller,
   audit: CallAudit,
   ref: DocumentReference,
   baseVersion: number,
   kind: "save" | "restore",
-  resolve: (tx: Transaction) => Promise<{ title: string; body: string; restoredFrom?: number }>
+  resolve: (tx: Transaction) => Promise<{ title: string; body: string; restoredFrom?: number; classification?: Classification }>,
+  /**
+   * Runs inside the version transaction after the permission re-check and before the lock check.
+   * Absent for a save and a formal restore, so those paths are unchanged. The autosave restore uses it
+   * to refuse an approved draft.
+   */
+  guard?: (draft: DocumentData) => void
 ): Promise<SavedDraft> {
   const draftId = ref.id
   let out: SavedDraft
@@ -462,6 +468,7 @@ async function storeVersion(
         const draft = (await tx.get(ref)).data()
         if (!draft || draft.firmId !== caller.firmId || !withinClearance(draft.classification, caller.clearanceLevel)) throw notFound()
         const matter = await requireStillPermitted(tx, caller, "draft.edit", draft.matterId as string)
+        guard?.(draft)
         refuseStaleEdit(draft, baseVersion)
         const next = await resolve(tx)
         const bodySha256 = sha256Hex(next.body)
@@ -470,7 +477,13 @@ async function storeVersion(
           return { saved: false, draft: draftView(draftId, draft) }
         }
         const version = baseVersion + 1
-        const classification = raisedLabel(caller, draft, matter)
+        const raised = raisedLabel(caller, draft, matter)
+        // Optional floor from the caller (autosave restore). Absent for a save and a formal restore, so those
+        // versions stay on raisedLabel alone. A floor never lowers the label, and the caller must be cleared for it.
+        const floor = next.classification
+        if (floor !== undefined && !isKnownClassification(floor)) throw new HttpError(403, "clearance")
+        const classification = floor === undefined ? raised : strictest([raised, floor])
+        if (rankOf(caller.clearanceLevel) < rankOf(classification)) throw new HttpError(403, "clearance")
         await audit.stage(tx, "allow", "ok")
         tx.create(versions().doc(versionId(draftId, version)), {
           firmId: caller.firmId,
