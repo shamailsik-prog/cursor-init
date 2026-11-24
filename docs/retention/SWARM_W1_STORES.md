@@ -1,0 +1,12 @@
+# Wave-1 stores pre-registered by W1-INV
+
+One line per store. W1-INV does not write these stores. `pending: F42` means the collection or prefix is not in the tree yet. A matter deletion finds a row only when `matterId` equals that matter (`functions/src/retention/saga.ts` `rowsQuery`).
+
+- `firestore:intakes` — owner: wave-1 intake writer; why: the prospective matter record before it is promoted; deletion key: field `matterId` (null until promoted, so a matter deletion does not reach that row; W2-DEL, after #264, adds firm/intake-keyed reach); profile `matter_record`; anonymise clears `matterId` only; pending `F42`.
+- `firestore:intake_messages` — owner: wave-1 intake writer; why: messages on an intake; deletion key: field `matterId`; profile `matter_content`; pending `F42`.
+- `firestore:evidence_items` — owner: already in the inventory (not a W1-INV append); why: evidence of a matter; deletion key: field `matterId`; profile `matter_content`; no `pending` flag because the store is already in the tree.
+- `firestore:custody_events` — owner: already in the inventory (not a W1-INV append); why: append-only custody events of a matter (append-only is the writer's rule; the inventory has no separate flag); deletion key: field `matterId`; profile `matter_content`; no `pending` flag because the store is already in the tree.
+- `firestore:draft_autosave_points` — owner: wave-1 draft writer; why: autosaved draft points of a matter; deletion key: field `matterId`; profile `matter_content`; pending `F42`.
+- `firestore:upload_sessions` — owner: wave-1 upload writer; why: an upload job, including a loose-vault session whose `matterId` is null; deletion key: field `matterId` (a null `matterId` is not reached by a matter deletion); profile `job_record`; pending `F42`.
+- `objects:upload-staging` — owner: wave-1 upload writer; why: staged object bytes before they are promoted into the document vault; deletion key: objects via `firestore:upload_sessions`, path field `storagePath`; profile `vault_object` (no `lockConfig`: `infra/backup/document-vault.json` is the promoted vault, not this prefix); pending `F42`.
+- `firestore:whatsapp_outbound_keys` — owner: wave-1 WhatsApp writer; why: the outbound key hash only, no message content; deletion key: none (matter deletion does not apply); TTL clock: `ageField` `expiresAt` timestamp (Firestore TTL, the `operational_ttl` deleter); pending `F42`.

@@ -422,5 +422,100 @@ class RuntimeCheck(unittest.TestCase):
         self.assertEqual(gate.check_runtime_collections(["matters"], inventory), [])
 
 
+# Wave-1 stores the deletion saga will read. Two already exist on 7ae1a33f with this profile and key
+# (evidence_items, custody_events); the gate forbids a duplicate, and the file lock forbids editing them.
+# The other six are pending on F42 until their writers land. `validatePolicy(policy, inventory())` in
+# functions/test/f42-retention.units.test.ts loads this same file; this pin is what makes that call see them.
+WAVE1_NEW = (
+    {
+        "id": "firestore:intakes",
+        "kind": "firestore",
+        "name": "intakes",
+        "profile": "matter_record",
+        "key": {"kind": "field", "field": "matterId"},
+        # matter_record's purge-policy action is anonymise. A field key must be cleared or validatePolicy throws.
+        "anonymise": {"matterId": None},
+        "pending": "F42",
+    },
+    {
+        "id": "firestore:intake_messages",
+        "kind": "firestore",
+        "name": "intake_messages",
+        "profile": "matter_content",
+        "key": {"kind": "field", "field": "matterId"},
+        "pending": "F42",
+    },
+    {
+        "id": "firestore:draft_autosave_points",
+        "kind": "firestore",
+        "name": "draft_autosave_points",
+        "profile": "matter_content",
+        "key": {"kind": "field", "field": "matterId"},
+        "pending": "F42",
+    },
+    {
+        "id": "firestore:upload_sessions",
+        "kind": "firestore",
+        "name": "upload_sessions",
+        "profile": "job_record",
+        "key": {"kind": "field", "field": "matterId"},
+        "pending": "F42",
+    },
+    {
+        "id": "objects:upload-staging",
+        "kind": "objectPrefix",
+        "name": "upload-staging",
+        "profile": "vault_object",
+        "key": {"kind": "objects", "via": "firestore:upload_sessions", "pathField": "storagePath"},
+        "pending": "F42",
+    },
+    {
+        "id": "firestore:whatsapp_outbound_keys",
+        "kind": "firestore",
+        "name": "whatsapp_outbound_keys",
+        "profile": "operational_ttl",
+        "key": {"kind": "none"},
+        "ageField": {"field": "expiresAt", "type": "timestamp"},
+        "pending": "F42",
+    },
+)
+WAVE1_ALREADY = ("firestore:evidence_items", "firestore:custody_events")
+
+
+class Wave1Stores(unittest.TestCase):
+    """W1-INV: the stores wave 1 will create are inventoried before those writers land."""
+
+    def test_new_wave1_stores_are_pending_f42_with_their_deletion_keys(self) -> None:
+        inventory = gate.load_json(ROOT, gate.INVENTORY)
+        by_id = {s["id"]: s for s in inventory["stores"]}
+        self.assertEqual(len(by_id), len(inventory["stores"]), "duplicate store id")
+        for expected in WAVE1_NEW:
+            store = by_id.get(expected["id"])
+            self.assertIsNotNone(store, expected["id"])
+            for field, value in expected.items():
+                self.assertEqual(store.get(field), value, expected["id"])
+            self.assertNotIn(store["name"], {s["name"] for s in inventory["stores"] if s["id"] != store["id"]})
+        for sid in WAVE1_ALREADY:
+            store = by_id[sid]
+            self.assertEqual(store["profile"], "matter_content", sid)
+            self.assertEqual(store["key"], {"kind": "field", "field": "matterId"}, sid)
+            self.assertNotIn("pending", store, sid)
+        # The object prefix points at the session store this same inventory registers.
+        via = by_id["objects:upload-staging"]["key"]["via"]
+        self.assertEqual(by_id[via]["kind"], "firestore")
+        findings = gate.check_inventory(ROOT, inventory, gate.load_json(ROOT, gate.POLICY))
+        self.assertEqual(findings, [], msg="\n".join(f.message for f in findings))
+
+    def test_an_unpromoted_intake_key_is_the_matter_field_not_the_document_id(self) -> None:
+        """matterId stays null until promotion, so the saga's equality query does not reach that row."""
+        inventory = gate.load_json(ROOT, gate.INVENTORY)
+        intakes = next((s for s in inventory["stores"] if s["id"] == "firestore:intakes"), None)
+        self.assertIsNotNone(intakes, "firestore:intakes")
+        assert intakes is not None
+        self.assertEqual(intakes["key"], {"kind": "field", "field": "matterId"})
+        self.assertIsNone(intakes["anonymise"]["matterId"])
+        self.assertNotEqual(intakes["key"]["kind"], "docId")
+
+
 if __name__ == "__main__":
     unittest.main()
