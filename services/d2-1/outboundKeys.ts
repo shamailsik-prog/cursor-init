@@ -1,15 +1,18 @@
 import { createHash } from "node:crypto"
+import { Timestamp } from "firebase-admin/firestore"
 import type { OutboundWhatsApp, WhatsAppSendOptions, WhatsAppSendResult, WhatsAppTransport } from "./transport"
 
 /**
  * Durable once-only outbound sends (R3-L4).
  *
  * Before a send, a transaction `create`s `whatsapp_outbound_keys/{keyHash}`.
- * keyHash is sha256(firmId|idempotencyKey). The document is only keyHash,
- * createdAt and expiresAt: no recipient and no message text. A live row means
- * the send is not attempted, whether or not the transport looks at the key.
- * Expired rows are removed by `sweepExpiredWhatsAppOutboundKeys`, which is
- * exported and not scheduled. The collection is inventoried by W1-INV.
+ * keyHash is sha256(firmId|idempotencyKey). Every row is keyHash, firmId,
+ * createdAt and expiresAt: no recipient and no message text. expiresAt is set
+ * on every write. Firestore stores it as a Timestamp so the TTL field override
+ * can delete the row. A live row means the send is not attempted, whether or
+ * not the transport looks at the key. Expired rows are removed by
+ * `sweepExpiredWhatsAppOutboundKeys`, which is exported and not scheduled.
+ * The collection is registered in the retention inventory (no longer pending).
  */
 
 export const WHATSAPP_OUTBOUND_KEYS_COLLECTION = "whatsapp_outbound_keys"
@@ -22,6 +25,7 @@ export const UNBOUND_OUTBOUND_FIRM = "unbound"
 
 export type OutboundKeyDoc = {
   keyHash: string
+  firmId: string
   createdAt: number
   expiresAt: number
 }
@@ -50,20 +54,31 @@ export class OutboundKeyExistsError extends Error {
   }
 }
 
-const DOC_FIELDS = ["keyHash", "createdAt", "expiresAt"] as const
+const DOC_FIELDS = ["keyHash", "firmId", "createdAt", "expiresAt"] as const
 
 export function outboundKeyHash(firmId: string, idempotencyKey: string): string {
   return createHash("sha256").update(`${firmId}|${idempotencyKey}`).digest("hex")
 }
 
-function assertKeyDoc(data: OutboundKeyDoc): void {
+/** The only document shape a write may store. expiresAt and firmId are mandatory. */
+export function outboundKeyDocument(data: OutboundKeyDoc): OutboundKeyDoc {
   const keys = Object.keys(data)
   if (keys.length !== DOC_FIELDS.length || DOC_FIELDS.some((field) => !keys.includes(field))) {
-    throw new Error("whatsapp_outbound_keys refuses a document that is not keyHash, createdAt and expiresAt")
+    throw new Error("whatsapp_outbound_keys refuses a document that is not keyHash, firmId, createdAt and expiresAt")
   }
-  if (data.keyHash === "" || !Number.isFinite(data.createdAt) || !Number.isFinite(data.expiresAt)) {
+  if (data.keyHash === "" || data.firmId === "" || !Number.isFinite(data.createdAt) || !Number.isFinite(data.expiresAt)) {
     throw new Error("whatsapp_outbound_keys document is malformed")
   }
+  return {
+    keyHash: data.keyHash,
+    firmId: data.firmId,
+    createdAt: data.createdAt,
+    expiresAt: data.expiresAt,
+  }
+}
+
+function assertKeyDoc(data: OutboundKeyDoc): OutboundKeyDoc {
+  return outboundKeyDocument(data)
 }
 
 function assertCollection(collection: string): void {
@@ -96,10 +111,10 @@ export function createMemoryOutboundKeyStore(): MemoryOutboundKeyStore {
           },
           create(collection, id, data) {
             assertCollection(collection)
-            assertKeyDoc(data)
+            const row = assertKeyDoc(data)
             const current = staged.has(id) ? (staged.get(id) ?? null) : (docs.get(id) ?? null)
             if (current) throw new OutboundKeyExistsError()
-            staged.set(id, { keyHash: data.keyHash, createdAt: data.createdAt, expiresAt: data.expiresAt })
+            staged.set(id, row)
           },
           delete(collection, id) {
             assertCollection(collection)
@@ -144,9 +159,16 @@ export function resetWhatsAppOutboundKeyStoreForTests(): void {
   memorySingleton = undefined
 }
 
+type FirestoreKeyWrite = {
+  keyHash: string
+  firmId: string
+  createdAt: number
+  expiresAt: Timestamp
+}
+
 type AdminTx = {
-  get(ref: unknown): Promise<{ exists: boolean; data(): Partial<OutboundKeyDoc> | undefined }>
-  create(ref: unknown, data: OutboundKeyDoc): void
+  get(ref: unknown): Promise<{ exists: boolean; data(): Record<string, unknown> | undefined }>
+  create(ref: unknown, data: FirestoreKeyWrite): void
   delete(ref: unknown): void
 }
 
@@ -156,21 +178,43 @@ type AdminDb = {
     where(
       field: string,
       op: "<=",
-      value: number
+      value: Timestamp
     ): {
       orderBy(field: string): {
-        limit(n: number): { get(): Promise<{ docs: Array<{ id: string; data(): Partial<OutboundKeyDoc> | undefined }> }> }
+        limit(n: number): { get(): Promise<{ docs: Array<{ id: string; data(): Record<string, unknown> | undefined }> }> }
       }
     }
   }
   runTransaction<T>(fn: (tx: AdminTx) => Promise<T>): Promise<T>
 }
 
-function readDoc(id: string, data: Partial<OutboundKeyDoc> | undefined): ({ id: string } & OutboundKeyDoc) | null {
-  if (!data || typeof data.keyHash !== "string" || typeof data.createdAt !== "number" || typeof data.expiresAt !== "number") {
-    return null
+function expiresAtMillis(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (value instanceof Timestamp) return value.toMillis()
+  return null
+}
+
+function readDoc(id: string, data: Record<string, unknown> | undefined): ({ id: string } & OutboundKeyDoc) | null {
+  if (!data || typeof data.keyHash !== "string" || typeof data.firmId !== "string" || data.firmId === "") return null
+  const expiresAt = expiresAtMillis(data.expiresAt)
+  if (typeof data.createdAt !== "number" || !Number.isFinite(data.createdAt) || expiresAt === null) return null
+  return { id, keyHash: data.keyHash, firmId: data.firmId, createdAt: data.createdAt, expiresAt }
+}
+
+/** Firestore write. expiresAt is a Timestamp on every create so the TTL policy can see it. */
+export function firestoreOutboundKeyWrite(data: OutboundKeyDoc): {
+  keyHash: string
+  firmId: string
+  createdAt: number
+  expiresAt: Timestamp
+} {
+  const row = assertKeyDoc(data)
+  return {
+    keyHash: row.keyHash,
+    firmId: row.firmId,
+    createdAt: row.createdAt,
+    expiresAt: Timestamp.fromMillis(row.expiresAt),
   }
-  return { id, keyHash: data.keyHash, createdAt: data.createdAt, expiresAt: data.expiresAt }
 }
 
 /** Firestore adapter. `tx.create` is the insert fence. Tests use the memory store. */
@@ -184,12 +228,13 @@ export function createFirestoreOutboundKeyStore(db: AdminDb): OutboundKeyStore {
             const snap = await tx.get(col().doc(id))
             if (!snap.exists) return null
             const row = readDoc(id, snap.data())
-            return row ? { keyHash: row.keyHash, createdAt: row.createdAt, expiresAt: row.expiresAt } : null
+            return row
+              ? { keyHash: row.keyHash, firmId: row.firmId, createdAt: row.createdAt, expiresAt: row.expiresAt }
+              : null
           },
           create(collection, id, data) {
             assertCollection(collection)
-            assertKeyDoc(data)
-            tx.create(col().doc(id), { keyHash: data.keyHash, createdAt: data.createdAt, expiresAt: data.expiresAt })
+            tx.create(col().doc(id), firestoreOutboundKeyWrite(data))
           },
           delete(collection, id) {
             assertCollection(collection)
@@ -201,7 +246,7 @@ export function createFirestoreOutboundKeyStore(db: AdminDb): OutboundKeyStore {
     async listExpired(now, limit) {
       const cap = Math.max(0, Math.floor(limit))
       if (cap === 0) return []
-      const snap = await col().where("expiresAt", "<=", now).orderBy("expiresAt").limit(cap).get()
+      const snap = await col().where("expiresAt", "<=", Timestamp.fromMillis(now)).orderBy("expiresAt").limit(cap).get()
       return snap.docs.flatMap((doc) => {
         const row = readDoc(doc.id, doc.data())
         return row ? [row] : []
@@ -252,7 +297,12 @@ export async function claimWhatsAppOutboundKey(
   input: { firmId: string; idempotencyKey: string; now: number; ttlMs: number }
 ): Promise<OutboundClaim> {
   const keyHash = outboundKeyHash(input.firmId, input.idempotencyKey)
-  const doc: OutboundKeyDoc = { keyHash, createdAt: input.now, expiresAt: input.now + input.ttlMs }
+  const doc = outboundKeyDocument({
+    keyHash,
+    firmId: input.firmId,
+    createdAt: input.now,
+    expiresAt: input.now + input.ttlMs,
+  })
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const outcome = await store.runTransaction(async (tx) => {

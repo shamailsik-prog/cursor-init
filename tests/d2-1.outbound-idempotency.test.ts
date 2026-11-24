@@ -1,4 +1,7 @@
 import { createHash, createHmac } from "node:crypto"
+import { readFileSync } from "node:fs"
+import path from "node:path"
+import { Timestamp } from "firebase-admin/firestore"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { newStore } from "@/platform/spine/store"
 import { D2_WHATSAPP_GRAMMAR_FLAG } from "@/services/d2-1/grammar"
@@ -6,6 +9,7 @@ import {
   claimWhatsAppOutboundKey,
   createFirestoreOutboundKeyStore,
   createMemoryOutboundKeyStore,
+  firestoreOutboundKeyWrite,
   outboundKeyHash,
   sendWhatsAppOnce,
   sweepExpiredWhatsAppOutboundKeys,
@@ -89,7 +93,9 @@ describe("R3-L4 durable outbound idempotency", () => {
     const docs = await keys.listAll()
     expect(docs).toHaveLength(1)
     expect(docs[0]?.keyHash).toBe(docs[0]?.id)
-    expect(Object.keys(docs[0] ?? {}).sort()).toEqual(["createdAt", "expiresAt", "id", "keyHash"])
+    expect(Object.keys(docs[0] ?? {}).sort()).toEqual(["createdAt", "expiresAt", "firmId", "id", "keyHash"])
+    expect(docs[0]?.firmId).toBe("unbound")
+    expect(Number.isFinite(docs[0]?.expiresAt)).toBe(true)
     expect(JSON.stringify(docs[0])).not.toContain("not linked")
     expect(JSON.stringify(docs[0])).not.toContain("/help")
   })
@@ -121,6 +127,7 @@ describe("R3-L4 durable outbound idempotency", () => {
     const expected = createHash("sha256").update("firmA|payload-key").digest("hex")
     expect(docs[0]?.keyHash).toBe(expected)
     expect(docs[0]?.keyHash).toBe(outboundKeyHash("firmA", idempotencyKey))
+    expect(docs[0]?.firmId).toBe("firmA")
     expect(docs[0]?.createdAt).toBe(NOW)
     expect(docs[0]?.expiresAt).toBe(NOW + 1_000)
   })
@@ -186,12 +193,55 @@ describe("R3-L4 durable outbound idempotency", () => {
       keys.runTransaction(async (tx) => {
         tx.create(WHATSAPP_OUTBOUND_KEYS_COLLECTION, "x", {
           keyHash: "x",
+          firmId: "firmA",
           createdAt: 1,
           expiresAt: 2,
           text: "secret",
         } as OutboundKeyDoc)
       })
-    ).rejects.toThrow(/keyHash, createdAt and expiresAt/)
+    ).rejects.toThrow(/keyHash, firmId, createdAt and expiresAt/)
+  })
+
+  it("refuses a write that omits expiresAt or firmId, and every accepted row carries both", async () => {
+    const keys = createMemoryOutboundKeyStore()
+    await expect(
+      keys.runTransaction(async (tx) => {
+        tx.create(WHATSAPP_OUTBOUND_KEYS_COLLECTION, "x", {
+          keyHash: "x",
+          firmId: "firmA",
+          createdAt: 1,
+        } as OutboundKeyDoc)
+      })
+    ).rejects.toThrow(/expiresAt/)
+    await expect(
+      keys.runTransaction(async (tx) => {
+        tx.create(WHATSAPP_OUTBOUND_KEYS_COLLECTION, "x", {
+          keyHash: "x",
+          createdAt: 1,
+          expiresAt: 2,
+        } as OutboundKeyDoc)
+      })
+    ).rejects.toThrow(/firmId/)
+    expect(firestoreOutboundKeyWrite({ keyHash: "h", firmId: "firmA", createdAt: 10, expiresAt: 15 }).expiresAt.toMillis()).toBe(15)
+    expect(() =>
+      firestoreOutboundKeyWrite({ keyHash: "h", firmId: "", createdAt: 10, expiresAt: 15 })
+    ).toThrow(/malformed/)
+    const claim = await claimWhatsAppOutboundKey(keys, { firmId: "firmA", idempotencyKey: "row", now: 10, ttlMs: 5 })
+    expect(claim.status).toBe("claimed")
+    const docs = await keys.listAll()
+    expect(docs).toHaveLength(1)
+    expect(docs.every((doc) => doc.firmId === "firmA" && Number.isFinite(doc.expiresAt))).toBe(true)
+  })
+
+  it("firestore.indexes.json TTL-expires whatsapp_outbound_keys.expiresAt", () => {
+    const indexes = JSON.parse(readFileSync(path.join(process.cwd(), "firestore.indexes.json"), "utf8")) as {
+      fieldOverrides?: { collectionGroup: string; fieldPath: string; ttl?: boolean; indexes?: unknown[] }[]
+    }
+    const override = indexes.fieldOverrides?.find(
+      (entry) => entry.collectionGroup === WHATSAPP_OUTBOUND_KEYS_COLLECTION && entry.fieldPath === "expiresAt"
+    )
+    expect(override?.ttl).toBe(true)
+    expect(override?.indexes?.length).toBeGreaterThanOrEqual(3)
   })
 
   it("the sweep drops only expired keys, at most the bound per call, and 3000 expired keys at 10×TTL drain to none", async () => {
@@ -230,7 +280,7 @@ describe("R3-L4 durable outbound idempotency", () => {
     expect(await sweepExpiredWhatsAppOutboundKeys(keys, clock)).toBe(0)
     const left = await keys.listAll()
     expect(left).toHaveLength(3)
-    expect(left.every((doc) => doc.expiresAt > clock)).toBe(true)
+    expect(left.every((doc) => doc.firmId === "firmA" && doc.expiresAt > clock)).toBe(true)
     expect(left.map((doc) => doc.keyHash).sort()).toEqual(
       ["live-a", "live-b", "live-c"].map((name) => outboundKeyHash("firmA", name)).sort()
     )
@@ -265,21 +315,29 @@ describe("R3-L4 durable outbound idempotency", () => {
     expect(transport.sent).toHaveLength(2)
   })
 
-  it("the Firestore adapter inserts with tx.create and stores no message", async () => {
-    const docs = new Map<string, OutboundKeyDoc>()
+  it("the Firestore adapter inserts with tx.create, a Timestamp expiresAt, firmId, and no message", async () => {
+    const docs = new Map<string, ReturnType<typeof firestoreOutboundKeyWrite>>()
     const createdIn: string[] = []
+    const bounds: unknown[] = []
     const db = {
       collection(name: string) {
         return {
           doc(id: string) {
             return { id, collection: name }
           },
-          where() {
+          where(_field: string, _op: string, value: unknown) {
+            bounds.push(value)
             return {
               orderBy() {
                 return {
                   limit() {
-                    return { async get() { return { docs: [] as Array<{ id: string; data(): OutboundKeyDoc }> } } }
+                    return {
+                      async get() {
+                        return {
+                          docs: [...docs.entries()].map(([id, data]) => ({ id, data: () => data })),
+                        }
+                      },
+                    }
                   },
                 }
               },
@@ -288,8 +346,8 @@ describe("R3-L4 durable outbound idempotency", () => {
         }
       },
       async runTransaction<T>(fn: (tx: {
-        get(ref: { id: string }): Promise<{ exists: boolean; data(): OutboundKeyDoc | undefined }>
-        create(ref: { id: string; collection: string }, data: OutboundKeyDoc): void
+        get(ref: { id: string }): Promise<{ exists: boolean; data(): ReturnType<typeof firestoreOutboundKeyWrite> | undefined }>
+        create(ref: { id: string; collection: string }, data: ReturnType<typeof firestoreOutboundKeyWrite>): void
         delete(ref: { id: string }): void
       }) => Promise<T>): Promise<T> {
         return fn({
@@ -300,7 +358,7 @@ describe("R3-L4 durable outbound idempotency", () => {
           create(ref, data) {
             createdIn.push(ref.collection)
             if (docs.has(ref.id)) throw Object.assign(new Error("exists"), { code: "already-exists" })
-            docs.set(ref.id, { keyHash: data.keyHash, createdAt: data.createdAt, expiresAt: data.expiresAt })
+            docs.set(ref.id, data)
           },
           delete(ref) {
             docs.delete(ref.id)
@@ -313,10 +371,18 @@ describe("R3-L4 durable outbound idempotency", () => {
     expect(claim.status).toBe("claimed")
     expect(createdIn).toEqual([WHATSAPP_OUTBOUND_KEYS_COLLECTION])
     const row = [...docs.values()][0]
-    expect(row && Object.keys(row).sort()).toEqual(["createdAt", "expiresAt", "keyHash"])
+    expect(row && Object.keys(row).sort()).toEqual(["createdAt", "expiresAt", "firmId", "keyHash"])
+    expect(row?.firmId).toBe("firmA")
+    expect(row?.expiresAt).toBeInstanceOf(Timestamp)
+    expect(row?.expiresAt.toMillis()).toBe(15)
     expect(JSON.stringify(row)).not.toContain("hello")
     const again = await claimWhatsAppOutboundKey(store, { firmId: "firmA", idempotencyKey: "k", now: 11, ttlMs: 5 })
     expect(again.status).toBe("duplicate")
     expect(docs.size).toBe(1)
+    const expired = await store.listExpired(20, 1)
+    expect(expired).toHaveLength(1)
+    expect(expired[0]?.firmId).toBe("firmA")
+    expect(bounds[0]).toBeInstanceOf(Timestamp)
+    expect((bounds[0] as Timestamp).toMillis()).toBe(20)
   })
 })
