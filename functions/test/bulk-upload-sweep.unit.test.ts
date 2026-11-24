@@ -1,9 +1,13 @@
+import { readFileSync } from "node:fs"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
+  chunkFirestoreWrites,
   putStagingChunk,
   readStagingChunks,
   resetUploadStagingForTests,
   setStagingWrittenAtForTests,
+  stagingDeletionAck,
+  stagingDeleteCountsAsGone,
 } from "@/platform/documents/uploadStagingStore"
 import { resetDocumentObjectStoreForTests } from "@/platform/documents/documentObjectStore"
 import { BULK_UPLOAD_STAGING_TTL_MS } from "@/services/d1-6/bulkUpload"
@@ -33,5 +37,33 @@ describe("bulk upload staging sweep", () => {
     expect(result).toEqual({ objects: 0, sessions: 0, skipped: true })
     const still = await readStagingChunks({ firmId: "firmA", matterId: "m1", sessionId: "ups_old", fileIdx: 0, chunkCount: 1 })
     expect(still[0]?.equals(bytes)).toBe(true)
+  })
+
+  it("pins the delete statuses, the locked-bucket ack, and the 500-op batch", () => {
+    expect(stagingDeleteCountsAsGone(204)).toBe(true)
+    expect(stagingDeleteCountsAsGone(404)).toBe(true)
+    expect(stagingDeleteCountsAsGone(403)).toBe(false)
+    expect(stagingDeleteCountsAsGone(200)).toBe(false)
+    expect(stagingDeleteCountsAsGone(null)).toBe(false)
+    expect(stagingDeletionAck(true)).toMatchObject({ outcome: "retained", detail: { locked: true } })
+    expect(stagingDeletionAck(false).outcome).toBe("purged")
+    const batches = chunkFirestoreWrites(Array.from({ length: 501 }, (_, i) => i))
+    expect(batches.map((batch) => batch.length)).toEqual([450, 51])
+    expect(Math.max(...batches.map((batch) => batch.length))).toBeLessThanOrEqual(500)
+  })
+
+  it("deletes staging bytes only inside a fenced step that rechecks the legal hold", () => {
+    const src = readFileSync(new URL("../src/retention/saga.ts", import.meta.url), "utf8")
+    const holdAt = src.indexOf("staging-hold-")
+    const deleteAt = src.indexOf("staging-delete-")
+    const sessionsAt = src.indexOf("staging-sessions-")
+    expect(holdAt).toBeGreaterThan(-1)
+    expect(deleteAt).toBeGreaterThan(holdAt)
+    expect(sessionsAt).toBeGreaterThan(deleteAt)
+    const destructive = src.slice(deleteAt, sessionsAt)
+    expect(destructive.indexOf("assertNoHold")).toBeGreaterThan(-1)
+    expect(destructive.indexOf("assertNoHold")).toBeLessThan(destructive.indexOf("deleteStagingObjectsByPrefix"))
+    expect(src.slice(holdAt, deleteAt)).not.toContain("deleteStagingObjectsByPrefix")
+    expect(src.match(/deleteStagingObjectsByPrefix/g)).toHaveLength(2)
   })
 })

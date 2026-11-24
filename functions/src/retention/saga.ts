@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto"
 import { FieldPath, FieldValue, Timestamp, type DocumentData, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
 import vaultConfig from "@/infra/backup/document-vault.json"
-import { UPLOAD_SESSIONS_COLLECTION, deleteStagingObjectsByPrefix, listStagingObjects, stagingMatterPrefix } from "@/platform/documents/uploadStagingStore"
+import {
+  STAGING_FIRESTORE_WRITE_LIMIT,
+  UPLOAD_SESSIONS_COLLECTION,
+  deleteStagingObjectsByPrefix,
+  listStagingObjects,
+  stagingDeletionAck,
+  stagingMatterPrefix,
+  stagingSharesLockedVaultBucket,
+} from "@/platform/documents/uploadStagingStore"
 import { adminDb } from "../admin"
 import { reachCourtOpsDeletion } from "./courtOpsDeletionReach"
 import { REGISTRY_SCOPE, bumpRegistryVersion } from "../d1/registryVersion"
@@ -526,6 +534,7 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
           await assertNoHold(tx, firmId, req.matterId)
         })
         const prefix = stagingMatterPrefix(firmId, req.matterId)
+        const sharesLock = stagingSharesLockedVaultBucket()
         const progressRef = ackRefOf(ctx.payload.requestId, key)
         const prior = await progressRef.get()
         const listedAlready = prior.get("stagingListed") === true && typeof prior.get("count") === "number"
@@ -540,19 +549,52 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
               storeId: store.id,
               storeKey: key,
               stagingListed: true,
+              stagingLocked: sharesLock,
               count: removed,
               chunks: removed > 0 ? [sha256([`${firmId}/${req.matterId}`])] : [],
             },
             { merge: true }
           )
         }
+        if (!sharesLock) {
+          // A new fenced step, not staging-hold. A retry after that hold step has
+          // committed still re-checks the legal hold before any byte is deleted.
+          await step(ctx as JobContext<unknown>, `staging-delete-${i}`, async (tx) => {
+            await assertNoHold(tx, firmId, req.matterId)
+            try {
+              await deleteStagingObjectsByPrefix(prefix)
+            } catch (err) {
+              if (err instanceof Error && err.message === "staging prefix is not empty") throw new JobError("purge_incomplete")
+              throw err
+            }
+            if ((await listStagingObjects(prefix)).length > 0) throw new JobError("purge_incomplete")
+          })
+          let page = 0
+          for (;;) {
+            const peek = await adminDb()
+              .collection(UPLOAD_SESSIONS_COLLECTION)
+              .where("firmId", "==", firmId)
+              .where("matterId", "==", req.matterId)
+              .limit(1)
+              .get()
+            if (peek.empty) break
+            await step(ctx as JobContext<unknown>, `staging-sessions-${i}-${page}`, async (tx) => {
+              await assertNoHold(tx, firmId, req.matterId)
+              const rows = await tx.get(
+                adminDb()
+                  .collection(UPLOAD_SESSIONS_COLLECTION)
+                  .where("firmId", "==", firmId)
+                  .where("matterId", "==", req.matterId)
+                  .limit(STAGING_FIRESTORE_WRITE_LIMIT)
+              )
+              rows.docs.forEach((doc) => tx.delete(doc.ref))
+            })
+            page += 1
+            if (page > 1000) throw new JobError("purge_incomplete")
+          }
+        }
         await step(ctx as JobContext<unknown>, `staging-record-${i}`, async (tx) => {
           await assertNoHold(tx, firmId, req.matterId)
-          await deleteStagingObjectsByPrefix(prefix)
-          const rows = await tx.get(
-            adminDb().collection(UPLOAD_SESSIONS_COLLECTION).where("firmId", "==", firmId).where("matterId", "==", req.matterId)
-          )
-          rows.docs.forEach((doc) => tx.delete(doc.ref))
           const progressRef = ackRefOf(ctx.payload.requestId, key)
           tx.set(
             progressRef,
@@ -563,6 +605,7 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
               acknowledged: false,
               storeId: store.id,
               storeKey: key,
+              stagingLocked: sharesLock,
               count: removed,
               chunks: removed > 0 ? [sha256([`${firmId}/${req.matterId}`])] : [],
             },
@@ -1071,6 +1114,31 @@ async function acknowledge(
       const treatment = req.plan[key]
       const p = progressOf(progress[i].data())
       if (treatment === "purge" || treatment === "anonymise") {
+        if (store.id === "objects:upload-staging" && (stagingSharesLockedVaultBucket() || progress[i].get("stagingLocked") === true)) {
+          const ack = stagingDeletionAck(true)
+          acks.push({
+            key,
+            storeId: store.id,
+            outcome: ack.outcome,
+            count: p.count,
+            idsSha256: p.count > 0 ? sha256(p.chunks) : null,
+            detail: ack.detail,
+          })
+          continue
+        }
+        if (store.id === "objects:upload-staging") {
+          const leftObjects = await listStagingObjects(stagingMatterPrefix(firmId, req.matterId))
+          if (leftObjects.length > 0) throw new JobError("purge_incomplete")
+          acks.push({
+            key,
+            storeId: store.id,
+            outcome: "purged",
+            count: p.count,
+            idsSha256: p.count > 0 ? sha256(p.chunks) : null,
+            detail: stagingDeletionAck(false).detail,
+          })
+          continue
+        }
         const left =
           store.key.kind === "docId"
             ? pending(store, treatment, (await tx.get(adminDb().collection(store.name).doc(req.matterId))).data(), firmId)
@@ -1085,13 +1153,19 @@ async function acknowledge(
           detail: { chunks: p.chunks.length },
         })
       } else if (store.id === "objects:upload-staging" && treatment === "lock") {
+        const locked = stagingSharesLockedVaultBucket() || progress[i].get("stagingLocked") === true
+        if (!locked) {
+          const leftObjects = await listStagingObjects(stagingMatterPrefix(firmId, req.matterId))
+          if (leftObjects.length > 0) throw new JobError("purge_incomplete")
+        }
+        const ack = stagingDeletionAck(locked)
         acks.push({
           key,
           storeId: store.id,
-          outcome: "purged",
+          outcome: ack.outcome,
           count: p.count,
           idsSha256: p.count > 0 ? sha256(p.chunks) : null,
-          detail: { prefix: "upload-staging/", matterScoped: true },
+          detail: ack.detail,
         })
       } else if (treatment === "lock") {
         const lockUntil = progress[i].get("lockUntil")

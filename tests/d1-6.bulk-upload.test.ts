@@ -16,6 +16,7 @@ import {
   finaliseFile,
   getUploadProgress,
   resumeUpload,
+  parseStoredUploadSession,
   startBulkUpload,
   sweepExpiredBulkUploads,
   uploadChunk,
@@ -396,6 +397,7 @@ describe("L9.1 high-speed bulk upload", () => {
     expect(bulkSrc.includes("deleteDocumentObject")).toBe(false)
     expect(bulkSrc.includes("TODO(W1-L45)")).toBe(true)
     expect(bulkSrc.includes("isLooseUploadBlocked")).toBe(true)
+    expect(bulkSrc.includes("isLooseUploadBlocked(")).toBe(false)
     expect(stagingSrc.includes("deleteDocumentObject")).toBe(false)
     expect(stagingSrc.includes("// L9.1 upload-staging")).toBe(true)
   })
@@ -628,8 +630,241 @@ describe("L9.1 high-speed bulk upload", () => {
   })
 
   it.skip("isLooseUploadBlocked", () => {
-    // W1-L45 is not on main at 7ae1a33f. When isLooseUploadBlocked lands, this
-    // test must start a loose-vault session (matterId null) while that function
+    // isLooseUploadBlocked is on main and this module does not call it.
+    // When it is wired, catch only (404, feature_disabled) and rethrow every
+    // other error. Matter authorization stays in the route. This test must
+    // then start a loose-vault session (matterId null) while that function
     // returns true and expect a refusal before any session or staging write.
+  })
+
+  it("starting a second upload sweeps and the first session still finalises", async () => {
+    const store = newStore()
+    const bytes = Buffer.from("young-session-a")
+    const started = await startBulkUpload(store, "firmA", "m1", [fileOf(bytes, store, "firmA", "a.pdf")], caller)
+    await uploadChunk(store, started.sessionId, 0, 1, bytes, caller)
+    await startBulkUpload(store, "firmA", "m1", [fileOf(Buffer.from("session-b"), store, "firmA", "b.pdf")], caller)
+    const done = await finaliseFile(store, started.sessionId, 0, caller)
+    expect(done.docId).toBeTruthy()
+    expect(uploadSessionsOf(store).get(started.sessionId)?.files[0]?.state).toBe("finalised")
+  })
+
+  it("a sweep keeps a chunk younger than the ttl and drops one that has reached it", async () => {
+    const store = newStore()
+    const now = 5_000_000_000
+    const youngBytes = Buffer.from("still-young")
+    const agedBytes = Buffer.from("now-aged")
+    const young = await startBulkUpload(store, "firmA", "m1", [fileOf(youngBytes, store, "firmA", "young.pdf")], caller)
+    const aged = await startBulkUpload(store, "firmA", "m1", [fileOf(agedBytes, store, "firmA", "aged.pdf")], caller)
+    await uploadChunk(store, young.sessionId, 0, 1, youngBytes, caller)
+    await uploadChunk(store, aged.sessionId, 0, 1, agedBytes, caller)
+    const youngRow = uploadSessionsOf(store).get(young.sessionId)!
+    const agedRow = uploadSessionsOf(store).get(aged.sessionId)!
+    staging.setStagingWrittenAtForTests(`${youngRow.storagePath}/0/1`, now - BULK_UPLOAD_STAGING_TTL_MS + 1)
+    staging.setStagingWrittenAtForTests(`${agedRow.storagePath}/0/1`, now - BULK_UPLOAD_STAGING_TTL_MS)
+    const removed = await sweepExpiredBulkUploads(store, now)
+    expect(removed).toBe(1)
+    expect(
+      (await staging.readStagingChunks({ firmId: "firmA", matterId: "m1", sessionId: young.sessionId, fileIdx: 0, chunkCount: 1 }))[0]?.equals(
+        youngBytes
+      )
+    ).toBe(true)
+    expect(
+      await staging.readStagingChunks({ firmId: "firmA", matterId: "m1", sessionId: aged.sessionId, fileIdx: 0, chunkCount: 1 })
+    ).toEqual([null])
+  })
+
+  it("a matter id of documents is swept, and another firm's start does not sweep this firm", async () => {
+    const store = newStore()
+    const bytes = Buffer.from("documents-segment")
+    const foreign = Buffer.from("other-firm-aged")
+    const started = await startBulkUpload(store, "firmA", "documents", [fileOf(bytes, store, "firmA", "d.pdf")], caller)
+    const other = await startBulkUpload(
+      store,
+      "firmB",
+      "m1",
+      [fileOf(foreign, store, "firmB", "f.pdf")],
+      { userId: "partner_b", firmId: "firmB" }
+    )
+    await uploadChunk(store, started.sessionId, 0, 1, bytes, caller)
+    await uploadChunk(store, other.sessionId, 0, 1, foreign, { userId: "partner_b", firmId: "firmB" })
+    const row = uploadSessionsOf(store).get(started.sessionId)!
+    const foreignRow = uploadSessionsOf(store).get(other.sessionId)!
+    staging.setStagingWrittenAtForTests(`${row.storagePath}/0/1`, 1)
+    staging.setStagingWrittenAtForTests(`${foreignRow.storagePath}/0/1`, 1)
+    const listed = await staging.listStagingObjects(`upload-staging/firmA/documents/`)
+    expect(listed.map((item) => item.key)).toContain(`upload-staging/firmA/documents/${started.sessionId}/0/1`)
+    await startBulkUpload(store, "firmB", "m9", [fileOf(Buffer.from("b2"), store, "firmB", "b2.pdf")], {
+      userId: "partner_b",
+      firmId: "firmB",
+    })
+    expect(
+      (await staging.readStagingChunks({
+        firmId: "firmA",
+        matterId: "documents",
+        sessionId: started.sessionId,
+        fileIdx: 0,
+        chunkCount: 1,
+      }))[0]?.equals(bytes)
+    ).toBe(true)
+    const removed = await sweepExpiredBulkUploads(store, BULK_UPLOAD_STAGING_TTL_MS + 5, "firmA")
+    expect(removed).toBe(1)
+    expect(
+      await staging.readStagingChunks({
+        firmId: "firmA",
+        matterId: "documents",
+        sessionId: started.sessionId,
+        fileIdx: 0,
+        chunkCount: 1,
+      })
+    ).toEqual([null])
+  })
+
+  it("a 403 delete is not removal, and only 204 or 404 clears the prefix", async () => {
+    const store = newStore()
+    const bytes = Buffer.from("locked-chunk")
+    const started = await startBulkUpload(store, "firmA", "m1", [fileOf(bytes, store, "firmA", "lock.pdf")], caller)
+    await uploadChunk(store, started.sessionId, 0, 1, bytes, caller)
+    const prefix = staging.stagingMatterPrefix("firmA", "m1")
+    staging.setStagingDeleteStatusForTests(async () => 403)
+    await expect(staging.deleteStagingObjectsByPrefix(prefix)).rejects.toThrow(/403/)
+    expect(
+      (await staging.readStagingChunks({ firmId: "firmA", matterId: "m1", sessionId: started.sessionId, fileIdx: 0, chunkCount: 1 }))[0]?.equals(
+        bytes
+      )
+    ).toBe(true)
+    staging.setStagingDeleteStatusForTests(async () => 200)
+    await expect(staging.deleteStagingObjectsByPrefix(prefix)).rejects.toThrow(/200/)
+    staging.setStagingDeleteStatusForTests(async () => 204)
+    await expect(staging.deleteStagingObjectsByPrefix(prefix)).resolves.toBe(1)
+    expect(
+      await staging.readStagingChunks({ firmId: "firmA", matterId: "m1", sessionId: started.sessionId, fileIdx: 0, chunkCount: 1 })
+    ).toEqual([null])
+    expect(staging.stagingDeleteCountsAsGone(204)).toBe(true)
+    expect(staging.stagingDeleteCountsAsGone(404)).toBe(true)
+    expect(staging.stagingDeleteCountsAsGone(403)).toBe(false)
+    expect(staging.stagingDeleteCountsAsGone(null)).toBe(false)
+    expect(staging.stagingSharesLockedVaultBucket()).toBe(false)
+    expect(staging.stagingDeletionAck(true)).toMatchObject({ outcome: "retained", detail: { locked: true, reason: "locked_vault_bucket" } })
+    expect(staging.stagingDeletionAck(false).outcome).toBe("purged")
+    const batches = staging.chunkFirestoreWrites(Array.from({ length: 501 }, (_, i) => i))
+    expect(batches.map((batch) => batch.length)).toEqual([450, 51])
+    expect(batches.every((batch) => batch.length <= 500)).toBe(true)
+  })
+
+  it("a deleted Firestore row is not restored from the instance cache, and a bad row is not loaded", async () => {
+    const rows = new Map<string, Record<string, unknown>>()
+    const db = {
+      collection(name: string) {
+        return {
+          doc(id: string) {
+            return {
+              async set(data: Record<string, unknown>) {
+                rows.set(`${name}/${id}`, data)
+              },
+              async delete() {
+                rows.delete(`${name}/${id}`)
+              },
+              async get() {
+                const data = rows.get(`${name}/${id}`)
+                return { exists: data !== undefined, data: () => data }
+              },
+            }
+          },
+        }
+      },
+    }
+    const { setFirestorePersistenceForTests } = await import("@/platform/persistence/runtimeRepositories")
+    setFirestorePersistenceForTests(db)
+    vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "firestore")
+    try {
+      const store = newStore()
+      const bytes = Buffer.from("cached-session")
+      const started = await startBulkUpload(store, "firmA", "m1", [fileOf(bytes, store, "firmA", "cache.pdf")], caller)
+      expect(uploadSessionsOf(store).has(started.sessionId)).toBe(true)
+      rows.delete(`upload_sessions/${started.sessionId}`)
+      await expect(getUploadProgress(store, started.sessionId, caller)).rejects.toThrow(/upload session refused/)
+      expect(rows.has(`upload_sessions/${started.sessionId}`)).toBe(false)
+      expect(uploadSessionsOf(store).has(started.sessionId)).toBe(false)
+      const again = await startBulkUpload(store, "firmA", "m1", [fileOf(bytes, store, "firmA", "cache.pdf")], caller)
+      rows.set(`upload_sessions/${again.sessionId}`, { firmId: "firmA", matterId: 4, files: [] })
+      await expect(getUploadProgress(store, again.sessionId, caller)).rejects.toThrow(/upload session refused/)
+      expect(rows.get(`upload_sessions/${again.sessionId}`)).toMatchObject({ matterId: 4 })
+      expect(parseStoredUploadSession("x", { firmId: "firmA", matterId: 4, files: [] })).toBeUndefined()
+    } finally {
+      setFirestorePersistenceForTests(null)
+    }
+  })
+
+  it("overlapping Firestore chunk writes and finalises keep both files", async () => {
+    const rows = new Map<string, Record<string, unknown>>()
+    const db = {
+      collection(name: string) {
+        return {
+          doc(id: string) {
+            return {
+              async set(data: Record<string, unknown>) {
+                rows.set(`${name}/${id}`, structuredClone(data))
+              },
+              async delete() {
+                rows.delete(`${name}/${id}`)
+              },
+              async get() {
+                const data = rows.get(`${name}/${id}`)
+                return { exists: data !== undefined, data: () => data }
+              },
+            }
+          },
+        }
+      },
+    }
+    const { setFirestorePersistenceForTests } = await import("@/platform/persistence/runtimeRepositories")
+    setFirestorePersistenceForTests(db)
+    vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "firestore")
+    const realRead = staging.readStagingChunks.bind(staging)
+    let inFlight = 0
+    let maxInFlight = 0
+    const spy = vi.spyOn(staging, "readStagingChunks").mockImplementation(async (input) => {
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      try {
+        return await realRead(input)
+      } finally {
+        inFlight -= 1
+      }
+    })
+    try {
+      const store = newStore()
+      const left = Buffer.from("left-chunk")
+      const right = Buffer.from("right-chunk")
+      const started = await startBulkUpload(
+        store,
+        "firmA",
+        "m1",
+        [fileOf(left, store, "firmA", "left.pdf"), fileOf(right, store, "firmA", "right.pdf")],
+        caller
+      )
+      await Promise.all([
+        uploadChunk(store, started.sessionId, 0, 1, left, caller),
+        uploadChunk(store, started.sessionId, 1, 1, right, caller),
+      ])
+      const saved = rows.get(`upload_sessions/${started.sessionId}`)
+      const files = saved?.files as Array<{ receivedChunks: number[] }>
+      expect(files[0]?.receivedChunks).toEqual([1])
+      expect(files[1]?.receivedChunks).toEqual([1])
+      expect(maxInFlight).toBe(1)
+      maxInFlight = 0
+      const [first, second] = await Promise.all([
+        finaliseFile(store, started.sessionId, 0, caller),
+        finaliseFile(store, started.sessionId, 1, caller),
+      ])
+      const done = (rows.get(`upload_sessions/${started.sessionId}`)?.files ?? []) as Array<{ state: string; docId?: string }>
+      expect(done.map((file) => file.state)).toEqual(["finalised", "finalised"])
+      expect(done[0]?.docId).toBe(first.docId)
+      expect(done[1]?.docId).toBe(second.docId)
+      expect(maxInFlight).toBe(1)
+    } finally {
+      spy.mockRestore()
+      setFirestorePersistenceForTests(null)
+    }
   })
 })
