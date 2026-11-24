@@ -188,6 +188,24 @@ describe("FA-D4-001-FU1-001 deletion reach", () => {
     })).toEqual({ action: "report", reason: "parent_missing" })
   })
 
+  it("A29: a parent with no firmId is refused", () => {
+    expect(() => deriveCourtOpsAckMatter({
+      queueType: "workflow",
+      suppliedMatterId: null,
+      firmId: F,
+      parent: { matterId: MATTER },
+    })).toThrow(CourtOpsMatterUnboundError)
+  })
+
+  it("A9: an acknowledgement whose parent is another firm's is reported, not stamped", () => {
+    expect(decideCourtOpsReach({
+      collection: "workflow_ops_activity",
+      id: courtOpsAckId(F, "workflow", X),
+      row: { firmId: F, matterId: null, documentId: X, queueType: "workflow", action: "court_ops_acknowledge", source: "court_ops" },
+      parent: { firmId: "firmB", matterId: MATTER },
+    })).toEqual({ action: "report", reason: "parent_other_firm" })
+  })
+
   it("does not treat an ordinary workflow event as a court-ops row", () => {
     expect(decideCourtOpsReach({
       collection: "workflow_ops_activity",
