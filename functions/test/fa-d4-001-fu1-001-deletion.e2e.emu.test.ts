@@ -563,6 +563,81 @@ describe.skipIf(!EMULATORS)("FA-D4-001-FU1-001 deletion reach", () => {
     expect(prep.slice(step, step + 220)).toContain("assertNoHold(tx, firmId, req.matterId)")
   })
 
+  async function tombstonedWorkflowAck(
+    db: ReturnType<typeof adminDb>,
+    firmId: string,
+    matterY: string,
+    tomb: Record<string, unknown>
+  ): Promise<string> {
+    const item = uniq("ydoc")
+    await db.collection("document_workflow").doc(item).set({ documentId: item, firmId, matterId: matterY })
+    const ack = `ops:court_ops:ack:${firmId}:workflow:${item}`
+    await db.collection("workflow_ops_activity").doc(ack).set({
+      firmId, matterId: null, documentId: item, queueType: "workflow", action: "court_ops_acknowledge", source: "court_ops",
+    })
+    await db.collection(MATTER_TOMBSTONES).doc(matterY).set({ firmId, matterId: matterY, ...tomb })
+    return ack
+  }
+
+  it("TEST-264-R3-001: each tombstone safeguard keeps the row when the others would allow deletion", async () => {
+    const { db, firmId, matterId, requestId } = await opened()
+    const livePurge = (matterY: string, id: string) => ({ firmId, matterId: matterY, status: "in_progress", plan: PURGE, requestId: id })
+
+    const held = uniq("held")
+    const heldRequest = uniq("heldreq")
+    await db.collection(DELETION_REQUESTS_COLLECTION).doc(heldRequest).set(livePurge(held, heldRequest))
+    await db.collection(LEGAL_HOLDS_COLLECTION).doc(held).set({ firmId, active: true })
+    const heldAck = await tombstonedWorkflowAck(db, firmId, held, { requestId: heldRequest })
+
+    const done = uniq("done")
+    const doneRequest = uniq("donereq")
+    await db.collection(DELETION_REQUESTS_COLLECTION).doc(doneRequest).set({ firmId, matterId: done, status: "completed", plan: PURGE })
+    const doneAck = await tombstonedWorkflowAck(db, firmId, done, { requestId: doneRequest })
+
+    const refused = uniq("refused")
+    const refusedRequest = uniq("refreq")
+    await db.collection(DELETION_REQUESTS_COLLECTION).doc(refusedRequest).set({ firmId, matterId: refused, status: "refused", plan: PURGE })
+    const refusedAck = await tombstonedWorkflowAck(db, firmId, refused, { requestId: refusedRequest })
+
+    const cross = uniq("cross")
+    const other = uniq("other")
+    const otherRequest = uniq("otherreq")
+    await db.collection(DELETION_REQUESTS_COLLECTION).doc(otherRequest).set(livePurge(other, otherRequest))
+    const crossAck = await tombstonedWorkflowAck(db, firmId, cross, { requestId: otherRequest })
+
+    const bare = uniq("bare")
+    const bareAck = await tombstonedWorkflowAck(db, firmId, bare, {})
+
+    const result = await reachCourtOpsDeletion({ db, firmId, deletingMatterId: matterId, requestId })
+    expect(result.removed).toBe(0)
+    for (const [ack, matterY] of [[heldAck, held], [doneAck, done], [refusedAck, refused], [crossAck, cross], [bareAck, bare]] as const) {
+      const row = await db.collection("workflow_ops_activity").doc(ack).get()
+      expect(row.exists, ack).toBe(true)
+      expect(row.get("matterId"), ack).toBe(matterY)
+    }
+  })
+
+  it("TEST-264-R3-001: X retained does not delete Y when Y's own plan is purge", async () => {
+    const { db, firmId, matterId, requestId } = await opened(RETAIN)
+    const matterY = uniq("ypurge")
+    const yRequest = uniq("ypurge")
+    await db.collection(DELETION_REQUESTS_COLLECTION).doc(yRequest).set({
+      firmId, matterId: matterY, status: "in_progress", plan: PURGE,
+    })
+    const item = uniq("ydoc")
+    await db.collection("document_workflow").doc(item).set({ documentId: item, firmId, matterId: matterY })
+    const ack = `ops:court_ops:ack:${firmId}:workflow:${item}`
+    await db.collection("workflow_ops_activity").doc(ack).set({
+      firmId, matterId: null, documentId: item, queueType: "workflow", action: "court_ops_acknowledge", source: "court_ops",
+    })
+    await db.collection(MATTER_TOMBSTONES).doc(matterY).set({ firmId, matterId: matterY, requestId: yRequest })
+    const result = await reachCourtOpsDeletion({ db, firmId, deletingMatterId: matterId, requestId })
+    expect(result.removed).toBe(0)
+    const row = await db.collection("workflow_ops_activity").doc(ack).get()
+    expect(row.exists).toBe(true)
+    expect(row.get("matterId")).toBe(matterY)
+  })
+
   it("A27: a reach failure fails the prepare job and enqueues no purge", async () => {
     const { db, firmId, matterId, requestId } = await opened()
     await db.collection(DELETION_REQUESTS_COLLECTION).doc(requestId).set({

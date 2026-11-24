@@ -24,8 +24,8 @@ describe("F32 runtime options on every export", () => {
   })
 
   // Audit F34 adds p1TraceExportReconciler, FA-D3C-002 adds p1CorpusEmbedding, audit F43 adds alertChecker and
-  // alertEscalator, audit F36 adds eventFanoutReconciler, F44 adds healthLive: 20 exports.
-  it("pins memory, concurrency, identity, caps and ingress on all 20 exports", async () => {
+  // alertEscalator, audit F36 adds eventFanoutReconciler, F44 adds healthLive, W1-L91 adds bulkUploadStagingSweep: 21 exports.
+  it("pins memory, concurrency, identity, caps and ingress on all 21 exports", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<
       string,
@@ -49,6 +49,7 @@ describe("F32 runtime options on every export", () => {
       "alertEscalator",
       "api",
       "auditOutboxReconciler",
+      "bulkUploadStagingSweep",
       "d1AutoConfirmTick",
       "d1ConflictClientWritten",
       "d1ConflictIndexChunkWritten",

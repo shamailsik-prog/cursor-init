@@ -1,6 +1,7 @@
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
   type PutObjectCommandInput,
@@ -465,6 +466,29 @@ export async function readS3Payload(storagePath: string): Promise<Buffer> {
     if (isNotFound(err)) throw new Error(`document object not found: ${storagePath}`)
     throw err
   }
+}
+
+/** Keys under `prefix`, with the object's LastModified. Paginates. Does not apply a lifecycle rule. */
+export async function listS3Keys(prefix: string): Promise<Array<{ key: string; lastModifiedMs: number }>> {
+  if (!prefix || prefix.includes("..")) throw new Error("document object list prefix failed safety validation")
+  const { bucket } = s3ConfigFromEnv()
+  const out: Array<{ key: string; lastModifiedMs: number }> = []
+  let token: string | undefined
+  do {
+    const page = await withDeadline("list", documentObjectS3RequestTimeoutMs(), (signal) =>
+      documentObjectS3Client().send(
+        new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token, MaxKeys: 1000 }),
+        { abortSignal: signal }
+      )
+    )
+    for (const item of page.Contents ?? []) {
+      if (!item.Key || !item.Key.startsWith(prefix)) continue
+      const modified = item.LastModified instanceof Date ? item.LastModified.getTime() : Date.now()
+      out.push({ key: item.Key, lastModifiedMs: modified })
+    }
+    token = page.IsTruncated ? page.NextContinuationToken : undefined
+  } while (token)
+  return out
 }
 
 export async function deleteS3Payload(storagePath: string, options?: { strict?: boolean }): Promise<void> {

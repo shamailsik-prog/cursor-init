@@ -5,7 +5,39 @@ import {
   PutBucketVersioningCommand,
   S3Client,
 } from "@aws-sdk/client-s3"
-import type { DocumentVaultConfig } from "../config"
+import type { DocumentVaultConfig, UploadStagingLifecycleConfig } from "../config"
+
+/**
+ * The staging expiry a bucket would apply. Not sent by `applyVaultProtection`.
+ * S3 lifecycle and the R2 age rule are the same prefix and the same one day.
+ * No object lock: the vault's COMPLIANCE retention must not cover this prefix.
+ */
+export function desiredUploadStagingLifecycle(cfg: UploadStagingLifecycleConfig) {
+  const seconds = cfg.expirationDays * 24 * 60 * 60
+  return {
+    objectLock: cfg.objectLock,
+    s3: {
+      Rules: [
+        {
+          ID: cfg.id,
+          Status: cfg.status,
+          Filter: { Prefix: cfg.prefix },
+          Expiration: { Days: cfg.expirationDays },
+        },
+      ],
+    },
+    r2: {
+      rules: [
+        {
+          id: cfg.id,
+          enabled: cfg.status === "Enabled",
+          prefix: cfg.prefix,
+          condition: { type: "Age" as const, maxAgeSeconds: seconds },
+        },
+      ],
+    },
+  }
+}
 
 export function desiredVaultProtection(cfg: DocumentVaultConfig) {
   return {

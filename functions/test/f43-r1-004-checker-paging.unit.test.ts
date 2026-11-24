@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url"
 import { Timestamp } from "firebase-admin/firestore"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { CHECK_MAX_PAGES, CHECK_PAGE_SIZE, CHECK_PASSES, CHECKER_BUDGET_MS, CHECKER_RAISE_SLACK_MS, checkerTestSeam, reservationQueryRunBound, runAlertChecker, type CheckCursor, type CheckQuery, type CheckerPageRow } from "../src/alerts/checker"
-import { raiseAlertBestEffort } from "../src/alerts/raise"
+import { BEST_EFFORT_RAISE_MS, raiseAlertBestEffort } from "../src/alerts/raise"
 import { spyRegisteredErrors } from "./registeredErrorLog"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
@@ -15,6 +15,8 @@ const FA_260_001_SENTENCE = "That drop does not end the query: the end is a raw 
 const FA_260_R2_001_SENTENCE = "Only a missing order field fails closed. When the row a query would save has no order field, that query logs ops_alert.pass_failed with code checker_cursor_absent_order, the rows already read are still alerted, and the same window is read again on the next run (FA-260-R2-001)."
 const FA_260_R3_001_SENTENCE = "A present order field, including a number or a string, is stored on the cursor and the next run resumes after that row (FA-260-R3-001)."
 const FA_260_002_SENTENCE = "A stored null is the exception (FA-260-002, parked): 100 or more null leases at a page end restart the query, the rows behind them are not read, and the first 100 are counted again on each run."
+const FA_260_R5_001_SENTENCE = "specs past the raise ceiling are logged ops_alert.pass_failed with pass raise, code raise_budget and the dropped count (FA-260-R5-001)."
+const RAISE_CEILING_MS = CHECKER_BUDGET_MS + 10_000
 const ABSENT_ORDER_CODE = "checker_cursor_absent_order"
 const OVERCLAIMED_STARVE = "starve the rows after it"
 const OVERCLAIMED_FULL_PAGE = "A full raw page continues from its last raw row"
@@ -617,7 +619,8 @@ describe("cursor resume guards", () => {
     }
   })
 
-  it("stops raising 10s past the budget and still advances the pass index", async () => {
+  it("stops raising 10s past the budget, logs the specs it did not raise, and still advances the pass index", async () => {
+    const errors = spyRegisteredErrors()
     const rows = ["a", "b", "c"].map((name, i) => leasedRow(name, `firm-${name}`, T + i))
     checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
     checkerTestSeam.readPage = async (name, _field, cursor) => (name === "reservationsQuarantined" ? pageInOrder(rows, cursor) : [])
@@ -626,11 +629,100 @@ describe("cursor resume guards", () => {
       raised += 1
       return "raised"
     })
-    await runAlertChecker({ now: () => T, wallClock: () => (raised > 0 ? CHECKER_BUDGET_MS + CHECKER_RAISE_SLACK_MS : 0) })
-    expect(raised).toBe(1)
-    expect(checkerTestSeam.memory?.passIndex).toBe(1)
+    try {
+      // Literal 10s, not CHECKER_RAISE_SLACK_MS: a 25s slack (N4) would still be under this clock and raise the rest.
+      await runAlertChecker({ now: () => T, wallClock: () => (raised > 0 ? RAISE_CEILING_MS : 0) })
+      expect(raised).toBe(1)
+      expect(checkerTestSeam.memory?.passIndex).toBe(1)
+      expect(raiseBudget(errors)).toEqual([{ pass: "raise", code: "raise_budget", dropped: 2 }])
+    } finally {
+      errors.restore()
+    }
+  })
+
+  it("TEST-260-R5-002 N4: the slack constant is 10s and the ceiling plus one raise stays inside the 60s timeout", () => {
+    expect(CHECKER_BUDGET_MS).toBe(40_000)
+    expect(CHECKER_RAISE_SLACK_MS).toBe(10_000)
+    expect(RAISE_CEILING_MS).toBe(50_000)
+    expect(CHECKER_BUDGET_MS + CHECKER_RAISE_SLACK_MS + BEST_EFFORT_RAISE_MS).toBeLessThan(60_000)
+  })
+
+  it("TEST-260-R5-002 N12: a spec already past the ceiling is not raised, and the dropped count includes it", async () => {
+    const errors = spyRegisteredErrors()
+    const rows = ["a", "b", "c"].map((name, i) => leasedRow(name, `firm-${name}`, T + i))
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    let quarantineRead = false
+    checkerTestSeam.readPage = async (name, _field, cursor) => {
+      const page = name === "reservationsQuarantined" ? pageInOrder(rows, cursor) : []
+      if (name === "reservationsQuarantined") quarantineRead = true
+      return page
+    }
+    try {
+      await runAlertChecker({ now: () => T, wallClock: () => (quarantineRead ? RAISE_CEILING_MS : 0) })
+      expect(raise.mock.calls).toHaveLength(0)
+      expect(checkerTestSeam.memory?.passIndex).toBe(1)
+      expect(raiseBudget(errors)).toEqual([{ pass: "raise", code: "raise_budget", dropped: 3 }])
+    } finally {
+      errors.restore()
+    }
   })
 })
+
+describe("FA-F43-R1-003: page-edge tie-break and budget wrap", () => {
+  const T = Date.parse("1970-01-15T00:00:00.000Z")
+
+  it("resumes inside an equal leaseUntil group after the page-edge id, and does not skip the rest of that timestamp", async () => {
+    const errors = spyRegisteredErrors()
+    const early = Array.from({ length: 90 }, (_, i) => leasedRow(`a-${String(i).padStart(2, "0")}`, "firm-early", T))
+    const tied = Array.from({ length: 20 }, (_, i) => leasedRow(`m-${String(i).padStart(2, "0")}`, i < 9 ? "firm-tied" : i === 9 ? "firm-edge" : "firm-tail", T + 5_000))
+    const calls = install({ reservationsQuarantined: [...early, ...tied] })
+    try {
+      await runAlertChecker({ now: () => T + 3_600_000, passes: ["reservations"], wallClock: () => 0 })
+      const seen = calls.filter((c) => c.name === "reservationsQuarantined")
+      expect(seen[1]?.cursor).toMatchObject({ id: "m-09" })
+      expect(orderMillis(seen[1]?.cursor?.at)).toBe(T + 5_000)
+      const specs = raise.mock.calls.map((c) => c[0] as { firmId: string; detail: { quarantined: number } })
+      expect(specs.find((spec) => spec.firmId === "firm-edge")?.detail.quarantined).toBe(1)
+      expect(specs.find((spec) => spec.firmId === "firm-tail")?.detail.quarantined).toBe(10)
+      expect(specs.find((spec) => spec.firmId === "firm-tied")?.detail.quarantined).toBe(9)
+      expect(raiseBudget(errors)).toEqual([])
+    } finally {
+      errors.restore()
+    }
+  })
+
+  it("keeps the page-edge cursor when the budget stops the next page, then wraps only after the short tail", async () => {
+    const rows = Array.from({ length: 150 }, (_, i) => leasedRow(`w-${String(i).padStart(3, "0")}`, i < 100 ? "firm-head" : "firm-tail", T))
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    let stopAfterFullPage = false
+    checkerTestSeam.readPage = async (name, field, cursor) => {
+      const page = name === "reservationsQuarantined" ? pageRows(rows, field, cursor) : []
+      if (page.length >= CHECK_PAGE_SIZE) stopAfterFullPage = true
+      return page
+    }
+    const firms = () => raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)
+
+    await runAlertChecker({ now: () => T + 3_600_000, passes: ["reservations"], wallClock: () => (stopAfterFullPage ? CHECKER_BUDGET_MS : 0) })
+    expect(firms()).toEqual(["firm-head"])
+    expect(checkerTestSeam.memory?.cursors.reservationsQuarantined).toMatchObject({ id: "w-099" })
+    expect(orderMillis(checkerTestSeam.memory?.cursors.reservationsQuarantined?.at)).toBe(T)
+
+    stopAfterFullPage = false
+    raise.mockClear()
+    await runAlertChecker({ now: () => T + 3_600_000, passes: ["reservations"], wallClock: () => 0 })
+    expect(firms()).toEqual(["firm-tail"])
+    expect(checkerTestSeam.memory?.cursors.reservationsQuarantined ?? null).toBeNull()
+
+    raise.mockClear()
+    await runAlertChecker({ now: () => T + 3_600_000, passes: ["reservations"], wallClock: () => 0 })
+    expect(firms()).toContain("firm-head")
+    expect(firms()).toContain("firm-tail")
+  })
+})
+
+function raiseBudget(errors: ReturnType<typeof spyRegisteredErrors>): Array<Record<string, unknown>> {
+  return errors.fieldsOf("ops_alert.pass_failed").filter((fields) => fields.pass === "raise")
+}
 
 describe("FA-260 README sentences", () => {
   it("pins the FA-260-001 sentence and the fail-closed sentence in the README, the checker and the spec", () => {
@@ -645,6 +737,7 @@ describe("FA-260 README sentences", () => {
       expect(text, file).toContain(FA_260_R2_001_SENTENCE)
       expect(text, file).toContain(FA_260_R3_001_SENTENCE)
       expect(text, file).toContain(FA_260_002_SENTENCE)
+      expect(text, file).toContain(FA_260_R5_001_SENTENCE)
       expect(text, file).not.toContain(OVERCLAIMED_STARVE)
       expect(text, file).not.toContain(OVERCLAIMED_FULL_PAGE)
       expect(text, file).not.toContain(OVERCLAIMED_REREAD)

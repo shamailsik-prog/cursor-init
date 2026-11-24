@@ -5,7 +5,7 @@ export class DocumentObjectConfigurationError extends Error {
   }
 }
 
-export type DocumentObjectStoreOperation = "put" | "get" | "delete"
+export type DocumentObjectStoreOperation = "put" | "get" | "delete" | "list"
 
 /**
  * A failed object-store call, reduced to facts this process owns: the operation, the HTTP status,

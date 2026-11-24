@@ -39,6 +39,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
       "alertEscalator",
       "api",
       "auditOutboxReconciler",
+      "bulkUploadStagingSweep",
       "d1AutoConfirmTick",
       "d1ConflictClientWritten",
       "d1ConflictIndexChunkWritten",
@@ -111,6 +112,9 @@ describe("P2 boot (P3-5, P3-8)", () => {
     expect(index.retentionApplyTick.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 60, scheduleTrigger: { schedule: "0 1 * * *", timeZone: "Asia/Karachi", retryConfig: { retryCount: 3 } } })
     expect(index.retentionDeletionWatch.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 120, scheduleTrigger: { schedule: "every 15 minutes" } })
     expect(index.retentionDeletionWatch.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
+    expect(index.bulkUploadStagingSweep.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 120, maxInstances: 1, scheduleTrigger: { schedule: "every 24 hours" } })
+    expect(index.bulkUploadStagingSweep.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
+    expect([index.bulkUploadStagingSweep.__endpoint.httpsTrigger, index.bulkUploadStagingSweep.__endpoint.callableTrigger]).toEqual([undefined, undefined])
     for (const n of ["retentionApplyTick", "retentionDeletionWatch"]) {
       expect([n, index[n].__endpoint.httpsTrigger, index[n].__endpoint.callableTrigger]).toEqual([n, undefined, undefined])
     }

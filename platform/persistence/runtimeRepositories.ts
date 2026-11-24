@@ -4,6 +4,7 @@ import {
   type SpineRepositories,
 } from "@/platform/persistence/spineRepositories"
 import { getProductionFirestore } from "@/platform/persistence/adminFirestore"
+import { deleteDoc, doc, getDoc, setDoc } from "@/platform/persistence/firestoreDbModular"
 import { PersistenceConfigurationError } from "@/platform/persistence/errors"
 
 export { PersistenceConfigurationError } from "@/platform/persistence/errors"
@@ -70,6 +71,26 @@ export async function openWhatsAppOutboundKeyFirestore(): Promise<unknown> {
   const db = await getRuntimeFirestore()
   const { createFirestoreOutboundKeyStore } = await import("@/services/d2-1/outboundKeys")
   return createFirestoreOutboundKeyStore(db as never)
+}
+
+/** One document in a namespaced Firestore collection. The caller names the collection. */
+export async function writeRuntimeDocument(collectionName: string, id: string, data: Record<string, unknown>): Promise<void> {
+  const db = await getRuntimeFirestore()
+  await setDoc(doc(db as never, collectionName, id), data)
+}
+
+export async function deleteRuntimeDocument(collectionName: string, id: string): Promise<void> {
+  const db = await getRuntimeFirestore()
+  await deleteDoc(doc(db as never, collectionName, id))
+}
+
+export async function readRuntimeDocument(collectionName: string, id: string): Promise<Record<string, unknown> | null> {
+  const db = await getRuntimeFirestore()
+  const snap = await getDoc(doc(db as never, collectionName, id))
+  if (!snap.exists()) return null
+  const data = snap.data()
+  if (!data || typeof data !== "object") return null
+  return data as Record<string, unknown>
 }
 
 export async function getRuntimeRepositories(

@@ -99,13 +99,26 @@ export type BlockResult = {
 
 type Actor = { by: string; at: string; notApplicable: boolean }
 
-/** A calendar date, or a time with seconds and a timezone, that parses to that same calendar day. */
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2}))?$/
+const MIN_ISO_YEAR = 1900
+const MAX_ISO_YEAR = 2100
+
+/**
+ * A calendar date, or a time with seconds and a timezone, whose UTC year, month
+ * and day are the same numbers written in the string, inside 1900..2100.
+ * Date-only values round-trip through `toISOString().slice(0, 10)`.
+ */
 function isRealIsoDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2}))?$/.test(value)) return false
+  const match = ISO_DATE.exec(value)
+  if (match === null) return false
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return false
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  if (year < MIN_ISO_YEAR || year > MAX_ISO_YEAR) return false
   if (value.length === 10) return parsed.toISOString().slice(0, 10) === value
-  return true
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() + 1 === month && parsed.getUTCDate() === day
 }
 
 function classified(documentTypeId: unknown):

@@ -298,7 +298,7 @@ class DriftCases(unittest.TestCase):
 
     def test_all_json_null(self) -> None:
         json_files = [path for path in self.snap.rglob("*.json") if path.is_file()]
-        self.assertEqual(len(json_files), 28)
+        self.assertEqual(len(json_files), 29)
         for path in json_files:
             path.write_text("null\n", encoding="utf-8")
         code, out, err = self.run_snap()

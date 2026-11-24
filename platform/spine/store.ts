@@ -4,7 +4,6 @@ import type { Classification } from "@/platform/p1/types"
 import type { CaseNumberStatus, MatterStage, MatterStatus } from "@/platform/d1/matterDocument"
 import { classificationRank, isClassification } from "@/platform/p1/types"
 import { currentRequestIdentity } from "@/platform/p5/requestSession"
-
 export type { Classification } from "@/platform/p1/types"
 
 export type Role =
