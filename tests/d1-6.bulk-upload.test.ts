@@ -913,8 +913,11 @@ describe("L9.1 high-speed bulk upload", () => {
 
   it("a per-file session write does not use a files index field path", () => {
     const src = readFileSync(new URL("../services/d1-6/bulkUpload.ts", import.meta.url), "utf8")
+    const helpers = readFileSync(new URL("../platform/persistence/runtimeRepositories.ts", import.meta.url), "utf8")
     expect(src.includes("files.${")).toBe(false)
-    expect(src.includes("runTransaction")).toBe(true)
+    expect(src.includes("getRuntimeFirestore")).toBe(false)
+    expect(src.includes("updateRuntimeDocument")).toBe(true)
+    expect(helpers.includes("runTransaction")).toBe(true)
   })
 
   it("a chunk write to one of three files leaves the other two in the array", async () => {

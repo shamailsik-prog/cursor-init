@@ -2,12 +2,11 @@ import { isClassification, type Classification } from "@/platform/p1/types"
 import { PublicError } from "@/platform/http/publicError"
 import { uploadSessionRecord } from "@/platform/documents/uploadSessionRecord"
 import * as staging from "@/platform/documents/uploadStagingStore"
-import { doc, runTransaction } from "@/platform/persistence/firestoreDbModular"
 import {
   deleteRuntimeDocument,
-  getRuntimeFirestore,
   readRuntimeDocument,
   resolvePersistenceMode,
+  updateRuntimeDocument,
   writeRuntimeDocument,
 } from "@/platform/persistence/runtimeRepositories"
 import {
@@ -244,24 +243,15 @@ async function commitFile(store: SpineStore, session: BulkUploadSessionRow, file
 }
 
 async function replaceStoredFile(sessionId: string, file: BulkUploadFileRow): Promise<void> {
-  const db = await getRuntimeFirestore()
-  const ref = doc(db as never, staging.UPLOAD_SESSIONS_COLLECTION, sessionId)
-  await runTransaction(db as never, async (tx) => {
-    const snap = await tx.get(ref)
-    if (!snap.exists()) throw new PublicError("upload session refused", "upload_session_refused")
-    const data = snap.data()
-    if (!data || typeof data !== "object" || Array.isArray(data)) {
-      throw new PublicError("upload session refused", "upload_session_refused")
-    }
-    const record = data as Record<string, unknown>
-    if (!parseStoredUploadSession(sessionId, record) || !Array.isArray(record.files)) {
+  await updateRuntimeDocument(staging.UPLOAD_SESSIONS_COLLECTION, sessionId, (record) => {
+    if (!record || !parseStoredUploadSession(sessionId, record) || !Array.isArray(record.files)) {
       throw new PublicError("upload session refused", "upload_session_refused")
     }
     const next = record.files.map((row) => (row && typeof row === "object" ? { ...(row as object) } : row))
     const slot = next.findIndex((row) => row && typeof row === "object" && (row as { fileId?: unknown }).fileId === file.fileId)
     if (slot < 0) throw new PublicError("bulk upload refused", "bulk_upload_refused")
     next[slot] = { ...file }
-    tx.update(ref, { files: next })
+    return { files: next }
   })
 }
 
