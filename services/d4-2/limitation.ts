@@ -465,9 +465,9 @@ type NumberToken = { start: number; end: number; value: number | null; raw: stri
  * clause. The quantity clause is optional label words, one English cardinal or
  * digit run, and one day, month, or year. Anything else is period_ambiguous, or
  * period_unreadable when the sentence was trying to be a proviso, a unicode
- * dash appears anywhere in the provision, a non-ASCII decimal digit appears,
- * or a full stop that the sentence split removes sits before a digit
- * (spaces ignored). A count above the engine ceiling is
+ * dash appears anywhere in the provision, a non-ASCII decimal digit or a
+ * letter-number appears, or a full stop that the sentence split removes sits
+ * before a digit (spaces ignored). A count above the engine ceiling is
  * period_exceeds_engine_cap. A single newline is a space. A blank line splits.
  */
 function normalizeSource(text: string): string {
@@ -485,7 +485,7 @@ function parsePeriod(
 ):
   | { ok: true; n: number; unit: DateUnit; cited: string }
   | { ok: false; reason: "period_unreadable" | "period_ambiguous" | "period_exceeds_engine_cap" } {
-  if (/\p{No}/u.test(text) || hasNonAsciiDigit(text)) return { ok: false, reason: "period_unreadable" }
+  if (/\p{No}|\p{Nl}/u.test(text) || hasNonAsciiDigit(text)) return { ok: false, reason: "period_unreadable" }
   if (FILLER_JOIN_RE.test(text)) return { ok: false, reason: "period_unreadable" }
   const normalized = normalizeSource(text)
   if (hasUnicodeDash(normalized) || dotBeforeDigit(normalized)) return { ok: false, reason: "period_unreadable" }
@@ -639,6 +639,45 @@ function textHasCanonicalReckoning(text: string): boolean {
   return parts.some((part) => isCanonicalReckoning(part))
 }
 
+/**
+ * What may remain after the fixture label and the allowlisted words are removed.
+ * A digit, a symbol, a non-ASCII letter, or any other mark is not in this set.
+ */
+const HEADING_PUNCTUATION = new Set([".", ",", ":", ";", "-", "(", ")", '"', "'"])
+
+function isAsciiWhitespace(char: string): boolean {
+  return char === " " || char === "\t" || char === "\n" || char === "\r" || char === "\f" || char === "\v"
+}
+
+/**
+ * A heading is neutral only when every ASCII word left after the fixture label
+ * is in NEUTRAL_WORDS, and every other character is ASCII whitespace or
+ * structural punctuation. The check reads the sentence itself. wordsOf drops
+ * digits, symbols, and non-ASCII letters, so it is not used here.
+ */
+function isNeutralHeading(sentence: string): boolean {
+  const withoutFixture = sentence.replace(/\bQ11 FIXTURE\b/gi, " ")
+  const words = withoutFixture.match(/[A-Za-z]+/g) ?? []
+  if (words.some((word) => !NEUTRAL_WORDS.has(word.toLowerCase()))) return false
+  const leftover = withoutFixture.replace(/[A-Za-z]+/g, "")
+  for (const char of leftover) {
+    if (isAsciiWhitespace(char) || HEADING_PUNCTUATION.has(char)) continue
+    return false
+  }
+  return true
+}
+
+/**
+ * Section 12 supplies the accrual-day exclusion only when at least one sentence
+ * is the canonical reckoning and every non-empty sentence is that reckoning or
+ * a neutral heading. Any other sentence leaves the reckoning unverified.
+ */
+function section12SuppliesReckoning(text: string): boolean {
+  const parts = normalizeSource(text).split(/[.\u0000]/).filter((part) => part.trim() !== "")
+  if (!parts.some((part) => isCanonicalReckoning(part))) return false
+  return parts.every((part) => isCanonicalReckoning(part) || isNeutralHeading(part))
+}
+
 function isSymbolCode(code: number): boolean {
   return /\p{S}/u.test(String.fromCodePoint(code))
 }
@@ -773,7 +812,7 @@ function reckoningSource(
   }
   const section = inForce(versions, "limitation-act-1908/section/12", jurisdiction, asAt)
   if (!section.ok) return { ok: false, reason: section.reason === "no_history" ? "reckoning_unverified" : section.reason }
-  if (!textHasCanonicalReckoning(section.row.text)) return { ok: false, reason: "reckoning_unverified" }
+  if (!section12SuppliesReckoning(section.row.text)) return { ok: false, reason: "reckoning_unverified" }
   return { ok: true, sectionId: section.row.sectionId, versionNo: section.row.versionNo, statedIn: "section" }
 }
 
